@@ -44,6 +44,11 @@ interface MailboxHealth {
   mailboxId: string;
   email: string;
   enabled: boolean;
+  /** Task #997: canonical monitor-mode that decides which section of the
+   *  popover this row falls into and whether the Retry button is shown.
+   *  Optional in the type for backward compat with snapshots produced
+   *  before the column existed; defaults to "monitored_active". */
+  monitorMode?: "monitored_active" | "excluded_intentional" | "invalid_config" | "disabled";
   sentItemsHealth: "active" | "expired" | "missing" | "stale" | "unknown";
   lastSentItemsNotificationAt: string | null;
   lastOutboundCapturedAt: string | null;
@@ -187,6 +192,40 @@ const CRON_JOB_LABELS: Record<string, string> = {
 function degradedCronJobs(payload: HealthPayload | undefined): CronJobHealth[] {
   if (!payload?.cronJobs) return [];
   return payload.cronJobs.filter(c => c.status === "stale" || c.status === "failing");
+}
+
+/** Task #997 — pure helper that splits the popover's mailbox list into
+ * the four canonical buckets. Exported (not just inlined into the JSX)
+ * so the contract is unit-testable: counter values, "showRetry only on
+ * monitored_active" rule, and the "legacy null monitorMode defaults to
+ * monitored_active" defensive behavior. The popover render code consumes
+ * exactly this object, so a passing test pins what admins actually see. */
+export interface PopoverMailboxBuckets {
+  actionRequired: MailboxHealth[];
+  configIssues: MailboxHealth[];
+  excluded: MailboxHealth[];
+  healthyActive: MailboxHealth[];
+}
+export function bucketMailboxesForPopover(mailboxes: MailboxHealth[]): PopoverMailboxBuckets {
+  const modeOf = (m: MailboxHealth) => m.monitorMode ?? "monitored_active";
+  return {
+    actionRequired: mailboxes.filter(
+      m => modeOf(m) === "monitored_active" && m.sentItemsHealth !== "active",
+    ),
+    configIssues: mailboxes.filter(m => modeOf(m) === "invalid_config"),
+    excluded: mailboxes.filter(
+      m => modeOf(m) === "excluded_intentional" || modeOf(m) === "disabled",
+    ),
+    healthyActive: mailboxes.filter(
+      m => modeOf(m) === "monitored_active" && m.sentItemsHealth === "active",
+    ),
+  };
+}
+/** Whether the per-row Retry button is allowed for a given mailbox.
+ * Pure for testability — pinned in the same suite as the bucketing. */
+export function shouldShowRetry(m: MailboxHealth): boolean {
+  const mode = m.monitorMode ?? "monitored_active";
+  return mode === "monitored_active" && m.sentItemsHealth !== "active";
 }
 
 const ROOT_CAUSE_LABELS: Record<string, string> = {
@@ -608,6 +647,12 @@ export function CaptureAuditStatusPill({
   });
 
   const [showHealthyMailboxes, setShowHealthyMailboxes] = useState(false);
+  // Task #997: excluded/disabled mailboxes are surfaced under a collapsed
+  // "Excluded" header. Default-collapsed because reps can have a long tail
+  // of intentionally-excluded mailboxes (PTO, role change, manager
+  // delegation) and showing them all by default re-creates the noise we
+  // were trying to fix.
+  const [showExcludedMailboxes, setShowExcludedMailboxes] = useState(false);
 
   const status: OverallStatus = data?.status ?? "healthy";
   const visuals = pillVisuals(status, data);
@@ -739,32 +784,58 @@ export function CaptureAuditStatusPill({
               )}
 
               {data.mailboxes.length > 0 && (() => {
-                // Task #794: pin failing mailboxes (anything not "active") to
-                // the top, never hide them behind a "…and N more" cutoff. The
-                // healthy mailboxes are collapsed by default into a single
-                // expander so a 40-mailbox tenant doesn't drown the popover.
-                const failingMailboxes = data.mailboxes.filter(m => m.sentItemsHealth !== "active");
-                const healthyMailboxes = data.mailboxes.filter(m => m.sentItemsHealth === "active");
-                const renderMailbox = (m: MailboxHealth) => {
-                  const ok = m.sentItemsHealth === "active";
+                // Task #997: split mailbox rows into three semantic groups so
+                // an admin can immediately tell what (if anything) needs
+                // their attention vs. what was intentionally not subscribed.
+                //
+                //   Action Required  — monitored_active mailboxes whose
+                //                      subscription/sync genuinely failed.
+                //                      Retry button shown.
+                //   Config Issues    — invalid_config (e.g. mailbox row
+                //                      points at an address Graph cannot
+                //                      subscribe to). No Retry — the row
+                //                      itself must be fixed in admin UI.
+                //   Excluded         — excluded_intentional / disabled.
+                //                      Surfaced for transparency only;
+                //                      collapsed by default so a 40-mailbox
+                //                      tenant doesn't drown the popover.
+                //
+                // Healthy active mailboxes stay collapsed behind the
+                // existing "Show N healthy" expander. The bucketing logic
+                // is extracted to `bucketMailboxesForPopover` so the
+                // contract (which row goes in which section, when Retry
+                // is shown) is unit-testable.
+                const buckets = bucketMailboxesForPopover(data.mailboxes);
+                const { actionRequired, configIssues, excluded, healthyActive: healthyMailboxes } = buckets;
+                const renderMailbox = (m: MailboxHealth, opts: { showRetry: boolean }) => {
+                  const mode = m.monitorMode ?? "monitored_active";
+                  const ok = m.sentItemsHealth === "active" && mode === "monitored_active";
                   const reasonText = m.syncError && m.syncError !== m.reason
                     ? `${m.reason} — ${m.syncError}`
                     : m.reason;
                   const isRetryingThis = retryingMailboxId === m.mailboxId && retryMailbox.isPending;
+                  const showRetry = opts.showRetry && !ok && canRenew && mode === "monitored_active";
                   return (
                     <li
                       key={m.mailboxId}
                       className="flex items-start justify-between gap-2"
                       data-testid={`mailbox-health-${m.mailboxId}`}
+                      data-monitor-mode={mode}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
                           {ok
                             ? <ShieldCheck className="w-3 h-3 text-emerald-600 flex-shrink-0" />
-                            : <ShieldAlert className="w-3 h-3 text-amber-600 flex-shrink-0" />}
+                            : <ShieldAlert className={cn(
+                                "w-3 h-3 flex-shrink-0",
+                                mode === "monitored_active" ? "text-amber-600" : "text-muted-foreground",
+                              )} />}
                           <span className="font-medium truncate" title={m.email} data-testid={`text-mailbox-email-${m.mailboxId}`}>{m.email}</span>
                           <span className="text-muted-foreground">·</span>
-                          <span className={ok ? "text-emerald-600" : "text-amber-600"} data-testid={`text-mailbox-health-${m.mailboxId}`}>
+                          <span
+                            className={ok ? "text-emerald-600" : (mode === "monitored_active" ? "text-amber-600" : "text-muted-foreground")}
+                            data-testid={`text-mailbox-health-${m.mailboxId}`}
+                          >
                             {m.sentItemsHealth}
                           </span>
                         </div>
@@ -776,16 +847,30 @@ export function CaptureAuditStatusPill({
                             >
                               {reasonText}
                             </div>
-                            <div
-                              className="pl-4 mt-0.5 text-[11px] text-amber-700 dark:text-amber-400"
-                              data-testid={`text-mailbox-remediation-${m.mailboxId}`}
-                            >
-                              → {remediationHintFor(m.reason, m.syncError)}
-                            </div>
+                            {/* Remediation hint only makes sense for active
+                                mailboxes that genuinely failed — excluded /
+                                invalid_config rows have a different fix
+                                (admin UI), not a Retry. */}
+                            {mode === "monitored_active" && (
+                              <div
+                                className="pl-4 mt-0.5 text-[11px] text-amber-700 dark:text-amber-400"
+                                data-testid={`text-mailbox-remediation-${m.mailboxId}`}
+                              >
+                                → {remediationHintFor(m.reason, m.syncError)}
+                              </div>
+                            )}
+                            {mode === "invalid_config" && (
+                              <div
+                                className="pl-4 mt-0.5 text-[11px] text-muted-foreground"
+                                data-testid={`text-mailbox-config-hint-${m.mailboxId}`}
+                              >
+                                → Fix this row on the Monitored Mailboxes admin page.
+                              </div>
+                            )}
                           </>
                         )}
                       </div>
-                      {!ok && canRenew && (
+                      {showRetry && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -806,21 +891,59 @@ export function CaptureAuditStatusPill({
                 };
 
                 return (
-                  <div className="space-y-1">
-                    <div className="font-medium text-muted-foreground uppercase tracking-wide">
-                      Mailbox health
-                    </div>
-                    <ul className="space-y-1.5" data-testid="list-mailbox-health">
-                      {failingMailboxes.map(renderMailbox)}
-                      {failingMailboxes.length === 0 && healthyMailboxes.length > 0 && (
-                        <li className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5" data-testid="text-all-mailboxes-healthy">
-                          <ShieldCheck className="w-3 h-3" />
-                          All {healthyMailboxes.length} mailbox{healthyMailboxes.length === 1 ? "" : "es"} healthy
-                        </li>
-                      )}
-                    </ul>
-                    {failingMailboxes.length > 0 && healthyMailboxes.length > 0 && (
-                      <>
+                  <div className="space-y-3">
+                    {actionRequired.length > 0 && (
+                      <div className="space-y-1" data-testid="section-mailboxes-action-required">
+                        <div className="font-medium text-amber-700 dark:text-amber-400 uppercase tracking-wide">
+                          Action required ({actionRequired.length})
+                        </div>
+                        <ul className="space-y-1.5" data-testid="list-mailbox-health">
+                          {actionRequired.map(m => renderMailbox(m, { showRetry: true }))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {configIssues.length > 0 && (
+                      <div className="space-y-1" data-testid="section-mailboxes-config-issues">
+                        <div className="font-medium text-muted-foreground uppercase tracking-wide">
+                          Config issues ({configIssues.length})
+                        </div>
+                        <ul className="space-y-1.5" data-testid="list-mailbox-config-issues">
+                          {configIssues.map(m => renderMailbox(m, { showRetry: false }))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {excluded.length > 0 && (
+                      <div className="space-y-1" data-testid="section-mailboxes-excluded">
+                        <button
+                          type="button"
+                          onClick={() => setShowExcludedMailboxes(v => !v)}
+                          className="font-medium text-muted-foreground uppercase tracking-wide inline-flex items-center gap-1 hover:text-foreground"
+                          data-testid="button-toggle-excluded-mailboxes"
+                        >
+                          {showExcludedMailboxes
+                            ? <ChevronDown className="w-3 h-3" />
+                            : <ChevronRight className="w-3 h-3" />}
+                          Excluded ({excluded.length})
+                        </button>
+                        {showExcludedMailboxes && (
+                          <ul className="space-y-1.5" data-testid="list-mailbox-excluded">
+                            {excluded.map(m => renderMailbox(m, { showRetry: false }))}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+
+                    {actionRequired.length === 0 && configIssues.length === 0 && healthyMailboxes.length > 0 && (
+                      <div className="text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5" data-testid="text-all-mailboxes-healthy">
+                        <ShieldCheck className="w-3 h-3" />
+                        All {healthyMailboxes.length} active mailbox{healthyMailboxes.length === 1 ? "" : "es"} healthy
+                      </div>
+                    )}
+
+                    {healthyMailboxes.length > 0 && (actionRequired.length > 0 || configIssues.length > 0) && (
+                      <div className="space-y-1">
                         <button
                           type="button"
                           onClick={() => setShowHealthyMailboxes(v => !v)}
@@ -834,10 +957,10 @@ export function CaptureAuditStatusPill({
                         </button>
                         {showHealthyMailboxes && (
                           <ul className="space-y-1.5 mt-1" data-testid="list-healthy-mailboxes">
-                            {healthyMailboxes.map(renderMailbox)}
+                            {healthyMailboxes.map(m => renderMailbox(m, { showRetry: true }))}
                           </ul>
                         )}
-                      </>
+                      </div>
                     )}
                   </div>
                 );

@@ -21,12 +21,18 @@ interface SentItemsHealthSnapshot {
   lastOutboundCapturedAt: string | null;
 }
 
+type MonitorMode = "monitored_active" | "excluded_intentional" | "invalid_config" | "disabled";
+
 interface MonitoredMailbox {
   id: string;
   orgId: string;
   userId: string;
   email: string;
   enabled: boolean;
+  /** Task #997: canonical monitor-mode that controls whether this mailbox
+   *  participates in the watchdog/alerter loop. Optional in the type for
+   *  backward compat with snapshots produced before the column existed. */
+  monitorMode?: MonitorMode;
   subscriptionId: string | null;
   subscriptionExpiresAt: string | null;
   lastSyncAt: string | null;
@@ -394,6 +400,28 @@ export default function AdminMonitoredMailboxesPage() {
   const toggleMutation = useMutation({
     mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
       const res = await apiRequest("PATCH", `/api/internal/admin/monitored-mailboxes/${id}`, { enabled });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/admin/monitored-mailboxes"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Task #997: dedicated mutation for changing the canonical monitor-mode.
+  // The PATCH route keeps `enabled` in lockstep automatically, so we don't
+  // need a separate enabled flip. We also clear stale subscription IDs
+  // server-side when flipping to invalid_config so the popover stops
+  // showing "expired" copy for a row that's no longer being subscribed.
+  const monitorModeMutation = useMutation({
+    mutationFn: async ({ id, monitorMode }: { id: string; monitorMode: MonitorMode }) => {
+      const res = await apiRequest(
+        "PATCH",
+        `/api/internal/admin/monitored-mailboxes/${id}`,
+        { monitorMode },
+      );
       return res.json();
     },
     onSuccess: () => {
@@ -849,7 +877,14 @@ export default function AdminMonitoredMailboxesPage() {
                     <div className="mt-1">
                       <MailboxSpotQuoteCount mailboxId={mb.id} />
                     </div>
-                    {mb.syncError && (
+                    {/* Task #997: only surface the red sync-error text on
+                        rows that are *supposed* to be subscribing. For
+                        excluded/invalid/disabled mailboxes the residual
+                        sync_error string (often left over from before the
+                        admin re-bucketed the row) is misleading — the
+                        real "what to do here" lives in the Mode dropdown
+                        next to it. */}
+                    {mb.syncError && (mb.monitorMode ?? "monitored_active") === "monitored_active" && (
                       <p className="text-xs text-red-500 mt-1" data-testid={`text-mailbox-error-${mb.id}`}>
                         {mb.syncError}
                       </p>
@@ -857,6 +892,44 @@ export default function AdminMonitoredMailboxesPage() {
                   </div>
 
                   <div className="flex items-center gap-3 ml-4">
+                    {/* Task #997: canonical monitor-mode dropdown. Replaces
+                        the binary enabled/disabled toggle as the primary
+                        control — the toggle is kept underneath for muscle
+                        memory and disabled when mode != monitored_active
+                        so admins must change the mode first. */}
+                    <div className="flex items-center gap-2">
+                      <Label htmlFor={`monitor-mode-${mb.id}`} className="text-sm">
+                        Mode
+                      </Label>
+                      <Select
+                        value={mb.monitorMode ?? (mb.enabled ? "monitored_active" : "disabled")}
+                        onValueChange={(value) =>
+                          monitorModeMutation.mutate({ id: mb.id, monitorMode: value as MonitorMode })
+                        }
+                      >
+                        <SelectTrigger
+                          id={`monitor-mode-${mb.id}`}
+                          className="h-8 w-44 text-xs"
+                          data-testid={`select-monitor-mode-${mb.id}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="monitored_active" data-testid={`option-monitor-mode-active-${mb.id}`}>
+                            Monitored (active)
+                          </SelectItem>
+                          <SelectItem value="excluded_intentional" data-testid={`option-monitor-mode-excluded-${mb.id}`}>
+                            Excluded (intentional)
+                          </SelectItem>
+                          <SelectItem value="invalid_config" data-testid={`option-monitor-mode-invalid-${mb.id}`}>
+                            Invalid config
+                          </SelectItem>
+                          <SelectItem value="disabled" data-testid={`option-monitor-mode-disabled-${mb.id}`}>
+                            Disabled
+                          </SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <div className="flex items-center gap-2">
                       <Label htmlFor={`toggle-${mb.id}`} className="text-sm">
                         {mb.enabled ? "Enabled" : "Disabled"}

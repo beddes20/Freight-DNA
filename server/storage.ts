@@ -1739,6 +1739,43 @@ const pool = new Pool({
 const db = drizzle(pool);
 export { db };
 
+/**
+ * Task #997 — Central enforcement that `enabled` and `monitorMode` stay
+ * in lockstep on every storage write to `monitored_mailboxes`. The
+ * popover/watchdog/alerter all assume "enabled === true ⇔
+ * monitorMode === 'monitored_active'"; without this, callers that
+ * forget one or the other (e.g. the POST /admin/monitored-mailboxes
+ * route, which historically only accepted `enabled`) silently write
+ * `enabled=false` rows that still default to
+ * `monitor_mode='monitored_active'`, which then re-emerges as a
+ * permanently red unhealthy popover row.
+ *
+ * Rules: when both are supplied, monitorMode wins (it is the canonical
+ * source of truth post-Task #997). When only one is supplied, derive
+ * the other deterministically. When neither is supplied, leave both
+ * untouched and let the column defaults / existing row values apply.
+ *
+ * Exported so unit tests and any future consumer can verify the
+ * derivation rules without round-tripping through the DB.
+ */
+export function normalizeMonitorModeAndEnabled<
+  T extends { enabled?: boolean | null; monitorMode?: string | null },
+>(data: T): T {
+  const out = { ...data };
+  const hasMode = out.monitorMode !== undefined && out.monitorMode !== null;
+  const hasEnabled = out.enabled !== undefined && out.enabled !== null;
+  if (hasMode) {
+    // Mode wins — derive enabled from mode.
+    out.enabled = out.monitorMode === "monitored_active";
+  } else if (hasEnabled) {
+    // Only enabled supplied — derive mode. enabled=false defaults to
+    // 'disabled' (the most conservative non-active bucket); admins who
+    // want excluded_intentional or invalid_config must say so explicitly.
+    out.monitorMode = out.enabled ? "monitored_active" : "disabled";
+  }
+  return out;
+}
+
 export class DatabaseStorage implements IStorage {
   readonly pool = pool;
 
@@ -9506,16 +9543,18 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createMonitoredMailbox(data: InsertMonitoredMailbox): Promise<MonitoredMailbox> {
+    const normalized = normalizeMonitorModeAndEnabled(data);
     const [row] = await db.insert(monitoredMailboxes).values({
-      ...data,
-      email: data.email.toLowerCase(),
+      ...normalized,
+      email: normalized.email.toLowerCase(),
     }).returning();
     return row;
   }
 
   async updateMonitoredMailbox(id: string, data: Partial<InsertMonitoredMailbox>): Promise<MonitoredMailbox | undefined> {
+    const normalized = normalizeMonitorModeAndEnabled(data);
     const [row] = await db.update(monitoredMailboxes)
-      .set({ ...data, updatedAt: new Date() })
+      .set({ ...normalized, updatedAt: new Date() })
       .where(eq(monitoredMailboxes.id, id))
       .returning();
     return row;

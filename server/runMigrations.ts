@@ -4883,6 +4883,158 @@ export async function runMigrations() {
     clientFixturePurge.release();
   }
 
+  // ────────────────────────────────────────────────────────────────────────
+  // Task #997 — Canonical monitor_mode column on monitored_mailboxes.
+  //
+  // The previous design overloaded the `enabled` flag with three different
+  // meanings (paused, intentionally excluded, broken-config) which made it
+  // impossible for the Conversations webhook-unhealthy popover, the
+  // watchdog, the alerter, and the admin UI to agree on what a "failing"
+  // mailbox actually means. The `monitor_mode` enum makes that intent
+  // explicit and lets every consumer suppress alerts/retries on rows that
+  // were never going to subscribe in the first place.
+  //
+  // This block:
+  //   1. Adds the column with a safe default (`monitored_active`) so every
+  //      existing row keeps its current behavior.
+  //   2. Reclassifies the named excluded reps (Ben/Joe/Kylee/Josh/Jordan)
+  //      as `excluded_intentional` and disables their rows — they were
+  //      tripping the red pill and pinging admins overnight.
+  //   3. Reclassifies Casey's row as `invalid_config` and clears its
+  //      subscription IDs — the address can never subscribe so retrying
+  //      the renewal forever just generates noise.
+  //   4. Resolves any open `mailbox_health_alerts` for the now-excluded
+  //      mailboxes so the popover comes back clean on the next pill poll
+  //      instead of needing the watchdog to run a tick first.
+  //
+  // Idempotent: re-runs are no-ops because of `ADD COLUMN IF NOT EXISTS`,
+  // the explicit equality check on `monitor_mode`, and the unconditional
+  // `WHERE resolved_at IS NULL` filter on the alerts side.
+  // ────────────────────────────────────────────────────────────────────────
+  const clientMonitorMode = await pool.connect();
+  try {
+    await clientMonitorMode.query(
+      `ALTER TABLE monitored_mailboxes
+         ADD COLUMN IF NOT EXISTS monitor_mode text NOT NULL DEFAULT 'monitored_active'`,
+    );
+
+    // ── Step 1: General enabled→monitor_mode backfill ─────────────────
+    // Every existing `enabled=false` row predates the monitor_mode column
+    // and was carrying one of three meanings (paused, excluded, broken
+    // config) under the same flag. Default-bucketing them as `disabled`
+    // is the conservative call: the watchdog and alerter treat
+    // `disabled` and `monitored_active`-but-disabled identically (no
+    // subscribe, no alert, no Retry), but the popover now correctly
+    // hides them under "Excluded" instead of pretending they're failing
+    // active mailboxes. Admins can re-bucket individual rows to
+    // `excluded_intentional` or `invalid_config` from the admin UI when
+    // they triage. Idempotent: only flips rows still on the
+    // post-`ADD COLUMN` default.
+    const generalBackfill = await clientMonitorMode.query(
+      `UPDATE monitored_mailboxes
+          SET monitor_mode = 'disabled',
+              updated_at = NOW()
+        WHERE enabled = false
+          AND monitor_mode = 'monitored_active'
+        RETURNING id, email`,
+    );
+    if (generalBackfill.rowCount && generalBackfill.rowCount > 0) {
+      console.log(
+        `[migrations] Task #997: backfilled ${generalBackfill.rowCount} disabled mailbox(es) to monitor_mode='disabled'`,
+      );
+    }
+
+    // ── Step 2: Reclassify the named excluded reps ────────────────────
+    // The team has explicitly excluded these rep mailboxes from
+    // monitoring (PTO, role change, manager who delegates). The
+    // canonical match is by EMAIL ADDRESS (org-scoped, deterministic,
+    // safe across tenants), not by user name regex. Names like "Joe"
+    // are common enough that a name-based regex would silently sweep
+    // in unrelated mailboxes from any other org. The address list is
+    // hardcoded here because this is a one-shot historical backfill —
+    // future re-bucketing happens through the admin UI dropdown.
+    //
+    // The match runs on the lowercased mailbox email so casing drift
+    // (`Joe.X@…` vs `joe.x@…`) doesn't cause silent misses.
+    const EXCLUDED_EMAILS = [
+      "ben.cunningham@valuetruck.com",
+      "joe.malatesta@valuetruck.com",
+      "kylee.smith@valuetruck.com",
+      "josh.beasley@valuetruck.com",
+      "jordan.baumgart@valuetruck.com",
+    ];
+    const excludedResult = await clientMonitorMode.query(
+      `UPDATE monitored_mailboxes
+          SET monitor_mode = 'excluded_intentional',
+              enabled = false,
+              updated_at = NOW()
+        WHERE LOWER(email) = ANY($1)
+          AND monitor_mode IN ('monitored_active', 'disabled')
+        RETURNING id, email`,
+      [EXCLUDED_EMAILS],
+    );
+    if (excludedResult.rowCount && excludedResult.rowCount > 0) {
+      console.log(
+        `[migrations] Task #997: marked ${excludedResult.rowCount} mailbox(es) as excluded_intentional (${excludedResult.rows.map(r => r.email).join(", ")})`,
+      );
+    }
+
+    // ── Step 3: Reclassify Casey's invalid mailbox ────────────────────
+    // The Graph address that can never subscribe. Identified by exact
+    // email so we don't accidentally sweep in another "Casey" from a
+    // different tenant. We also clear sub IDs/expiry/error so the
+    // watchdog stops retrying and the popover stops showing "expired"
+    // copy that no longer reflects reality.
+    const INVALID_EMAILS = ["casey.olson@valuetruck.com"];
+    const invalidResult = await clientMonitorMode.query(
+      `UPDATE monitored_mailboxes
+          SET monitor_mode = 'invalid_config',
+              enabled = false,
+              subscription_id = NULL,
+              sent_items_subscription_id = NULL,
+              subscription_expires_at = NULL,
+              sync_status = 'excluded',
+              sync_error = NULL,
+              health_status = 'unknown',
+              health_reason = 'Mailbox marked invalid_config — admin must fix the row before re-monitoring',
+              last_subscription_renewal_error = NULL,
+              updated_at = NOW()
+        WHERE LOWER(email) = ANY($1)
+          AND monitor_mode IN ('monitored_active', 'disabled')
+        RETURNING id, email`,
+      [INVALID_EMAILS],
+    );
+    if (invalidResult.rowCount && invalidResult.rowCount > 0) {
+      console.log(
+        `[migrations] Task #997: marked ${invalidResult.rowCount} mailbox(es) as invalid_config and cleared their stale subscriptions (${invalidResult.rows.map(r => r.email).join(", ")})`,
+      );
+    }
+
+    // Resolve any still-open mailbox_health_alerts for the rows we just
+    // moved out of `monitored_active`. Without this the popover would
+    // still surface stale "Webhook unhealthy" rows for those mailboxes
+    // for a full watchdog tick before reconcile cleans them up.
+    const resolvedAlerts = await clientMonitorMode.query(
+      `UPDATE mailbox_health_alerts a
+          SET resolved_at = NOW(), updated_at = NOW()
+         FROM monitored_mailboxes mm
+        WHERE a.mailbox_id = mm.id
+          AND a.resolved_at IS NULL
+          AND mm.monitor_mode <> 'monitored_active'`,
+    );
+    if (resolvedAlerts.rowCount && resolvedAlerts.rowCount > 0) {
+      console.log(
+        `[migrations] Task #997: resolved ${resolvedAlerts.rowCount} stale mailbox_health_alert(s) for non-active mailboxes`,
+      );
+    }
+
+    console.log("[migrations] Task #997 monitor_mode column ensured");
+  } catch (err) {
+    console.error("[migrations] Task #997 monitor_mode migration error:", err);
+  } finally {
+    clientMonitorMode.release();
+  }
+
   // Task #820: add freight_opportunities.delivery_date and overwrite any
   // freight_outreach_templates rows that still leak {{customer_name}} or a
   // hardcoded company name. Idempotent.

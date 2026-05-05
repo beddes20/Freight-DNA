@@ -37,7 +37,7 @@ import {
   triggerBackfillInBackground,
 } from "../services/mailboxHistoricalBackfillService";
 import { db } from "../storage";
-import { quoteOpportunities, emailMessages } from "@shared/schema";
+import { quoteOpportunities, emailMessages, type MonitorMode } from "@shared/schema";
 import { classifyCoverage } from "../services/coverageClassifier";
 import { and, eq, gte, sql } from "drizzle-orm";
 import { getErrorMessage } from "../lib/errors";
@@ -90,6 +90,35 @@ async function persistSubscriptionFailure(
   }
 }
 
+/**
+ * Task #997 — Returns the set of mailbox-level alert keys that should be
+ * resolved when a row's `monitor_mode` transitions OUT of
+ * `monitored_active`. Pulled out as a pure helper so the route's
+ * transition policy is unit-testable without spinning up Express + DB,
+ * and so it stays the single source of truth for "which alerts get
+ * auto-cleared when an admin marks a row excluded/invalid/disabled".
+ *
+ * Only mailbox-scoped alert keys belong here. Org-scoped watchdog
+ * alerts (classification_lag, live_sync_*, quote_pipeline_*) are
+ * anchored to the org's first mailbox and are NOT per-row, so they
+ * must not be resolved when a single row's mode flips.
+ *
+ * `prevMode === null` covers the legacy / pre-migration row case and is
+ * treated as "was monitored_active" (matching the schema default and
+ * the classifier's defensive default elsewhere in this codebase).
+ */
+export function alertKeysToResolveOnModeTransition(
+  prevMode: MonitorMode | null,
+  nextMode: MonitorMode,
+): readonly string[] {
+  const wasActive = prevMode === null || prevMode === "monitored_active";
+  const nowInactive = nextMode !== "monitored_active";
+  if (wasActive && nowInactive) {
+    return ["mailbox_unhealthy", "subscription_renewal_failed"];
+  }
+  return [];
+}
+
 function requireAdmin(req: Request, res: Response, next: () => void) {
   getCurrentUser(req).then(user => {
     if (!user) return res.status(401).json({ error: "Unauthorized" });
@@ -137,10 +166,19 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
+      // Task #997 — POST accepts the canonical `monitorMode` enum
+      // alongside the legacy `enabled` toggle. The storage layer's
+      // normalizeMonitorModeAndEnabled enforces lockstep so there is no
+      // longer a way to land an `enabled=false` row whose
+      // `monitor_mode` defaults to `monitored_active` (and then
+      // permanently re-emerges as a red unhealthy popover row).
       const schema = z.object({
         userId: z.string(),
         email: z.string().email(),
         enabled: z.boolean().default(true),
+        monitorMode: z
+          .enum(["monitored_active", "excluded_intentional", "invalid_config", "disabled"])
+          .optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
@@ -166,6 +204,7 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
         userId: parsed.data.userId,
         email: parsed.data.email,
         enabled: parsed.data.enabled,
+        ...(parsed.data.monitorMode ? { monitorMode: parsed.data.monitorMode } : {}),
       });
 
       if (mailbox.enabled) {
@@ -344,23 +383,78 @@ export function registerMonitoredMailboxRoutes(app: Express): void {
         return res.status(404).json({ error: "Monitored mailbox not found" });
       }
 
+      // Task #997: accept the canonical `monitorMode` enum and treat
+      // `enabled` as a derived field (true iff mode === "monitored_active").
+      // Callers can still send `enabled` directly for backward compat with
+      // the pre-#997 admin toggle; in that case `enabled=false` defaults to
+      // `disabled` mode and `enabled=true` to `monitored_active`. When both
+      // are sent, `monitorMode` wins.
       const schema = z.object({
         enabled: z.boolean().optional(),
+        monitorMode: z
+          .enum(["monitored_active", "excluded_intentional", "invalid_config", "disabled"])
+          .optional(),
       });
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
 
-      const updated = await storage.updateMonitoredMailbox(pStr(req.params.id), parsed.data);
+      let nextMode = parsed.data.monitorMode
+        ?? (parsed.data.enabled === true ? "monitored_active"
+          : parsed.data.enabled === false ? "disabled"
+          : (existing.monitorMode as "monitored_active" | "excluded_intentional" | "invalid_config" | "disabled"));
+      const nextEnabled = nextMode === "monitored_active";
 
-      if (parsed.data.enabled === true && !existing.enabled) {
+      // For invalid_config, also clear stale subscription IDs so the
+      // watchdog/popover stop showing stale "expired" copy. Same treatment
+      // the migration applies to Casey's row.
+      const updatePayload: Parameters<typeof storage.updateMonitoredMailbox>[1] = {
+        monitorMode: nextMode,
+        enabled: nextEnabled,
+      };
+      if (nextMode === "invalid_config") {
+        updatePayload.subscriptionId = null;
+        updatePayload.sentItemsSubscriptionId = null;
+        updatePayload.subscriptionExpiresAt = null;
+        updatePayload.healthStatus = "unknown";
+        updatePayload.healthReason =
+          "Mailbox marked invalid_config — admin must fix the row before re-monitoring";
+      }
+
+      const updated = await storage.updateMonitoredMailbox(pStr(req.params.id), updatePayload);
+
+      if (nextEnabled && !existing.enabled) {
         registerMailboxSubscription(existing.email, existing.id).catch(async err => {
           console.error("[monitoredMailboxes] Subscription registration error:", err);
           await persistSubscriptionFailure(existing, err);
         });
-      } else if (parsed.data.enabled === false && existing.enabled && (existing.subscriptionId || existing.sentItemsSubscriptionId)) {
+      } else if (!nextEnabled && existing.enabled && (existing.subscriptionId || existing.sentItemsSubscriptionId)) {
         const primarySubId = existing.subscriptionId ?? existing.sentItemsSubscriptionId!;
         removeMailboxSubscription(primarySubId, existing.id).catch(err => {
           console.error("[monitoredMailboxes] Subscription removal error:", err);
+        });
+      }
+
+      // Task #997 — When the row transitions OUT of monitored_active
+      // (admin marks excluded_intentional / invalid_config / disabled),
+      // immediately resolve any open mailbox-level alerts for it. Without
+      // this, the popover would keep showing this row as "affected" until
+      // the next watchdog tick — and the watchdog's `runWatchdogCycle`
+      // iterates `getEnabledMonitoredMailboxes()`, so a row whose enabled
+      // just flipped to false would never be processed for resolution at
+      // all and the alert would stay open indefinitely. We resolve here
+      // at the transition point, mirroring what the migration does once.
+      // Best-effort — failures are logged but do NOT block the PATCH
+      // response, because the row update is what the admin asked for.
+      const alertKeysToResolve = alertKeysToResolveOnModeTransition(
+        existing.monitorMode as MonitorMode | null,
+        nextMode,
+      );
+      for (const alertKey of alertKeysToResolve) {
+        storage.resolveMailboxHealthAlert(existing.id, alertKey).catch(err => {
+          console.error(
+            `[monitoredMailboxes] Failed to resolve ${alertKey} alert on mode transition:`,
+            err,
+          );
         });
       }
 

@@ -27,7 +27,7 @@
 import cron, { type ScheduledTask } from "node-cron";
 import { and, eq, sql } from "drizzle-orm";
 import { storage, db } from "../storage";
-import { users, type MonitoredMailbox } from "@shared/schema";
+import { users, type MonitoredMailbox, type MonitorMode } from "@shared/schema";
 import { JOB_NAMES, withHeartbeat } from "../lib/cronHeartbeat";
 import { renewSingleMailboxSubscription } from "../graphSubscriptionService";
 import {
@@ -231,6 +231,32 @@ export function classifyMailboxHealth(
   mb: MonitoredMailbox,
   now: Date,
 ): MailboxHealthClassification {
+  // Task #997: monitor-mode-aware short-circuit. Every consumer of this
+  // function (watchdog reconciler, /api/admin/mailbox-health route,
+  // any future caller) must agree that a non-active mailbox cannot
+  // produce an actionable failure — there's no subscription to renew,
+  // no alert to fire, no Retry to surface. Returning a synthetic
+  // `healthy` classification here is the single source of truth: the
+  // caller-side short-circuit in `runWatchdogForMailbox` is now a
+  // belt-and-suspenders, not the load-bearing gate.
+  const monitorMode = (mb.monitorMode as MonitorMode | null) ?? "monitored_active";
+  if (monitorMode !== "monitored_active") {
+    const modeReason: Record<Exclude<MonitorMode, "monitored_active">, string> = {
+      excluded_intentional: "Excluded intentionally — not monitored",
+      invalid_config: "Invalid mailbox config — admin must fix the row before re-monitoring",
+      disabled: "Mailbox disabled — not subscribed",
+    };
+    return {
+      status: "healthy",
+      reason: modeReason[monitorMode as Exclude<MonitorMode, "monitored_active">],
+      recommendedPollCadenceS: mb.pollCadenceSeconds ?? 300,
+      needsResubscribe: false,
+      resubscribeReasons: [],
+      quietHours: false,
+      silenceOnly: false,
+    };
+  }
+
   const reasons: string[] = [];
   const resubReasons: string[] = [];
   let needsResub = false;
@@ -384,6 +410,35 @@ interface WatchdogOutcome {
 }
 
 async function runWatchdogForMailbox(mb: MonitoredMailbox, now: Date): Promise<WatchdogOutcome> {
+  // Task #997: defensive short-circuit for non-active monitor modes. The
+  // watchdog cycle already filters by `enabled=true` and the PATCH route
+  // keeps `enabled` in lockstep with `monitor_mode`, so in steady state we
+  // never enter this branch. But: a partial migration, a manual SQL fix,
+  // or a future code path that flips `enabled` independently could let a
+  // non-active mailbox slip through — and the alerter / resub branches
+  // below have side effects (Graph calls, admin notifications) we don't
+  // want to fire for an "excluded" or "invalid_config" row. We synthesize
+  // a healthy classification, leave `pollCadenceSeconds` alone, and
+  // resolve any open alerts so the popover comes back clean.
+  const monitorMode = (mb.monitorMode as MonitorMode | null) ?? "monitored_active";
+  if (monitorMode !== "monitored_active") {
+    const before = (mb.healthStatus as MailboxHealthStatus | "unknown") === "unknown"
+      ? null
+      : (mb.healthStatus as MailboxHealthStatus);
+    await Promise.all([
+      storage.resolveMailboxHealthAlert(mb.id, ALERT_KEY_UNHEALTHY).catch(() => null),
+      storage.resolveMailboxHealthAlert(mb.id, ALERT_KEY_RENEWAL_FAILED).catch(() => null),
+    ]);
+    return {
+      mailboxId: mb.id,
+      email: mb.email,
+      before,
+      after: "healthy",
+      action: `skipped_monitor_mode_${monitorMode}`,
+      resubscribed: false,
+    };
+  }
+
   let cls = classifyMailboxHealth(mb, now);
   const before = (mb.healthStatus as MailboxHealthStatus | "unknown") === "unknown"
     ? null

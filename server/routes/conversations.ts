@@ -1719,10 +1719,18 @@ export function registerConversationsRoutes(app: Express): void {
         // notification + email; restricting the trigger keeps work off the
         // critical path for regular reps and removes any opportunity for a
         // curious rep to spam the throttle.
-        if (snapshot.status === "unhealthy" && user.role === "admin") {
-          const firstUnhealthy = snapshot.mailboxes.find(
-            m => m.sentItemsHealth === "expired" || m.sentItemsHealth === "missing",
-          );
+        // Task #997: only fire when there is at least one *active* mailbox
+        // contributing to the unhealthy verdict. With the canonical
+        // monitor_mode, getMailboxSentItemsHealth synthesizes "unknown"
+        // (not "missing"/"expired") for excluded/invalid/disabled rows, so
+        // `firstUnhealthy` here naturally skips them. Guarding on
+        // `firstUnhealthy` ensures a roll-up that's only red because of
+        // cron-job staleness or shared-reply config doesn't page admins
+        // about a "Webhook unhealthy" condition that doesn't exist.
+        const firstUnhealthy = snapshot.mailboxes.find(
+          m => m.sentItemsHealth === "expired" || m.sentItemsHealth === "missing",
+        );
+        if (snapshot.status === "unhealthy" && user.role === "admin" && firstUnhealthy) {
           void notifyOnInboxUnhealthy({
             organizationId: user.organizationId,
             status: snapshot.status,

@@ -40,6 +40,7 @@ import {
   type MonitoredMailbox,
   type ConversationThreadCaptureAudit,
   type EmailConversationThread,
+  type MonitorMode,
 } from "@shared/schema";
 import { and, eq, desc, gte, isNotNull, sql as drizzleSql } from "drizzle-orm";
 import { azureCredentialsConfigured, getGraphAccessToken } from "../graphService";
@@ -59,6 +60,12 @@ export interface MailboxHealthSnapshot {
   mailboxId: string;
   email: string;
   enabled: boolean;
+  /** Task #997: canonical monitor-mode that governs whether this mailbox
+   *  participates in the rollup, the alerter, and the retry buttons. The
+   *  popover renders Action Required / Config Issues / Excluded sections
+   *  off this field; non-`monitored_active` rows never inflate
+   *  `webhookFailureCount` and never push the pill red on their own. */
+  monitorMode: MonitorMode;
   sentItemsHealth: SentItemsHealth;
   inboxSubscriptionId: string | null;
   sentItemsSubscriptionId: string | null;
@@ -93,6 +100,38 @@ export function getMailboxSentItemsHealth(mb: MonitoredMailbox): MailboxHealthSn
   let health: SentItemsHealth = "active";
   let reason = "SentItems subscription active";
 
+  // Task #997: non-active monitor modes never roll the pill red, never feed
+  // `webhookFailureCount`, and never trigger the alerter. We classify them
+  // as `unknown` (rather than `missing`/`expired`) and surface the reason
+  // verbatim so the popover can group them under Config Issues / Excluded.
+  // Returning early also prevents the "subscription expired" branch below
+  // from generating misleading copy for rows whose sub IDs were cleared by
+  // the migration.
+  const monitorMode = (mb.monitorMode as MonitorMode | null) ?? "monitored_active";
+  if (monitorMode !== "monitored_active") {
+    const modeReason: Record<Exclude<MonitorMode, "monitored_active">, string> = {
+      excluded_intentional: "Excluded intentionally — not monitored",
+      invalid_config: "Invalid mailbox config — admin must fix the row before re-monitoring",
+      disabled: "Mailbox disabled by admin — not subscribed",
+    };
+    return {
+      mailboxId: mb.id,
+      email: mb.email,
+      enabled: mb.enabled,
+      monitorMode,
+      sentItemsHealth: "unknown",
+      inboxSubscriptionId: mb.subscriptionId,
+      sentItemsSubscriptionId: mb.sentItemsSubscriptionId,
+      subscriptionExpiresAt: mb.subscriptionExpiresAt?.toISOString() ?? null,
+      lastSentItemsNotificationAt: mb.lastSentItemsNotificationAt?.toISOString() ?? null,
+      lastOutboundCapturedAt: mb.lastOutboundCapturedAt?.toISOString() ?? null,
+      lastSyncAt: mb.lastSyncAt?.toISOString() ?? null,
+      syncStatus: mb.syncStatus,
+      syncError: mb.syncError,
+      reason: modeReason[monitorMode as Exclude<MonitorMode, "monitored_active">],
+    };
+  }
+
   if (!mb.enabled) {
     health = "missing";
     reason = "Mailbox disabled — not subscribed to SentItems";
@@ -125,6 +164,7 @@ export function getMailboxSentItemsHealth(mb: MonitoredMailbox): MailboxHealthSn
     mailboxId: mb.id,
     email: mb.email,
     enabled: mb.enabled,
+    monitorMode,
     sentItemsHealth: health,
     inboxSubscriptionId: mb.subscriptionId,
     sentItemsSubscriptionId: mb.sentItemsSubscriptionId,
@@ -644,6 +684,30 @@ export interface CaptureAuditHealthSnapshot {
   lastSuccessfulSyncAt: string | null;
   pendingRecoveryThreadCount: number;
   webhookFailureCount: number;
+  /** Task #997: explicit three-bucket discriminator for the popover.
+   *  Counted server-side so every consumer (Conversations pill,
+   *  external monitoring webhook, future Slack digest) agrees on the
+   *  same numbers. The contract:
+   *    - `actionRequired`  = `monitored_active` mailboxes whose
+   *                          SentItems sub is NOT `active` — i.e. the
+   *                          rows the admin must act on. Drives the
+   *                          red Webhook Unhealthy pill.
+   *    - `configIssues`    = `invalid_config` mailboxes. Surfaced for
+   *                          visibility but never inflates `actionRequired`
+   *                          and never auto-pages.
+   *    - `excluded`        = `excluded_intentional` + `disabled`.
+   *                          Surfaced for transparency only.
+   *    - `healthyActive`   = `monitored_active` rows whose SentItems
+   *                          sub is `active`. The "Show N healthy"
+   *                          expander is driven off this.
+   *  `actionRequired` is the count behind `webhookFailureCount`'s
+   *  status-rolling logic. Sum of the four equals `scope.mailboxes`. */
+  mailboxBuckets: {
+    actionRequired: number;
+    configIssues: number;
+    excluded: number;
+    healthyActive: number;
+  };
   scope: { mailboxes: number; users: number | null };
   mailboxes: MailboxHealthSnapshot[];
   recentRuns: CaptureAuditHealthRecentRun[];
@@ -710,10 +774,36 @@ export async function getCaptureAuditHealthForUsers(opts: {
   const mailboxIds = visibleMailboxes.map(m => m.id);
 
   const mailboxHealth = visibleMailboxes.map(getMailboxSentItemsHealth);
+  // Task #997: failure/stale counters MUST scope to monitored_active rows
+  // only. Non-active modes already classify as `unknown` (see the
+  // monitor-mode short-circuit in `getMailboxSentItemsHealth`), but
+  // gating the filter explicitly here makes the contract obvious to
+  // future readers and ensures a regression in the classifier can't
+  // silently re-pollute the counters.
   const webhookFailureCount = mailboxHealth.filter(h =>
-    h.sentItemsHealth === "expired" || h.sentItemsHealth === "missing"
+    h.monitorMode === "monitored_active" &&
+    (h.sentItemsHealth === "expired" || h.sentItemsHealth === "missing"),
   ).length;
-  const staleCount = mailboxHealth.filter(h => h.sentItemsHealth === "stale").length;
+  const staleCount = mailboxHealth.filter(h =>
+    h.monitorMode === "monitored_active" && h.sentItemsHealth === "stale",
+  ).length;
+
+  // Task #997: explicit three-bucket counters surfaced on the snapshot.
+  // The popover groups its rendered list by these same buckets; counting
+  // them server-side guarantees the pill summary line and the popover
+  // sections agree on the numbers.
+  const mailboxBuckets = {
+    actionRequired: mailboxHealth.filter(h =>
+      h.monitorMode === "monitored_active" && h.sentItemsHealth !== "active",
+    ).length,
+    configIssues: mailboxHealth.filter(h => h.monitorMode === "invalid_config").length,
+    excluded: mailboxHealth.filter(h =>
+      h.monitorMode === "excluded_intentional" || h.monitorMode === "disabled",
+    ).length,
+    healthyActive: mailboxHealth.filter(h =>
+      h.monitorMode === "monitored_active" && h.sentItemsHealth === "active",
+    ).length,
+  };
 
   const lastSuccessfulSyncAt = visibleMailboxes.reduce<Date | null>((acc, m) => {
     // Task #794: include lastSyncAt so the pill flips green right after a
@@ -875,6 +965,7 @@ export async function getCaptureAuditHealthForUsers(opts: {
     lastSuccessfulSyncAt: lastSuccessfulSyncAt ? lastSuccessfulSyncAt.toISOString() : null,
     pendingRecoveryThreadCount: affectedThreads.length,
     webhookFailureCount,
+    mailboxBuckets,
     scope: { mailboxes: visibleMailboxes.length, users: opts.visibleUserIds?.length ?? null },
     mailboxes: mailboxHealth,
     recentRuns,

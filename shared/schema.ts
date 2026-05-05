@@ -2867,6 +2867,22 @@ export const monitoredMailboxes = pgTable(
     pollCadenceSeconds: integer("poll_cadence_seconds").notNull().default(300),
     lastWatchdogActionAt: timestamp("last_watchdog_action_at"),
     lastWatchdogAction: text("last_watchdog_action"),
+    // Task #997 — Canonical monitor-mode enum that drives every consumer
+    // (capture-audit pill, watchdog, alerter, admin UI). Replaces the
+    // previous ad-hoc "enabled=false means three different things" state:
+    //   monitored_active     — normal operation; subscribe, monitor, alert.
+    //   excluded_intentional — owner is on PTO / not handling email; do not
+    //                          subscribe, do not roll the pill red, do not
+    //                          alert. Surfaced under "Excluded" in the pill.
+    //   invalid_config       — mailbox row is broken (typo'd email, missing
+    //                          M365 license, etc.) — Graph cannot subscribe
+    //                          and never will. Do not alert; surface under
+    //                          "Config issues" so an admin can fix the row.
+    //   disabled             — admin paused the mailbox via the toggle.
+    //                          Same suppression rules as excluded.
+    // `enabled` stays in lockstep (true iff mode === "monitored_active") so
+    // existing query paths that filter on `enabled` continue to work.
+    monitorMode: text("monitor_mode").notNull().default("monitored_active"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
   },
@@ -2875,6 +2891,19 @@ export const monitoredMailboxes = pgTable(
     index("monitored_mailboxes_org_enabled_idx").on(table.orgId, table.enabled),
   ],
 );
+
+export type MonitorMode =
+  | "monitored_active"
+  | "excluded_intentional"
+  | "invalid_config"
+  | "disabled";
+
+export const MONITOR_MODES: readonly MonitorMode[] = [
+  "monitored_active",
+  "excluded_intentional",
+  "invalid_config",
+  "disabled",
+] as const;
 
 // ── Mailbox Health Alerts (Task #867) ───────────────────────────────────────
 // Per-(mailbox, alertKey) dedupe ledger for the watchdog. The watchdog runs
