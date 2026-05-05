@@ -66,6 +66,7 @@ import { ContactIntelModal } from "@/components/contact-intel-modal";
 import { ZoomInfoSuggestionsDialog } from "@/components/zoominfo-suggestions";
 import { OpportunityLogDialog } from "@/components/opportunity-log-dialog";
 import { RelationshipFreightCompanyPortlet } from "@/components/relationship-freight-portlet";
+import { QuoteCustomerOwnerWidget } from "@/components/quote-customer-owner-widget";
 import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
 import { OverviewTab } from "./company-detail/tabs/OverviewTab";
 import { ActivityTab } from "./company-detail/tabs/ActivityTab";
@@ -845,6 +846,7 @@ export default function CompanyDetail() {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 mt-2">
+          {company && <QuoteCustomerOwnerWidget companyName={company.name} />}
           <OverviewTab
             accountPerf={accountPerf}
             setShowTrends={setShowTrends}

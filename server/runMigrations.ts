@@ -3938,6 +3938,23 @@ export async function runMigrations() {
     await client468.query(`ALTER TABLE quote_reps ADD COLUMN IF NOT EXISTS suppressed boolean NOT NULL DEFAULT false`);
     await client468.query(`CREATE INDEX IF NOT EXISTS quote_reps_org_idx ON quote_reps (organization_id)`);
 
+    // Task #1012 — owner rep on quote_customers (FK to quote_reps, set null
+    // on rep delete). Idempotent: safe to re-run, and the FK constraint is
+    // added in a DO block so re-runs don't fail on duplicate constraint name.
+    await client468.query(`ALTER TABLE quote_customers ADD COLUMN IF NOT EXISTS owner_rep_id varchar`);
+    await client468.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'quote_customers_owner_rep_id_fkey'
+        ) THEN
+          ALTER TABLE quote_customers
+            ADD CONSTRAINT quote_customers_owner_rep_id_fkey
+            FOREIGN KEY (owner_rep_id) REFERENCES quote_reps(id) ON DELETE SET NULL;
+        END IF;
+      END $$;
+    `);
+
     await client468.query(`
       CREATE TABLE IF NOT EXISTS quote_carriers (
         id varchar PRIMARY KEY DEFAULT gen_random_uuid(),

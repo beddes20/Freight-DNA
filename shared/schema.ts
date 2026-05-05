@@ -1,5 +1,5 @@
 import { sql, desc } from "drizzle-orm";
-import { pgTable, text, varchar, integer, serial, decimal, numeric, jsonb, boolean, timestamp, date, uniqueIndex, index, customType, primaryKey } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, serial, decimal, numeric, jsonb, boolean, timestamp, date, uniqueIndex, index, customType, primaryKey, type AnyPgColumn } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -5744,6 +5744,14 @@ export const quoteCustomers = pgTable("quote_customers", {
   notes: text("notes"),
   partyType: text("party_type").notNull().default("unknown"),
   partyTypeManual: boolean("party_type_manual").notNull().default(false),
+  // Task #1012 — primary owner rep for the customer in the Customer Quotes
+  // pipeline. When set, used as the fallback rep on inbound quotes whose
+  // sender / inbox lookup didn't resolve to a more specific rep, and as
+  // the display rep on the Quote Requests list for unassigned rows linked
+  // to this customer. References `quote_reps.id` directly so it lives in
+  // the same id-space the Quote Requests `repId` already uses; on rep
+  // delete the column nulls out (ownership is cleared, never cascaded).
+  ownerRepId: varchar("owner_rep_id").references((): AnyPgColumn => quoteReps.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 export const insertQuoteCustomerSchema = createInsertSchema(quoteCustomers).omit({ id: true, createdAt: true });

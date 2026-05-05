@@ -149,6 +149,11 @@ type Quote = {
   // (e.g. no priced reply, or non-email source with no thread).
   firstReplyMinutes?: number | null;
   firstQuoteMinutes?: number | null;
+  // Task #1012 — true when the row's `repId` is null but the linked
+  // customer has an owner rep, so `repName` is the owner's name. Lets
+  // us render an "owner" badge so operators understand they're seeing
+  // a fallback display rather than an explicit assignment.
+  repFromCustomerOwner?: boolean;
 };
 
 type ListResult = { rows: Quote[]; total: number; offset: number; limit: number };
@@ -1814,18 +1819,29 @@ function ListRow({
           <Avatar className="h-5 w-5 border border-border">
             <AvatarFallback className="text-[9px]">{initials(q.repName)}</AvatarFallback>
           </Avatar>
-          {/* Task #1011 — when no rep was resolved but the customer's
-              CRM company has an `ownerRepId`, render the owner's name
-              with an "(owner)" suffix instead of "Unassigned". The
-              underlying repId stays null so attribution + funnel
-              accounting are unaffected. */}
-          <span className="text-xs">
+          {/* Task #1011 + #1012 — render the rep's name (which the
+              server projects to the customer's owner rep when no
+              explicit rep resolved). When that fallback fires
+              (`repFromCustomerOwner`), show an "owner" badge so
+              operators don't misread it as an explicit assignment.
+              The underlying `repId` stays null in the fallback case so
+              attribution + funnel accounting are unaffected.
+              `ownerRepName` (Task #1011 server-side identity flow) is
+              honored as a secondary fallback when `repName` is empty. */}
+          <span className="text-xs" data-testid={`text-rep-name-${q.id}`}>
             {q.repName && q.repName !== "—"
               ? q.repName
-              : (q as any).ownerRepName
-                ? <>{(q as any).ownerRepName} <span className="text-muted-foreground">(owner)</span></>
-                : ""}
+              : (q as { ownerRepName?: string }).ownerRepName ?? "Unassigned"}
           </span>
+          {(q.repFromCustomerOwner || (!q.repName || q.repName === "—") && (q as { ownerRepName?: string }).ownerRepName) && (
+            <span
+              className="inline-flex items-center px-1.5 h-4 text-[9px] font-medium uppercase rounded border bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900"
+              title="Showing the customer's owner rep — this quote isn't assigned yet."
+              data-testid={`badge-owner-fallback-${q.id}`}
+            >
+              owner
+            </span>
+          )}
           {/* Task #969 — "Why this rep?" attribution drawer trigger.
               Stop propagation so clicking the link doesn't bubble up to
               the row's onClick (which selects the quote and opens the

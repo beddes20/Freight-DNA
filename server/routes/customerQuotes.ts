@@ -10,6 +10,9 @@ import {
   purgeDemoSeed,
   createQuoteCustomer,
   setCustomerPartyType,
+  setQuoteCustomerOwner,
+  getQuoteCustomerWithOwner,
+  findQuoteCustomerByName,
   clearPartyTypeBackfillCache,
   getActionQueue,
   bulkReassignCustomerForQuotes,
@@ -356,6 +359,12 @@ export interface AttributionRow {
   contact_name: string | null;
   contact_email: string | null;
   contact_title: string | null;
+  // Task #1012 — surfaced so the attribution drawer can explain when
+  // a quote landed on the customer's owner rep via the new fallback,
+  // and so it can cite the owner by name even if the quote row's own
+  // `rep_id` is null (display fallback case).
+  owner_rep_id: string | null;
+  owner_rep_name: string | null;
 }
 
 // ─── Force-reprocess body-status mapping ──────────────────────────────
@@ -414,8 +423,12 @@ export function buildForceReprocessBody(
 //   • shared_distribution   — sender matches a shared/distribution mailbox identity
 //   • customer_domain       — sender domain matches a registered customer domain
 //   • account_owner_fallback — no inbox-recipient match; account owner caught it
+// Task #1012 adds:
+//   • customer_owner — quote_customers.owner_rep_id supplied (or projected)
+//                      the rep when sender/inbox routing didn't resolve one.
 export type AssignmentRule =
   | "account_owner"
+  | "customer_owner"
   | "lane_pattern"
   | "last_toucher"
   | "fallback"
@@ -442,11 +455,25 @@ export function buildAttributionResponse(
   // closest match to `account_owner` in the canonical taxonomy. If
   // the quote was created without an email source (e.g. spot intake),
   // no automated rule fired — surface `fallback` so the drawer can
-  // render an honest "manual entry" explanation. Task #1011 — when an
-  // identity matched at ingestion time, prefer the identity-specific
-  // rule name; if no inbox-recipient match fired but the rep is the
-  // company's owner, surface `account_owner_fallback`.
+  // render an honest "manual entry" explanation.
+  //
+  // Task #1011 — when an identity matched at ingestion time, prefer
+  // the identity-specific rule name; if no inbox-recipient match fired
+  // but the rep is the company's owner, surface `account_owner_fallback`.
+  // Task #1012 — when the row's `rep_id` matches the linked customer's
+  // `owner_rep_id` AND there is no inbound source email, the assignment
+  // came from the customer-owner fallback at ingestion time. When
+  // `rep_id` is null but the customer has an `owner_rep_id`, the
+  // display rep was projected from the owner (display fallback). Both
+  // surface as `customer_owner`. Identity-precedence rules (1011) win
+  // over `customer_owner` because they reflect a stronger sender-side
+  // signal than the customer-default owner.
   let ruleName: AssignmentRule = row.message_id ? "account_owner" : "fallback";
+  if (row.rep_id && row.owner_rep_id && row.rep_id === row.owner_rep_id && !row.message_id) {
+    ruleName = "customer_owner";
+  } else if (!row.rep_id && row.owner_rep_id) {
+    ruleName = "customer_owner";
+  }
   if (identity) {
     if (identity.kind === "contact") ruleName = "customer_contact";
     else if (identity.kind === "shared_distribution") ruleName = "shared_distribution";
@@ -470,6 +497,12 @@ export function buildAttributionResponse(
     rep: row.rep_id
       ? { id: row.rep_id, name: row.rep_name ?? "(unnamed)", email: row.rep_email ?? null }
       : null,
+    // Task #1012 — surface the customer's owner rep (when set) so the
+    // drawer can name them in the customer_owner explanation regardless
+    // of whether the row's `rep_id` is the owner or null.
+    customerOwnerRep: row.owner_rep_id
+      ? { id: row.owner_rep_id, name: row.owner_rep_name ?? "(unnamed)" }
+      : null,
     contact: row.contact_id
       ? {
           id: row.contact_id,
@@ -492,7 +525,11 @@ export function buildAttributionResponse(
       description:
         ruleName === "account_owner"
           ? "Rep owns the customer-facing inbox this inbound email was sent to."
-          : "No automated assignment rule fired; rep was set manually.",
+          : ruleName === "customer_owner"
+            ? (row.rep_id
+                ? "Defaulted to the account's owner rep when no inbox match was found."
+                : "Showing the account's owner rep until a rep is explicitly assigned.")
+            : "No automated assignment rule fired; rep was set manually.",
       decidedAt,
       inputs: ruleName === "account_owner"
         ? {
@@ -500,7 +537,13 @@ export function buildAttributionResponse(
             recipientEmail: row.recipient_email,
             senderEmail: row.sender_email,
           }
-        : null,
+        : ruleName === "customer_owner"
+          ? {
+              customerId: row.customer_id,
+              ownerRepId: row.owner_rep_id,
+              ownerRepName: row.owner_rep_name,
+            }
+          : null,
     },
   };
 }
@@ -530,6 +573,8 @@ export async function fetchAttributionRow(
       r.id              AS rep_id,
       r.name            AS rep_name,
       r.email           AS rep_email,
+      orep.id           AS owner_rep_id,
+      COALESCE(NULLIF(TRIM(ouser.name), ''), orep.name) AS owner_rep_name,
       em.id             AS message_id,
       em.from_email     AS sender_email,
       -- email_messages does not store a separate sender display name today
@@ -549,6 +594,8 @@ export async function fetchAttributionRow(
     FROM quote_opportunities q
     LEFT JOIN quote_customers c ON c.id = q.customer_id
     LEFT JOIN quote_reps r      ON r.id = q.rep_id
+    LEFT JOIN quote_reps orep   ON orep.id = c.owner_rep_id
+    LEFT JOIN users ouser       ON ouser.id = orep.user_id
     LEFT JOIN email_messages em ON (
       em.org_id = q.organization_id
       AND em.direction = 'inbound'
@@ -797,6 +844,95 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] set party-type error:", err);
+      res.status(400).json({ error: msg });
+    }
+  });
+
+  // Task #1012 — get a single quote_customer (with denormalized owner rep
+  // display name) so the company-detail page can render the Owner Rep
+  // widget without round-tripping through the snapshot. Read-only,
+  // org-scoped.
+  app.get("/api/customer-quotes/customers/:id", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const found = await getQuoteCustomerWithOwner(user.organizationId, pStr(req.params.id));
+      if (!found) return res.status(404).json({ error: "Not found" });
+      res.json({
+        customer: found.customer,
+        ownerRepName: found.ownerRepName,
+      });
+    } catch (err) {
+      console.error("[customer-quotes] get customer error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  // Task #1012 — resolve a CRM company name to its quote_customers row
+  // (case-insensitive). Used by company-detail to discover whether
+  // there's a Customer Quotes record for the company being viewed.
+  // Returns 404 when no match exists; the caller renders an
+  // empty-state ("Not yet a quote customer") in that case.
+  app.get("/api/customer-quotes/customers/by-name/:name", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      const name = decodeURIComponent(pStr(req.params.name));
+      const found = await findQuoteCustomerByName(user.organizationId, name);
+      if (!found) return res.status(404).json({ error: "Not found" });
+      res.json({
+        customer: found.customer,
+        ownerRepName: found.ownerRepName,
+      });
+    } catch (err) {
+      console.error("[customer-quotes] find customer by-name error:", err);
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
+  // Task #1012 — set or clear the primary owner rep on a quote_customer.
+  // Validates that the rep belongs to the same org and isn't suppressed
+  // (suppressed reps shouldn't be picked as new owners; existing rows
+  // referencing a now-suppressed rep are handled by the FK + UI badge).
+  // PATCH body: { ownerRepId: string | null }.
+  app.patch("/api/customer-quotes/customers/:id/owner", requireUser, async (req, res) => {
+    try {
+      const user = req.user!;
+      // Task #1012 — same admin guard as the rep-audit surface. Owner
+      // mutations change which rep new inbound quotes (and unassigned
+      // display rows) are routed to, so we restrict this to admins.
+      if (!isRepAuditAdmin(user.role)) {
+        return res.status(403).json({ error: "Admin access required" });
+      }
+      const data = z.object({
+        ownerRepId: z.string().min(1).nullable(),
+      }).parse(req.body);
+      if (data.ownerRepId) {
+        const [rep] = await db.select({ id: quoteReps.id, suppressed: quoteReps.suppressed })
+          .from(quoteReps)
+          .where(andSql(
+            eqSql(quoteReps.organizationId, user.organizationId),
+            eqSql(quoteReps.id, data.ownerRepId),
+          ))
+          .limit(1);
+        if (!rep) {
+          return res.status(400).json({ error: "Rep not found in this organization" });
+        }
+        if (rep.suppressed) {
+          return res.status(400).json({ error: "Cannot assign a suppressed rep as owner" });
+        }
+      }
+      const updated = await setQuoteCustomerOwner(
+        user.organizationId,
+        pStr(req.params.id),
+        data.ownerRepId,
+      );
+      if (!updated) return res.status(404).json({ error: "Customer not found" });
+      res.json({
+        customer: updated.customer,
+        ownerRepName: updated.ownerRepName,
+      });
+    } catch (err) {
+      const msg = getErrorMessage(err);
+      console.error("[customer-quotes] set owner error:", err);
       res.status(400).json({ error: msg });
     }
   });

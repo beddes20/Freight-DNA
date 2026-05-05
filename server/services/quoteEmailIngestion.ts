@@ -961,6 +961,29 @@ export async function ingestQuoteFromEmail(
     }
   }
 
+  // Task #1012 — Customer-owner-rep fallback. When the inbox/sender
+  // routing chain didn't resolve a rep, default to the matched
+  // customer's primary owner rep (set on the Customer profile). Never
+  // overwrites an explicit upstream resolution; only fills in when
+  // `repId` is otherwise null. Failure to look up is logged and
+  // ignored — ingestion must always succeed even if the owner column
+  // is missing on a partially-migrated env.
+  if (!repId && customerId) {
+    try {
+      const [ownerRow] = await db
+        .select({ ownerRepId: quoteCustomers.ownerRepId })
+        .from(quoteCustomers)
+        .where(and(
+          eq(quoteCustomers.organizationId, message.orgId),
+          eq(quoteCustomers.id, customerId),
+        ))
+        .limit(1);
+      if (ownerRow?.ownerRepId) repId = ownerRow.ownerRepId;
+    } catch (err) {
+      console.warn("[quoteEmailIngestion] customer owner lookup failed:", err);
+    }
+  }
+
   const requestDate = message.providerSentAt ?? message.createdAt ?? new Date();
   const validThrough = new Date(requestDate.getTime() + 7 * 24 * 3600 * 1000);
 

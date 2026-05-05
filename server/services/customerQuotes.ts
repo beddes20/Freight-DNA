@@ -72,6 +72,13 @@ export type QuoteFilters = {
 export type EnrichedQuote = QuoteOpportunity & {
   customerName: string;
   repName: string;
+  // Task #1012 — true when `repName` was projected from the linked
+  // customer's `ownerRepId` because the row's own `repId` is null.
+  // Lets the Quote Requests UI render an "owner" badge that
+  // distinguishes a fallback display from an explicit assignment.
+  // The underlying `repId` is intentionally not mutated when this
+  // flag is true.
+  repFromCustomerOwner: boolean;
   carrierName: string | null;
   outcomeReasonLabel: string | null;
   // Task #526 — populated for source="email" rows so the table can deep-link
@@ -739,6 +746,88 @@ export async function setCustomerPartyType(
   return row ?? null;
 }
 
+/**
+ * Task #1012 — set (or clear) the primary owner rep on a `quote_customers`
+ * row. Returns the updated row plus the denormalized owner display name
+ * (joined from `quote_reps`) so the caller can echo it back to the UI
+ * without a second round-trip. Returns null when the customer doesn't
+ * exist in the org.
+ *
+ * Validation of the rep (same org, not suppressed) is the route layer's
+ * responsibility — this function performs only the persistence.
+ */
+export async function setQuoteCustomerOwner(
+  orgId: string,
+  customerId: string,
+  ownerRepId: string | null,
+): Promise<{ customer: QuoteCustomer; ownerRepName: string | null } | null> {
+  const [row] = await db.update(quoteCustomers)
+    .set({ ownerRepId })
+    .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.id, customerId)))
+    .returning();
+  if (!row) return null;
+  let ownerRepName: string | null = null;
+  if (row.ownerRepId) {
+    const [rep] = await db.select({ name: quoteReps.name, userName: users.name })
+      .from(quoteReps)
+      .leftJoin(users, eq(users.id, quoteReps.userId))
+      .where(and(eq(quoteReps.organizationId, orgId), eq(quoteReps.id, row.ownerRepId)))
+      .limit(1);
+    ownerRepName = (rep?.userName && rep.userName.trim()) || rep?.name || null;
+  }
+  return { customer: row, ownerRepName };
+}
+
+/**
+ * Task #1012 — fetch a customer + its owner rep info (denormalized
+ * display name). Returns null when the customer doesn't exist in the
+ * org. Used by the Customer profile widget on company-detail to render
+ * the current state without round-tripping through the snapshot.
+ */
+export async function getQuoteCustomerWithOwner(
+  orgId: string,
+  customerId: string,
+): Promise<{ customer: QuoteCustomer; ownerRepName: string | null } | null> {
+  const [customer] = await db.select().from(quoteCustomers)
+    .where(and(eq(quoteCustomers.organizationId, orgId), eq(quoteCustomers.id, customerId)))
+    .limit(1);
+  if (!customer) return null;
+  let ownerRepName: string | null = null;
+  if (customer.ownerRepId) {
+    const [rep] = await db.select({ name: quoteReps.name, userName: users.name })
+      .from(quoteReps)
+      .leftJoin(users, eq(users.id, quoteReps.userId))
+      .where(and(eq(quoteReps.organizationId, orgId), eq(quoteReps.id, customer.ownerRepId)))
+      .limit(1);
+    ownerRepName = (rep?.userName && rep.userName.trim()) || rep?.name || null;
+  }
+  return { customer, ownerRepName };
+}
+
+/**
+ * Task #1012 — find the `quote_customers` row in this org whose name
+ * matches the given display name (case-insensitive, whitespace-tolerant)
+ * — the company-detail page uses this to discover whether a CRM company
+ * has a corresponding Customer Quotes record so it can surface the
+ * Owner Rep widget. Returns the same shape as `getQuoteCustomerWithOwner`
+ * (or null when no quote_customer matches).
+ */
+export async function findQuoteCustomerByName(
+  orgId: string,
+  name: string,
+): Promise<{ customer: QuoteCustomer; ownerRepName: string | null } | null> {
+  const trimmed = name.trim();
+  if (!trimmed) return null;
+  const [customer] = await db.select().from(quoteCustomers)
+    .where(and(
+      eq(quoteCustomers.organizationId, orgId),
+      sql`lower(${quoteCustomers.name}) = lower(${trimmed})`,
+    ))
+    .limit(1);
+  if (!customer) return null;
+  return getQuoteCustomerWithOwner(orgId, customer.id);
+}
+
 function num(v: string | null | undefined): number {
   if (v === null || v === undefined || v === "") return 0;
   const n = Number(v); return isNaN(n) ? 0 : n;
@@ -1007,6 +1096,7 @@ function enrich(
     // already verified customer-facing upstream so no extra eligibility
     // check needed here.
     let repName = "—";
+    let repFromCustomerOwner = false;
     const tier1 = repByOpp?.get(r.id);
     if (tier1) {
       repName = tier1;
@@ -1020,6 +1110,21 @@ function enrich(
       if (!repHidden && r.repId) {
         const preferred = displayNames?.get(r.repId);
         repName = preferred ?? repMap.get(r.repId)?.name ?? "—";
+      } else if (!r.repId) {
+        // Task #1012 — when the row has no explicit rep, fall back to
+        // the linked customer's owner rep for *display only*. The
+        // underlying `repId` stays null so the row remains "unassigned"
+        // until something explicitly writes to it.
+        const customer = customerMap.get(r.customerId);
+        const ownerRepId = customer?.ownerRepId ?? null;
+        if (ownerRepId) {
+          const preferred = displayNames?.get(ownerRepId);
+          const ownerName = preferred ?? repMap.get(ownerRepId)?.name ?? null;
+          if (ownerName) {
+            repName = ownerName;
+            repFromCustomerOwner = true;
+          }
+        }
       }
     }
     const stored = customerMap.get(r.customerId)?.name;
@@ -1035,6 +1140,7 @@ function enrich(
       ...r,
       customerName,
       repName,
+      repFromCustomerOwner,
       carrierName: r.carrierId ? carrierMap.get(r.carrierId)?.name ?? null : null,
       outcomeReasonLabel: r.outcomeReasonId ? reasonMap.get(r.outcomeReasonId)?.label ?? null : null,
       slaState: sla.state,
