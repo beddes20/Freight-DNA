@@ -1069,12 +1069,17 @@ RULES FOR YOUR RESPONSES:
       if (req.body.email !== undefined) data.email = req.body.email || null;
       if (req.body.password) data.password = await bcrypt.hash(req.body.password, 10);
       if (req.body.emailSignature !== undefined) data.emailSignature = req.body.emailSignature?.trim() || null;
+      let pendingRoleChange: { newRole: string } | null = null;
       if (isAdmin(currentUser)) {
         if (req.body.role !== undefined) {
           if (!userRoles.includes(req.body.role)) {
             return res.status(400).json({ error: "Invalid role" });
           }
-          data.role = req.body.role;
+          // Defer the role write to applyRolePromotion below so every
+          // role mutation flows through one audited helper. Removing the
+          // write from `data` here is intentional — the promotion helper
+          // owns it.
+          pendingRoleChange = { newRole: req.body.role };
         }
         if (req.body.managerId !== undefined) {
           // Normalize falsy values ("" / undefined-as-string) to null so the
@@ -1103,8 +1108,31 @@ RULES FOR YOUR RESPONSES:
         }
         if (req.body.financialRepId !== undefined) data.financialRepId = req.body.financialRepId || null;
       }
-      const user = await storage.updateUser((pStr(req.params.id)), currentUser.organizationId, data);
+      let user = Object.keys(data).length > 0
+        ? await storage.updateUser((pStr(req.params.id)), currentUser.organizationId, data)
+        : await storage.getUser((pStr(req.params.id)));
       if (!user) return res.status(404).json({ error: "User not found" });
+
+      // Audited role-promotion path. Centralizes the write so dropped
+      // promotions (the TJ-LM-to-AM incident) are detectable in logs and
+      // every role transition emits a uniform `[role-promotion] APPLIED`
+      // line. The helper is the only place that should mutate users.role.
+      if (pendingRoleChange) {
+        const { applyRolePromotion } = await import("./lib/rolePromotion");
+        const result = await applyRolePromotion({
+          actorId: currentUser.id,
+          actorRole: currentUser.role,
+          targetUserId: pStr(req.params.id),
+          organizationId: currentUser.organizationId,
+          newRole: pendingRoleChange.newRole,
+        });
+        if (!result.ok) {
+          if (result.reason === "invalid-role") return res.status(400).json({ error: "Invalid role" });
+          if (result.reason === "not-found") return res.status(404).json({ error: "User not found" });
+          return res.status(500).json({ error: "Failed to update role" });
+        }
+        user = result.user;
+      }
       // Invalidate financial summary caches when financialRepId changes so team performance
       // immediately reflects the updated rep attribution without waiting for TTL expiry.
       if (req.body.financialRepId !== undefined) {

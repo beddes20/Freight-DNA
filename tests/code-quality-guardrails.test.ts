@@ -3925,6 +3925,99 @@ console.log("── Section 1026: LWQ A — Lifecycle as first-class state ─�
   );
 }
 
+// ── Section 34: role-promotion contract ────────────────────────────────────
+//
+// The TJ-LM-to-AM incident: a user was "promoted" but the new role was never
+// persisted, no audit trail existed, and the promoted user's nav/route gates
+// stayed on the old role for up to the /api/auth/me staleTime. The contract
+// these guardrails defend:
+//
+//   1. PATCH /api/users/:id MUST route role changes through applyRolePromotion
+//      so every transition emits a structured `[role-promotion]` log line.
+//   2. The admin user-edit mutation MUST invalidate /api/auth/me so the
+//      promoted user's session refreshes instead of holding the old role.
+//   3. The /api/auth/me staleTime MUST stay short (≤ 60s) so role changes
+//      propagate within seconds, not minutes.
+//   4. account_manager MUST stay in SALES_ROLES so AMs see the Customers nav.
+//
+{
+  console.log("\n── Section 34: role-promotion contract ───────────────────────\n");
+
+  const promotionHelper = readFile("server/lib/rolePromotion.ts");
+  assert(
+    "rolePromotion helper exists and exports applyRolePromotion",
+    /export\s+(async\s+)?function\s+applyRolePromotion\b/.test(promotionHelper) ||
+      /export\s+\{[^}]*applyRolePromotion/.test(promotionHelper),
+  );
+  assert(
+    "rolePromotion helper emits the [role-promotion] APPLIED audit log",
+    /\[role-promotion\][^"`]*APPLIED/.test(promotionHelper),
+  );
+
+  const routesSrc = readFile("server/routes.ts");
+  // The PATCH /api/users/:id handler must wire role changes through the helper.
+  const patchUsersBlock = routesSrc.match(/app\.patch\("\/api\/users\/:id"[\s\S]{0,4000}?\}\);/);
+  assert(
+    "PATCH /api/users/:id handler is present",
+    !!patchUsersBlock,
+  );
+  if (patchUsersBlock) {
+    assert(
+      "PATCH /api/users/:id routes role changes through applyRolePromotion",
+      /applyRolePromotion\s*\(/.test(patchUsersBlock[0]),
+    );
+    // Defensive: the legacy direct `data.role = req.body.role` write must
+    // be gone — every role write goes through the helper now.
+    assert(
+      "PATCH /api/users/:id no longer writes data.role directly",
+      !/data\.role\s*=\s*req\.body\.role\b/.test(patchUsersBlock[0]),
+    );
+  }
+
+  const adminUsersSrc = readFile("client/src/pages/admin-users.tsx");
+  assert(
+    "admin-users user-edit mutation invalidates /api/auth/me on success",
+    /invalidateQueries\(\{\s*queryKey:\s*\["\/api\/auth\/me"\]\s*\}\)/.test(adminUsersSrc),
+  );
+
+  const useAuthSrc = readFile("client/src/hooks/use-auth.ts");
+  // Both the bypass and Clerk paths must keep staleTime short. Match any
+  // numeric staleTime expression and reject anything > 60s.
+  const staleTimes = Array.from(useAuthSrc.matchAll(/staleTime:\s*([^\n,]+)/g)).map(m => m[1].trim());
+  assert(
+    "use-auth declares at least one staleTime for /api/auth/me",
+    staleTimes.length >= 2,
+  );
+  for (const expr of staleTimes) {
+    // Evaluate the simple multiplication expressions we use (e.g. `30 * 1000`).
+    const ms = (() => {
+      try { return Function(`"use strict"; return (${expr});`)(); } catch { return NaN; }
+    })();
+    assert(
+      `use-auth staleTime "${expr}" stays ≤ 60s so role changes propagate quickly`,
+      typeof ms === "number" && Number.isFinite(ms) && ms <= 60_000,
+    );
+  }
+
+  const navItemsSrc = readFile("client/src/lib/nav-items.ts");
+  const salesRolesMatch = navItemsSrc.match(/SALES_ROLES\s*=\s*\[([^\]]*)\]/);
+  assert(
+    "SALES_ROLES is defined in nav-items",
+    !!salesRolesMatch,
+  );
+  if (salesRolesMatch) {
+    assert(
+      "account_manager is in SALES_ROLES so AMs see the Customers nav",
+      /"account_manager"/.test(salesRolesMatch[1]),
+    );
+  }
+  // The Customers entry itself must be gated by SALES_ROLES (not a hand-rolled list).
+  assert(
+    "Customers nav entry is gated by SALES_ROLES",
+    /title:\s*"Customers"[^}]*roles:\s*SALES_ROLES/.test(navItemsSrc),
+  );
+}
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
   console.error("Failures:");

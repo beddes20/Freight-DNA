@@ -416,6 +416,12 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
       queryClient.invalidateQueries({ queryKey: ["/api/team-members"] });
+      // Role-promotion contract: a role change must invalidate the
+      // promoted user's session profile so nav/route gates re-derive
+      // from the new role on the next focus instead of holding the old
+      // role for up to the staleTime of /api/auth/me. Cheap no-op for
+      // pure profile edits (name/email/etc).
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       toast({ title: user ? "User updated" : "User created" });
       onClose();
     },

@@ -33,7 +33,12 @@ function useAuthBypass() {
   const { data, isLoading } = useQuery<AuthMeResponse>({
     queryKey: ["/api/auth/me"],
     queryFn: getQueryFn({ on401: "returnNull" }),
-    staleTime: 5 * 60 * 1000,
+    // Role-promotion contract: keep this short so role/permission
+    // changes propagate quickly. With the previous 5-minute staleTime
+    // a promoted user could still see the OLD role's nav for up to
+    // five minutes after the admin saved — the regression that left
+    // TJ stuck on LM nav after his AM promotion.
+    staleTime: 30 * 1000,
     refetchOnWindowFocus: true,
     retry: false,
   });
@@ -66,7 +71,9 @@ function useAuthClerk() {
     queryKey: ["/api/auth/me"],
     queryFn: getQueryFn({ on401: "returnNull" }),
     enabled: clerkLoaded && isSignedIn === true,
-    staleTime: 5 * 60 * 1000,
+    // Role-promotion contract: keep this short so role/permission
+    // changes propagate quickly. See useAuthBypass above.
+    staleTime: 30 * 1000,
     refetchOnWindowFocus: true,
     retry: false,
   });
