@@ -6398,6 +6398,22 @@ export async function runEmailIntelV1_5Migrations() {
         ));
     `);
     console.log("[migrations] Task #1026 lifecycle_stage CHECK constraint ensured");
+
+    // ── Task #1056 (Email→Exec 5) — Free-mail attribution recovery ──────────
+    // Two informational columns on email_conversation_threads that record
+    // HOW the thread came to be linked (or merely suggested-linked) to its
+    // `linked_account_id`. Pure metadata — never gates routing or scoping.
+    // Strictly idempotent ADD COLUMN IF NOT EXISTS so a fresh production
+    // boot runs cleanly even when dev `npm run db:push` hasn't been run.
+    await client.query(
+      `ALTER TABLE email_conversation_threads ADD COLUMN IF NOT EXISTS attribution_inference_source text`,
+    );
+    await client.query(
+      `ALTER TABLE email_conversation_threads ADD COLUMN IF NOT EXISTS attribution_evidence jsonb`,
+    );
+    console.log(
+      "[migrations] Task #1056 attribution_inference_source + attribution_evidence columns ensured",
+    );
   } catch (err) {
     console.error("[migrations] Task #1026 lifecycle_stage migration error:", err);
   } finally {

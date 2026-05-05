@@ -8,6 +8,7 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
+import { AttributionBadge } from "@/components/conversations/badges";
 
 // Canonical assignment-rule taxonomy. Today the server emits only
 // `account_owner` (rep owns the recipient inbox) and `fallback`
@@ -40,6 +41,13 @@ export type QuoteAttribution = {
     decidedAt: string | null;
     inputs: Record<string, string | null> | null;
   };
+  // Task #1056 — Tier+evidence carried over from the conversation
+  // thread that produced this quote. Drives the AttributionBadge so
+  // a rep can see at a glance how a free-mail sender got linked.
+  threadAttribution: {
+    source: string;
+    evidence: Record<string, unknown> | null;
+  } | null;
 };
 
 interface AttributionDrawerProps {
@@ -96,6 +104,22 @@ export function AttributionDrawer({ quoteId, open, onOpenChange }: AttributionDr
 
           {data && (
             <>
+              {data.threadAttribution && (
+                <section data-testid="section-attribution-inference">
+                  <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">
+                    Inference
+                  </div>
+                  <AttributionBadge
+                    thread={{
+                      attributionInferenceSource: data.threadAttribution.source as
+                        | "contact" | "domain" | "thread" | "signature" | "weak"
+                        | "confirmed_signature" | "confirmed_weak",
+                      attributionEvidence: data.threadAttribution.evidence ?? null,
+                    }}
+                  />
+                </section>
+              )}
+
               <section>
                 <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">
                   Rule

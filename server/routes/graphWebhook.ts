@@ -608,9 +608,23 @@ async function processUserMailboxEmail(params: {
   }
 
   let accountMatch: { companyId: string; contactId: string; contactName: string } | null = null;
+  // Task #1056 (Email→Exec 5) — Track HOW we hard-attached the message so
+  // the post-persist hook can stamp the right `attribution_inference_source`
+  // on the thread (and so we never re-run free-mail Tier 2/3 inference on
+  // top of an already strong attribution). Stays null when no hard attach
+  // happened — the free-mail recovery service then decides between
+  // 'signature' / 'weak' / no-stamp.
+  let hardAttachedSource:
+    | "contact"
+    | "thread"
+    | "domain"
+    | null = null;
   for (const email of counterpartyEmails) {
     accountMatch = await matchInboundSenderToAccount(email, orgId);
-    if (accountMatch) break;
+    if (accountMatch) {
+      hardAttachedSource = "contact";
+      break;
+    }
   }
 
   // If no contact match but we already have a thread with a linked account,
@@ -622,6 +636,7 @@ async function processUserMailboxEmail(params: {
       contactId: "",
       contactName: "",
     };
+    hardAttachedSource = "thread";
   }
 
   // Domain-match fallback: if still no match, try matching the counterparty's
@@ -634,6 +649,7 @@ async function processUserMailboxEmail(params: {
       const matchedCompanyId = await matchAccountByEmailDomain(email, orgId);
       if (matchedCompanyId) {
         accountMatch = { companyId: matchedCompanyId, contactId: "", contactName: "" };
+        hardAttachedSource = "domain";
         log(`[user-mailbox] Domain-match fallback linked email from ${email} → company ${matchedCompanyId}`);
         break;
       }
@@ -850,6 +866,7 @@ async function processUserMailboxEmail(params: {
         archivedAt: null,
         snoozedUntil: null, snoozedFromState: null, snoozedByUserId: null,
         createdAt: now, updatedAt: now, rowVersionAt: now,
+        attributionInferenceSource: null, attributionEvidence: null,
       };
 
       const update = applyMessageToThread(threadBase, message, now);
@@ -874,6 +891,42 @@ async function processUserMailboxEmail(params: {
       });
 
       log(`[user-mailbox] Conversation thread upserted: threadId=${conversationId} owner=${ownerUserId}`);
+
+      // Task #1056 (Email→Exec 5) — Free-mail attribution recovery.
+      // Hard-attach paths (contact / domain / thread continuity) just get
+      // an `attribution_inference_source` stamp so the UI can render the
+      // "Inferred from: …" badge. For inbound free-mail senders that
+      // missed every hard-attach (`hardAttachedSource === null`), the
+      // service runs Tier 2 (signature company match) and Tier 3 (weak
+      // display-name match) and persists a `confirm_account_attribution`
+      // suggestion on the thread — never a hard attach. The
+      // PERSIST-UNKNOWN row above stays unlinked until the rep confirms.
+      // Best-effort: failures NEVER break ingestion.
+      if (direction === "inbound") {
+        try {
+          const { applyFreeMailAttribution } = await import(
+            "../services/freeMailAttributionService"
+          );
+          const refreshedThread = await storage.getEmailConversationThreadByThreadId(
+            orgId,
+            conversationId,
+          );
+          await applyFreeMailAttribution({
+            orgId,
+            threadId: conversationId,
+            fromEmail,
+            fromName: fromName ?? null,
+            subject,
+            body: bodyFull,
+            hardAttachedSource,
+            existingThread: refreshedThread ?? null,
+          });
+        } catch (attrErr) {
+          log(
+            `[user-mailbox] free-mail attribution error: ${attrErr instanceof Error ? attrErr.message : String(attrErr)}`,
+          );
+        }
+      }
     } catch (convErr) {
       log(`[user-mailbox] Conversation upsert error: ${convErr instanceof Error ? convErr.message : String(convErr)}`);
     }

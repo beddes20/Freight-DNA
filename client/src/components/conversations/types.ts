@@ -32,6 +32,30 @@ export interface ConversationThread {
   signals?: string[];
   lastReadAt?: string | null;
   unread?: boolean;
+  // ─── Free-mail attribution recovery (Task #1056 / Email→Exec 5) ──────────
+  // Informational stamp recording HOW this thread came to be linked (or
+  // suggested-linked) to its `linkedAccountId`. Drives the
+  // <AttributionBadge> next to <WaitingStateBadge>. Always nullable —
+  // legacy threads from before Task #1056 carry NULL.
+  attributionInferenceSource?:
+    | "contact"
+    | "domain"
+    | "thread"
+    | "signature"
+    | "weak"
+    // Confirmed variants — set by the confirm-attribution route when a
+    // rep one-click-confirms a Tier-2/3 inference. Preserves the
+    // original tier so the audit trail isn't laundered into 'contact'.
+    | "confirmed_signature"
+    | "confirmed_weak"
+    | null;
+  attributionEvidence?: {
+    label?: string;
+    matchedText?: string;
+    suggestedCompanyName?: string;
+    senderEmail?: string;
+    senderDisplayName?: string;
+  } | null;
 }
 
 export interface ThreadsResponse {

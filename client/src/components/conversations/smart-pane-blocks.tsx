@@ -57,7 +57,18 @@ export interface ThreadSummaryDTO {
 }
 
 export interface ThreadSuggestionDTO {
-  actionType: "draft_reply" | "quote_request_reply" | "mark_resolved" | "await_response" | "none";
+  // Task #1056: `confirm_account_attribution` is the free-mail
+  // attribution recovery suggestion produced by
+  // `freeMailAttributionService.recordFreeMailAttributionSuggestion`.
+  // The host pane handles it as a one-click "Confirm: this is from
+  // <Company>" action that hard-attaches the thread.
+  actionType:
+    | "draft_reply"
+    | "quote_request_reply"
+    | "mark_resolved"
+    | "await_response"
+    | "confirm_account_attribution"
+    | "none";
   actionLabel: string;
   actionReason: string;
   actionParams: Record<string, unknown>;
@@ -303,6 +314,11 @@ function iconForAction(actionType: ThreadSuggestionDTO["actionType"]) {
       return <CheckCircle2 className="w-3.5 h-3.5" />;
     case "await_response":
       return <Clock className="w-3.5 h-3.5" />;
+    case "confirm_account_attribution":
+      // Task #1056 — keep the visual cue subtle (a check) so the
+      // confirm-attribution suggestion reads as low-friction next to
+      // the heavier draft / send actions.
+      return <CheckCircle2 className="w-3.5 h-3.5" />;
     default:
       return null;
   }

@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
-import { WaitingStateBadge, PriorityDot } from "./badges";
+import { WaitingStateBadge, PriorityDot, AttributionBadge } from "./badges";
 import { EmailBody } from "./email-body";
 import { MessageHeader } from "./message-header";
 import { ReplyCaptureAuditButton } from "./capture-audit-popover";
@@ -277,7 +277,41 @@ export function ThreadDetailPane({
       setWaitingStateMutation.mutate("waiting_on_them");
       return;
     }
+    // Task #1056 (Email→Exec 5) — one-click confirm of the free-mail
+    // attribution suggestion. Hard-attaches the thread to the suggested
+    // company and dismisses the cached suggestion row server-side.
+    if (args.actionType === "confirm_account_attribution") {
+      const companyId = typeof args.actionParams.suggestedCompanyId === "string"
+        ? args.actionParams.suggestedCompanyId
+        : null;
+      if (!companyId) {
+        toast({ title: "Missing suggested company id", variant: "destructive" });
+        return;
+      }
+      confirmAttributionMutation.mutate(companyId);
+      return;
+    }
   };
+
+  // Task #1056 — POST handler for confirm-attribution. Invalidates the
+  // thread, suggestion, and conversations list so the new link + the
+  // emerald "Inferred: From contact" badge appear immediately.
+  const confirmAttributionMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      const res = await apiRequest(
+        "POST",
+        `/api/internal/conversations/${encodeURIComponent(thread.id)}/confirm-attribution`,
+        { companyId },
+      );
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations", thread.id, "suggestion"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/internal/conversations"] });
+      toast({ title: "Attribution confirmed" });
+    },
+    onError: () => toast({ title: "Couldn't confirm attribution", variant: "destructive" }),
+  });
 
   const autoReadFiredFor = useRef<string | null>(null);
   useEffect(() => {
@@ -335,6 +369,11 @@ export function ThreadDetailPane({
             <div className="flex items-center gap-2 mt-1 flex-wrap">
               <WaitingStateBadge state={thread.waitingState} overdue={isOverdue} />
               <PriorityDot priority={thread.responsePriority} />
+              {/* Task #1056 (Email→Exec 5) — render the "Inferred from: …"
+                  attribution chip so reps can see HOW this thread came to be
+                  linked (or merely suggested-linked) to its account. The
+                  badge hides itself when no inference was recorded. */}
+              <AttributionBadge thread={thread} />
               {thread.ownerName && (
                 <span className="text-xs text-muted-foreground">
                   <User className="w-3 h-3 inline mr-1" />{thread.ownerName}

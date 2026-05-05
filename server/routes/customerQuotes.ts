@@ -365,6 +365,13 @@ export interface AttributionRow {
   // `rep_id` is null (display fallback case).
   owner_rep_id: string | null;
   owner_rep_name: string | null;
+  // Task #1056 — Free-mail attribution recovery. Surfaces the
+  // email_conversation_thread's tier+evidence so the drawer can
+  // render the same badge the Conversations Inbox shows. NULL when
+  // the quote has no inbound source email or the matching thread
+  // never had attribution stamped.
+  thread_attribution_inference_source: string | null;
+  thread_attribution_evidence: Record<string, unknown> | null;
 }
 
 // ─── Force-reprocess body-status mapping ──────────────────────────────
@@ -520,6 +527,17 @@ export function buildAttributionResponse(
           sentAt: row.sent_at,
         }
       : null,
+    // Task #1056 — Tier+evidence from the conversation thread that
+    // produced this quote. The drawer renders the AttributionBadge
+    // off this object so reps see which tier (thread continuity vs
+    // signature suggestion vs weak match vs confirmed) put a
+    // free-mail sender on the quote.
+    threadAttribution: (row as AttributionRow).thread_attribution_inference_source
+      ? {
+          source: (row as AttributionRow).thread_attribution_inference_source as string,
+          evidence: (row as AttributionRow).thread_attribution_evidence ?? null,
+        }
+      : null,
     rule: {
       name: ruleName,
       description:
@@ -590,7 +608,14 @@ export async function fetchAttributionRow(
       ct.id             AS contact_id,
       ct.name           AS contact_name,
       ct.email          AS contact_email,
-      ct.title          AS contact_title
+      ct.title          AS contact_title,
+      -- Task #1056 — surface the email_conversation_thread's
+      -- attribution inference source + evidence so the Customer
+      -- Quotes drawer can render the same Tier-1/2/3 badge the
+      -- Conversations Inbox shows. Joined LEFT so quotes without
+      -- an inbound source still return a row.
+      ect.attribution_inference_source AS thread_attribution_inference_source,
+      ect.attribution_evidence         AS thread_attribution_evidence
     FROM quote_opportunities q
     LEFT JOIN quote_customers c ON c.id = q.customer_id
     LEFT JOIN quote_reps r      ON r.id = q.rep_id
@@ -609,6 +634,11 @@ export async function fetchAttributionRow(
         WHERE co.id = ct.company_id
           AND co.organization_id = q.organization_id
       )
+    )
+    LEFT JOIN email_conversation_threads ect ON (
+      ect.org_id = q.organization_id
+      AND em.thread_id IS NOT NULL
+      AND ect.thread_id = em.thread_id
     )
     WHERE q.id = ${quoteId}
       AND q.organization_id = ${organizationId}

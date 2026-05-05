@@ -29,7 +29,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DraftEmailModal } from "@/components/DraftEmailModal";
-import { WaitingStateBadge, PriorityDot } from "./badges";
+import { WaitingStateBadge, PriorityDot, AttributionBadge } from "./badges";
 import { SnoozePopover } from "./snooze-popover";
 import {
   formatAgo,
@@ -234,6 +234,12 @@ export function ThreadRow({
             {displaySubject}
           </span>
           <WaitingStateBadge state={thread.waitingState} overdue={isOverdue} />
+          {/* Task #1056 (Email→Exec 5) — show the same attribution chip on
+              the inbox row so reps don't have to open a free-mail thread
+              just to know whether the account link came from a real
+              contact match or a tier-2/3 inference. Renders nothing when
+              the thread has no inferred attribution. */}
+          <AttributionBadge thread={thread} />
           {isOverdue && (
             <Badge className="text-xs bg-red-600 text-white" data-testid={`badge-overdue-${thread.id}`}>
               Overdue

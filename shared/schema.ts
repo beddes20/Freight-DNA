@@ -2047,6 +2047,30 @@ export const emailConversationThreads = pgTable("email_conversation_threads", {
   // any sweep writer regresses this contract.
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
   rowVersionAt: timestamp("row_version_at").defaultNow().notNull(),
+  // ─── Free-mail attribution recovery (Task #1056 / Email→Exec 5) ──────────
+  // Records HOW this thread came to be linked (or merely suggested-linked)
+  // to its `linkedAccountId`. Strictly informational — used by the UI to
+  // render an "Inferred from: thread / signature / weak" badge so reps can
+  // see why a free-mail (Gmail/Outlook/etc.) thread looks attached. Never
+  // gates routing or scoping.
+  //   - 'contact'   : sender matched a known CRM contact (hard-attached)
+  //   - 'domain'    : sender's email domain matched a company website
+  //                   (hard-attached; never set for free-mail providers)
+  //   - 'thread'    : matched via existing thread continuity (hard-attached)
+  //   - 'signature' : Tier-2 free-mail attribution — signature/company text
+  //                   matched a known company (SUGGESTION ONLY, never
+  //                   hard-attached — `linkedAccountId` stays NULL until a
+  //                   rep confirms via the suggestion card)
+  //   - 'weak'      : Tier-3 free-mail attribution — partial / display-name
+  //                   match (SUGGESTION ONLY)
+  //   - NULL        : no inference recorded
+  attributionInferenceSource: text("attribution_inference_source"),
+  // Compact JSON describing the evidence that produced
+  // `attributionInferenceSource` (e.g. matched company name, parsed
+  // signature snippet, sender email/display-name). Surfaced in the UI
+  // tooltip so the rep can see what we matched on. Always best-effort
+  // and never required.
+  attributionEvidence: jsonb("attribution_evidence").$type<Record<string, unknown>>(),
 }, (t) => ({
   orgUpdatedIdx: index("ect_org_updated_idx").on(t.orgId, t.updatedAt),
   orgWaitingIdx: index("ect_org_waiting_idx").on(t.orgId, t.waitingState),

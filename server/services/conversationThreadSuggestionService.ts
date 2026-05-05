@@ -41,6 +41,14 @@ export type SuggestionActionType =
   | "quote_request_reply"
   | "mark_resolved"
   | "await_response"
+  // Task #1056 (Email→Exec 5) — Free-mail attribution recovery suggestion.
+  // Written by `freeMailAttributionService.recordFreeMailAttributionSuggestion`,
+  // never produced by the rule-based engine in this file (so the
+  // `allowed`/`recommendation` lists below intentionally exclude it). The
+  // payload's `actionParams` carries `{ suggestedCompanyId, suggestedCompanyName,
+  // tier, evidence }` and the frontend treats the primary button as
+  // "Confirm: this thread is from <Company>" — a one-click hard-attach.
+  | "confirm_account_attribution"
   | "none";
 
 export interface ThreadSuggestion {
@@ -322,6 +330,45 @@ export async function getOrComputeThreadSuggestion(opts: {
   if (messageCount === 0) return null;
 
   const cached = await getCachedSuggestion(orgId, threadId);
+
+  // Task #1056 — Free-mail attribution suggestions (`confirm_account_
+  // attribution`) survive `getOrComputeThreadSuggestion` until either
+  // (a) the rep dismisses or confirms them (dismissedAt set), or
+  // (b) the thread becomes linked to a customer (in which case the
+  //     prompt is moot and we let the standard recompute take over).
+  // Without this exemption the freemail contentHash never matches
+  // `liveHash`, so every poll would replace the suggestion with a
+  // generic `draft_reply` card and the rep would never see the
+  // one-click confirm prompt the freemail attribution service wrote.
+  if (
+    cached &&
+    cached.actionType === "confirm_account_attribution" &&
+    !cached.dismissedAt &&
+    !force
+  ) {
+    const [t] = await db
+      .select({ linkedAccountId: emailConversationThreads.linkedAccountId })
+      .from(emailConversationThreads)
+      .where(and(
+        eq(emailConversationThreads.orgId, orgId),
+        eq(emailConversationThreads.threadId, threadId),
+      ))
+      .limit(1);
+    if (!t?.linkedAccountId) {
+      return {
+        actionType: cached.actionType as SuggestionActionType,
+        actionLabel: cached.actionLabel,
+        actionReason: cached.actionReason,
+        actionParams: (cached.actionParams as Record<string, unknown>) ?? {},
+        contentHash: cached.contentHash,
+        generatedAt: cached.generatedAt.toISOString(),
+        cached: true,
+        dismissed: !!cached.dismissedAt,
+        feedbackKind: cached.feedbackKind,
+      };
+    }
+  }
+
   const cacheValid = cached && cached.contentHash === liveHash && !force;
   if (cacheValid && cached) {
     return {

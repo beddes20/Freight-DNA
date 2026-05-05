@@ -2120,6 +2120,92 @@ export function registerConversationsRoutes(app: Express): void {
     }
   });
 
+  // ─── Free-mail attribution recovery (Task #1056 / Email→Exec 5) ──────────
+  // POST /api/internal/conversations/:id/confirm-attribution — one-click
+  // hard-attach for the `confirm_account_attribution` suggestion produced
+  // by `freeMailAttributionService`. Validates that the company belongs
+  // to the user's org (no cross-org leakage) before stamping
+  // `linkedAccountId`. The original inference source ('signature' or
+  // 'weak') is preserved as `confirmed_signature` / `confirmed_weak` so
+  // the provenance trail isn't lost — a rep auditing later can still
+  // see that the link started as a tier-2 signature match the rep
+  // confirmed, not as a hard contact-match. Also dismisses the cached
+  // suggestion row so the card disappears.
+  app.post("/api/internal/conversations/:id/confirm-attribution", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Unauthorized" });
+      const schema = z.object({ companyId: z.string().min(1) });
+      const parsed = schema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: "Invalid body", details: parsed.error.flatten() });
+
+      const resolved = await resolveSmartPaneTarget(user, pStr(req.params.id));
+      if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+
+      // Org-scoped company lookup — refuses anything that doesn't live in
+      // the caller's org so a hand-rolled payload can't bind a thread to
+      // a foreign-org company.
+      const company = await storage.getCompany(parsed.data.companyId);
+      if (!company || company.organizationId !== user.organizationId) {
+        return res.status(404).json({ error: "Company not found in this organization" });
+      }
+
+      const existing = await storage.getEmailConversationThreadByThreadId(
+        user.organizationId,
+        resolved.threadId,
+      );
+      if (!existing) return res.status(404).json({ error: "Thread not found" });
+
+      await storage.upsertEmailConversationThread({
+        orgId: user.organizationId,
+        threadId: resolved.threadId,
+        linkedAccountId: company.id,
+        linkedCarrierId: existing.linkedCarrierId ?? null,
+        update: { linkedAccountId: company.id },
+      });
+
+      const { stampThreadAttributionSource } = await import(
+        "../services/freeMailAttributionService"
+      );
+      // Preserve the original inference tier in the source label so the
+      // provenance is honest: a confirmed Tier-2 match is `confirmed_
+      // signature`, a confirmed Tier-3 match is `confirmed_weak`. If the
+      // existing source isn't an inference (e.g. the row already had
+      // 'contact' from the webhook hard-attach path), fall back to
+      // 'contact' since this confirm flow is an explicit user choice.
+      const priorSource = existing.attributionInferenceSource ?? null;
+      const confirmedSource =
+        priorSource === "signature" ? "confirmed_signature"
+        : priorSource === "weak" ? "confirmed_weak"
+        : "contact";
+      const priorEvidence = (existing.attributionEvidence ?? {}) as Record<string, unknown>;
+      await stampThreadAttributionSource({
+        orgId: user.organizationId,
+        threadId: resolved.threadId,
+        source: confirmedSource,
+        evidence: {
+          ...priorEvidence,
+          label: `Manually confirmed by ${user.name ?? user.username ?? "rep"} → ${company.name}`,
+          suggestedCompanyName: company.name,
+          confirmedBy: user.id,
+          confirmedFromTier: priorSource,
+        },
+      });
+
+      // Dismiss the cached suggestion so the card disappears immediately.
+      await dismissSuggestion({
+        orgId: user.organizationId,
+        threadId: resolved.threadId,
+        userId: user.id,
+      }).catch(() => false);
+
+      res.json({ ok: true, companyId: company.id });
+    } catch (err) {
+      console.error("[conversations] POST /conversations/:id/confirm-attribution error:", err);
+      res.status(500).json({ error: "Failed to confirm attribution" });
+    }
+  });
+
   // GET /api/internal/conversations/:id/events — full audit timeline for
   // the right-hand pane. Most-recent-first, cap at 100 rows (the UI is a
   // collapsible scrolled list, not a full report).

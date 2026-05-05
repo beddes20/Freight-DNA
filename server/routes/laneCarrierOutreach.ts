@@ -4360,6 +4360,8 @@ async function processSingleOutlookReply(
           createdAt: now,
           updatedAt: now,
           rowVersionAt: now,
+          attributionInferenceSource: null,
+          attributionEvidence: null,
         };
         const update = applyMessageToThread(threadBase, inboundMessage, now);
         await storage.upsertEmailConversationThread({

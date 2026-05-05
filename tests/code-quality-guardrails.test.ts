@@ -5027,3 +5027,230 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     /existing\.status\s*===\s*"completed"[\s\S]{0,500}newVal\s*<\s*tgt[\s\S]{0,300}status:\s*"active"/.test(goalsRouteSrc),
   );
 })();
+
+// ── Section 1056: Email→Exec 5 — Free-mail attribution recovery ────────────
+//
+// Pins the safety contract of the tiered free-mail attribution layer so
+// future refactors can't silently re-introduce the original bug it was
+// built to prevent: silently hard-attaching a free-mail (Gmail/Outlook)
+// inbound to the wrong customer because the matcher had only weak
+// evidence. Tier 1 (thread continuity) is allowed to hard-attach
+// (`upsertEmailConversationThread` with a real `linkedAccountId`); Tier
+// 2 (signature) and Tier 3 (weak display-name match) MUST go through
+// the suggestion pipeline only.
+(function section1056_FreeMailAttributionRecovery() {
+  console.log("\n[Section 1056] Email→Exec 5 — Free-mail attribution recovery");
+
+  // Service file exists.
+  const serviceSrc = readFile("server/services/freeMailAttributionService.ts");
+  assert(
+    "freeMailAttributionService.ts exists with the documented exports",
+    /export\s+(async\s+)?function\s+classifyFreeMailAttribution/.test(serviceSrc) &&
+      /export\s+(async\s+)?function\s+recordFreeMailAttributionSuggestion/.test(serviceSrc) &&
+      /export\s+(async\s+)?function\s+stampThreadAttributionSource/.test(serviceSrc) &&
+      /export\s+(async\s+)?function\s+applyFreeMailAttribution/.test(serviceSrc),
+  );
+
+  // Suggestion-only contract: the service must NEVER write
+  // `linkedAccountId` / `linkedCarrierId` from inferred matches. Those
+  // columns belong to the existing webhook hard-attach path; the
+  // attribution service only stamps the `attribution_inference_source`
+  // metadata + writes a thread suggestion row.
+  assert(
+    "freeMailAttributionService — never touches linkedAccountId from inferred matches",
+    !/linkedAccountId\s*[:=]/.test(serviceSrc),
+  );
+  assert(
+    "freeMailAttributionService — never touches linkedCarrierId from inferred matches",
+    !/linkedCarrierId\s*[:=]/.test(serviceSrc),
+  );
+  assert(
+    "freeMailAttributionService — uses 'confirm_account_attribution' suggestion action type",
+    /confirm_account_attribution/.test(serviceSrc),
+  );
+
+  // Production migration runner adds the two columns idempotently so a
+  // fresh deploy boots cleanly even when dev `npm run db:push` hasn't
+  // been run.
+  const migrationsSrc = readFile("server/runMigrations.ts");
+  assert(
+    "runMigrations — adds email_conversation_threads.attribution_inference_source (ADD COLUMN IF NOT EXISTS)",
+    /ALTER TABLE email_conversation_threads ADD COLUMN IF NOT EXISTS attribution_inference_source text/.test(
+      migrationsSrc,
+    ),
+  );
+  assert(
+    "runMigrations — adds email_conversation_threads.attribution_evidence (ADD COLUMN IF NOT EXISTS)",
+    /ALTER TABLE email_conversation_threads ADD COLUMN IF NOT EXISTS attribution_evidence jsonb/.test(
+      migrationsSrc,
+    ),
+  );
+
+  // Schema declaration must carry both columns so app reads through
+  // Drizzle don't fail on a fresh push.
+  const schemaSrc = readFile("shared/schema.ts");
+  assert(
+    "shared/schema.ts — emailConversationThreads has attributionInferenceSource + attributionEvidence",
+    /attributionInferenceSource:\s*text\(/.test(schemaSrc) &&
+      /attributionEvidence:\s*jsonb\(/.test(schemaSrc),
+  );
+
+  // The webhook ingestion path wires the post-persist hook AFTER the
+  // thread upsert, gated to `direction === "inbound"` so outbound rep
+  // sends never trigger attribution inference.
+  const webhookSrc = readFile("server/routes/graphWebhook.ts");
+  assert(
+    "graphWebhook — calls applyFreeMailAttribution from processUserMailboxEmail",
+    /applyFreeMailAttribution/.test(webhookSrc),
+  );
+  assert(
+    "graphWebhook — tracks hardAttachedSource so the badge differentiates contact / domain / thread",
+    /hardAttachedSource\s*=\s*"contact"/.test(webhookSrc) &&
+      /hardAttachedSource\s*=\s*"thread"/.test(webhookSrc) &&
+      /hardAttachedSource\s*=\s*"domain"/.test(webhookSrc),
+  );
+  // Attribution must run AFTER `upsertEmailConversationThread`, never
+  // before — the thread row has to exist for the stamp to land.
+  const upsertIdx = webhookSrc.indexOf("await storage.upsertEmailConversationThread");
+  const attrIdx = webhookSrc.indexOf("applyFreeMailAttribution");
+  assert(
+    "graphWebhook — applyFreeMailAttribution runs after upsertEmailConversationThread",
+    upsertIdx > 0 && attrIdx > upsertIdx,
+  );
+
+  // Suggestion-action union is extended in BOTH the server service and
+  // the frontend DTO so a typo in either layer fails typecheck.
+  const suggestionSvcSrc = readFile("server/services/conversationThreadSuggestionService.ts");
+  assert(
+    "conversationThreadSuggestionService — SuggestionActionType union includes 'confirm_account_attribution'",
+    /export type SuggestionActionType[\s\S]{0,1500}confirm_account_attribution/.test(suggestionSvcSrc),
+  );
+  const smartPaneSrc = readFile("client/src/components/conversations/smart-pane-blocks.tsx");
+  assert(
+    "smart-pane-blocks — ThreadSuggestionDTO union includes 'confirm_account_attribution'",
+    /ThreadSuggestionDTO[\s\S]{0,800}confirm_account_attribution/.test(smartPaneSrc),
+  );
+
+  // Frontend badge component + the conversations type carry the new
+  // fields so the chip can render off the existing list payload.
+  const typesSrc = readFile("client/src/components/conversations/types.ts");
+  assert(
+    "conversations/types.ts — ConversationThread carries attributionInferenceSource + attributionEvidence",
+    /attributionInferenceSource\?:/.test(typesSrc) &&
+      /attributionEvidence\?:/.test(typesSrc),
+  );
+  const badgesSrc = readFile("client/src/components/conversations/badges.tsx");
+  assert(
+    "badges.tsx — exports AttributionBadge with all seven source labels (incl. confirmed_*)",
+    /export function AttributionBadge/.test(badgesSrc) &&
+      /contact:\s*\{/.test(badgesSrc) &&
+      /domain:\s*\{/.test(badgesSrc) &&
+      /thread:\s*\{/.test(badgesSrc) &&
+      /signature:\s*\{/.test(badgesSrc) &&
+      /weak:\s*\{/.test(badgesSrc) &&
+      /confirmed_signature:\s*\{/.test(badgesSrc) &&
+      /confirmed_weak:\s*\{/.test(badgesSrc),
+  );
+  const detailPaneSrc = readFile("client/src/components/conversations/thread-detail-pane.tsx");
+  assert(
+    "thread-detail-pane.tsx — renders <AttributionBadge thread={thread} />",
+    /<AttributionBadge thread=\{thread\}\s*\/>/.test(detailPaneSrc),
+  );
+  assert(
+    "thread-detail-pane.tsx — handleSuggestionAct handles 'confirm_account_attribution'",
+    /confirm_account_attribution[\s\S]{0,400}confirmAttributionMutation\.mutate/.test(detailPaneSrc),
+  );
+
+  // Inbox-row coverage: the badge must also render in the conversation
+  // list rows so a rep can see the inference tier without opening the
+  // pane (one of the explicit Task #1056 acceptance scenarios).
+  const threadRowSrc = readFile("client/src/components/conversations/thread-row.tsx");
+  assert(
+    "thread-row.tsx — imports AttributionBadge",
+    /import \{[^}]*AttributionBadge[^}]*\} from "\.\/badges"/.test(threadRowSrc),
+  );
+  assert(
+    "thread-row.tsx — renders <AttributionBadge thread={thread} /> next to WaitingStateBadge",
+    /<AttributionBadge thread=\{thread\}\s*\/>/.test(threadRowSrc),
+  );
+
+  // Confirmation route is org-scoped (refuses cross-org companies) AND
+  // preserves the original inference tier as `confirmed_signature` /
+  // `confirmed_weak` instead of laundering it into `'contact'`. This is
+  // the provenance contract called out in code review.
+  const convoRoutesSrc = readFile("server/routes/conversations.ts");
+  assert(
+    "routes/conversations.ts — POST /confirm-attribution exists",
+    /\/confirm-attribution["']/.test(convoRoutesSrc),
+  );
+  assert(
+    "routes/conversations.ts — confirm-attribution refuses cross-org companies",
+    /company\.organizationId\s*!==\s*user\.organizationId/.test(convoRoutesSrc),
+  );
+  assert(
+    "routes/conversations.ts — confirm-attribution preserves Tier-2 ('signature' → 'confirmed_signature')",
+    /priorSource === "signature"\s*\?\s*"confirmed_signature"/.test(convoRoutesSrc),
+  );
+  assert(
+    "routes/conversations.ts — confirm-attribution preserves Tier-3 ('weak' → 'confirmed_weak')",
+    /priorSource === "weak"\s*\?\s*"confirmed_weak"/.test(convoRoutesSrc),
+  );
+  // Belt-and-suspenders: the confirm handler must never hardcode
+  // `source: "contact"` — the only allowed value comes from the
+  // `confirmedSource` ternary above.
+  const confirmStart = convoRoutesSrc.indexOf("/confirm-attribution");
+  const confirmEnd = convoRoutesSrc.indexOf("// GET /api/internal/conversations/:id/events", confirmStart);
+  const confirmHandler = confirmStart >= 0 ? convoRoutesSrc.slice(confirmStart, confirmEnd > 0 ? confirmEnd : confirmStart + 5000) : "";
+  assert(
+    "routes/conversations.ts — confirm-attribution handler doesn't hardcode source: \"contact\"",
+    !/source:\s*"contact"\s*,/.test(confirmHandler),
+  );
+
+  // Code-review fix: confirm_account_attribution suggestion must
+  // survive `getOrComputeThreadSuggestion` until the rep confirms /
+  // dismisses or the thread becomes linked. Without this, the freemail
+  // contentHash mismatches `liveHash` and the standard recompute
+  // overwrites the card with a generic `draft_reply`.
+  const suggestionSrc = readFile("server/services/conversationThreadSuggestionService.ts");
+  assert(
+    "conversationThreadSuggestionService — preserves confirm_account_attribution while thread unlinked",
+    /actionType === "confirm_account_attribution"[\s\S]{0,400}linkedAccountId/.test(suggestionSrc),
+  );
+
+  // Customer Quotes drawer must render the AttributionBadge using
+  // tier+evidence carried over from the conversation thread (Task
+  // #1056 explicit acceptance scenario).
+  const drawerSrc = readFile("client/src/components/customer-quotes/AttributionDrawer.tsx");
+  assert(
+    "AttributionDrawer.tsx — imports AttributionBadge",
+    /import \{[^}]*AttributionBadge[^}]*\} from "@\/components\/conversations\/badges"/.test(drawerSrc),
+  );
+  assert(
+    "AttributionDrawer.tsx — renders <AttributionBadge thread={...}/> using threadAttribution payload",
+    /<AttributionBadge[\s\S]{0,200}attributionInferenceSource:\s*data\.threadAttribution\.source/.test(drawerSrc),
+  );
+  const cqRoutesSrc = readFile("server/routes/customerQuotes.ts");
+  assert(
+    "customerQuotes.ts — fetchAttributionRow LEFT JOINs email_conversation_threads",
+    /LEFT JOIN email_conversation_threads ect/.test(cqRoutesSrc),
+  );
+  assert(
+    "customerQuotes.ts — buildAttributionResponse exposes threadAttribution",
+    /threadAttribution:\s*\(row as AttributionRow\)\.thread_attribution_inference_source/.test(cqRoutesSrc),
+  );
+
+  // Inbound preservation contract (Section 30) — the new attribution
+  // hook must NOT introduce a third created:false early-return inside
+  // processUserMailboxEmail. The Section-30 guardrail asserts ≤2; we
+  // re-check here so a regression in this section's PR is caught even
+  // if Section 30 is skipped during a partial test run.
+  const fnStart = webhookSrc.indexOf("async function processUserMailboxEmail");
+  const fnEnd = webhookSrc.indexOf("\nasync function ", fnStart + 10);
+  const fnSrc = fnStart >= 0 ? webhookSrc.slice(fnStart, fnEnd > 0 ? fnEnd : undefined) : "";
+  const earlyReturns = (fnSrc.match(/return\s*\{\s*created:\s*false/g) ?? []).length;
+  assert(
+    "graphWebhook.processUserMailboxEmail — still has ≤2 created:false early-returns (tombstone + duplicate)",
+    earlyReturns <= 2,
+    `found=${earlyReturns}`,
+  );
+})();
