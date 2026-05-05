@@ -216,12 +216,22 @@ export function IntelTab({
         });
       }
     },
-    onSuccess: () => {
+    // Use onSettled (not onSuccess) so the cache is invalidated even
+    // when the second (Account Owner) PATCH fails — otherwise a
+    // partial save would leave the UI showing stale field values for
+    // everything that *did* persist on the first PATCH.
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
+    },
+    onSuccess: () => {
       setPortalEdit(false);
       toast({ title: "Account info saved", className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800" });
     },
-    onError: () => toast({ title: "Failed to save account info", variant: "destructive" }),
+    onError: (e: any) => toast({
+      title: "Failed to save account info",
+      description: e?.message ?? "Some fields may have saved before the error.",
+      variant: "destructive",
+    }),
   });
 
   const addSharedRepMutation = useMutation({

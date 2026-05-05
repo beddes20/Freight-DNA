@@ -41,7 +41,10 @@ const companySchema = z.object({
   estimatedFreightSpend: z.string().optional(),
   financialAlias: z.string().optional(),
   salesPersonId: z.string().optional(),
-  ownerRepId: z.string().optional(),
+  // Account Owner (companies.ownerRepId) is intentionally NOT editable
+  // from this generic dialog — it has stricter RBAC than the rest of
+  // the company form and is edited from the company-detail page Intel
+  // tab → Account Information portlet via PATCH /api/companies/:id/owner.
 });
 
 type CompanyFormData = z.infer<typeof companySchema>;
@@ -90,7 +93,6 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
       estimatedFreightSpend: company?.estimatedFreightSpend?.toString() || "",
       financialAlias: company?.financialAlias || "",
       salesPersonId: company?.salesPersonId || "",
-      ownerRepId: company?.ownerRepId || "",
     },
   });
 
@@ -105,7 +107,6 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
         estimatedFreightSpend: company?.estimatedFreightSpend?.toString() || "",
         financialAlias: company?.financialAlias || "",
         salesPersonId: company?.salesPersonId || "",
-        ownerRepId: company?.ownerRepId || "",
       });
       setShippingModes(company?.shippingModes ?? []);
     }
@@ -159,7 +160,6 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
       estimatedFreightSpend: data.estimatedFreightSpend ? data.estimatedFreightSpend : null,
       financialAlias: data.financialAlias || null,
       salesPersonId: data.salesPersonId || null,
-      ownerRepId: data.ownerRepId || null,
     };
 
     if (isEditing) {
@@ -312,31 +312,10 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
                 </FormItem>
               )}
             />
-            {canAssign && users.length > 0 && (
-              <FormField
-                control={form.control}
-                name="ownerRepId"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Owner Rep (email-routing fallback)</FormLabel>
-                    <Select onValueChange={(v) => field.onChange(v === "__none__" ? "" : v)} value={field.value || "__none__"}>
-                      <FormControl>
-                        <SelectTrigger data-testid="select-owner-rep">
-                          <SelectValue placeholder="— None —" />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="__none__">— None —</SelectItem>
-                        {users.slice().sort((a, b) => a.name.localeCompare(b.name)).map(u => (
-                          <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            )}
+            {/* Account Owner (companies.ownerRepId) is edited from
+                the company-detail Intel tab → Account Information
+                portlet, not from this generic dialog. See PATCH
+                /api/companies/:id/owner for the RBAC-gated path. */}
             {canEditSalesPerson && (
               <FormField
                 control={form.control}

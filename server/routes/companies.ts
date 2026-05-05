@@ -186,6 +186,11 @@ export function registerCompanyRoutes(app: Express): void {
         return res.status(400).json({ error: parsed.error.message });
       }
       const data = { ...parsed.data, organizationId: req.session.organizationId! };
+      // Account Owner unification: ownerRepId is set via the dedicated
+      // PATCH /api/companies/:id/owner endpoint after creation, not via
+      // the generic create. Strip it here so non-privileged callers
+      // can't seed an owner that bypasses the /owner RBAC gate.
+      delete (data as Record<string, unknown>).ownerRepId;
       if (isAdmin(currentUser)) {
         // admin can assign to anyone — leave assignedTo as-is
       } else if (
@@ -238,6 +243,12 @@ export function registerCompanyRoutes(app: Express): void {
       if (currentUser.role !== "admin") {
         delete (data as Record<string, unknown>).assignedTo;
       }
+      // Account Owner unification: ownerRepId is canonical and must
+      // ONLY be edited via PATCH /api/companies/:id/owner (which has a
+      // stricter RBAC gate than this generic update). Strip it here so
+      // the generic update can never bypass that gate or create dual-
+      // write hazards. Mirrored in `POST /api/companies` below.
+      delete (data as Record<string, unknown>).ownerRepId;
       const company = await storage.updateCompany(pStr(req.params.id), currentUser.organizationId, data);
       if (!company) return res.status(404).json({ error: "Company not found" });
       res.json(company);

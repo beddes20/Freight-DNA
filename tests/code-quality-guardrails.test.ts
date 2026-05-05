@@ -3518,16 +3518,76 @@ console.log("\n── Section 35: Account Owner unification ──────�
 }
 
 {
-  // (3) No "Quote Owner Rep" label anywhere in client code — that
-  //     name was the pre-unification terminology.
+  // (3) No "Quote Owner Rep" label anywhere in user-facing client
+  //     JSX/strings. (Comments referencing the legacy name are OK so
+  //     historical context is preserved — we only forbid it in JSX
+  //     content and string literals like toast titles / labels.)
   const grep = execSync(
-    "rg -n --no-heading 'Quote Owner Rep' client/ || true",
+    "rg -n --no-heading 'Quote Owner Rep' client/ -g '*.tsx' -g '*.ts' || true",
     { encoding: "utf8" },
-  ).trim();
+  )
+    .split("\n")
+    .filter(line => line.trim() !== "")
+    .filter(line => !/^\S+:\s*\d+:\s*\/\//.test(line)) // skip // comment lines
+    .filter(line => !/^\S+:\s*\d+:\s*\*/.test(line))   // skip block-comment continuations
+    .join("\n");
   assert(
     grep === "",
-    `Account Owner: legacy "Quote Owner Rep" label must be relabeled to "Account Owner" everywhere. Found:\n${grep}`,
+    `Account Owner: legacy "Quote Owner Rep" label must be relabeled to "Account Owner" in user-facing surfaces. Found:\n${grep}`,
   );
+}
+
+{
+  // (4) Generic company create/update must NOT accept ownerRepId.
+  //     Account Owner edits must flow through the dedicated
+  //     /api/companies/:id/owner endpoint with its stricter RBAC.
+  const routesSrc = fs.readFileSync("server/routes/companies.ts", "utf8");
+  const patchHandler = routesSrc.match(/app\.patch\("\/api\/companies\/:id"[\s\S]*?^  \}\);/m);
+  assert(patchHandler, "Account Owner: could not isolate generic PATCH /api/companies/:id handler for audit");
+  if (patchHandler) {
+    assert(
+      /delete \(data as Record<string, unknown>\)\.ownerRepId/.test(patchHandler[0]),
+      "Account Owner: generic PATCH /api/companies/:id must strip ownerRepId before persisting",
+    );
+  }
+  const postHandler = routesSrc.match(/app\.post\("\/api\/companies"[\s\S]*?^  \}\);/m);
+  assert(postHandler, "Account Owner: could not isolate generic POST /api/companies handler for audit");
+  if (postHandler) {
+    assert(
+      /delete \(data as Record<string, unknown>\)\.ownerRepId/.test(postHandler[0]),
+      "Account Owner: generic POST /api/companies must strip ownerRepId (owner is set post-create via /owner endpoint)",
+    );
+  }
+}
+
+{
+  // (5) The generic CompanyDialog must not collect or post ownerRepId
+  //     — that was the bypass path that exposed Account Owner edits
+  //     to `sales` users.
+  const dlgSrc = fs.readFileSync("client/src/components/company-dialog.tsx", "utf8");
+  assert(
+    !/name="ownerRepId"/.test(dlgSrc),
+    "Account Owner: CompanyDialog must not render an ownerRepId form field — edit via the Intel tab instead",
+  );
+  assert(
+    !/ownerRepId:\s*data\.ownerRepId/.test(dlgSrc),
+    "Account Owner: CompanyDialog must not include ownerRepId in its submit payload",
+  );
+}
+
+{
+  // (6) IntelTab save flow must invalidate the company query in
+  //     onSettled so a partial-success (main PATCH ok, owner PATCH
+  //     fails) doesn't leave the UI showing stale values.
+  const tabSrc = fs.readFileSync("client/src/pages/company-detail/tabs/IntelTab.tsx", "utf8");
+  const mut = tabSrc.match(/savePortalMutation = useMutation\(\{[\s\S]*?\}\);/);
+  assert(mut, "Account Owner: could not isolate savePortalMutation for audit");
+  if (mut) {
+    assert(
+      /onSettled:\s*\(\)\s*=>\s*\{[\s\S]*?invalidateQueries/.test(mut[0]),
+      "Account Owner: savePortalMutation must invalidate company cache in onSettled (partial-failure safety)",
+    );
+  }
 }
 
 // ── Section 34: Phase 1 Response-Time Visibility (read-only contract) ─────
