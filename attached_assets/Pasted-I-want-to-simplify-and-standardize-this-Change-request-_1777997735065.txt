@@ -1,0 +1,175 @@
+I want to simplify and standardize this:
+
+Change request
+
+Replace the idea of “Quote Owner Rep” with “Account Owner”.
+
+I want Account Owner to live in the Account Information portlet on the Intel tab of the customer/account profile, and I want inbound email / quote mapping to use that as the default fallback owner going forward.
+
+Goal
+
+Establish a single, durable account-level owner field that:
+
+makes sense in the customer profile,
+
+is visible/editable in the Intel tab,
+
+and becomes the default ownership fallback for quote requests and email-linked account activity.
+
+This is cleaner than introducing a separate quote-only owner field.
+
+What I want built
+1. Add or formalize “Account Owner” in Account Information
+
+In the Intel tab → Account Information portlet:
+
+show Account Owner
+
+allow it to be edited through the existing Edit flow
+
+display an honest empty state if not assigned
+
+Before implementing, inspect whether an existing field like:
+
+Salesperson
+
+Owner
+
+Account Manager
+
+Rep
+
+already exists and can be cleanly reused.
+
+If one already exists and truly represents account ownership, standardize on it and relabel the UI to Account Owner if appropriate.
+If not, add a dedicated account-level owner field with the cleanest schema/API path.
+
+2. Use Account Owner as the default fallback for email/quote mapping
+
+Going forward, when inbound email or quote activity is matched to a known account/customer, use Account Owner as the default fallback owner.
+
+Assignment precedence should become:
+
+explicit quote/opportunity owner if already assigned,
+
+exact contact-level owner match if supported,
+
+exact customer-linked shared/distribution email match if supported,
+
+known account match → Account Owner fallback,
+
+Needs Routing / unassigned only if there is no safe owner.
+
+Important:
+
+This should be a fallback/default ownership rule, not a forced overwrite.
+
+If a quote is already explicitly assigned, keep that assignment.
+
+If the system matches a known account but no explicit rep is present, use Account Owner instead of leaving Rep blank.
+
+3. Make Quote Requests use Account Owner
+
+In Customer Quotes / Quote Requests:
+
+the Rep column should show the explicit assigned rep when one exists,
+
+otherwise show the linked account’s Account Owner as the fallback,
+
+and only remain blank/unassigned when the account truly has no owner set.
+
+This should eliminate the confusing known-account / blank-rep state we’ve been seeing.
+
+4. Keep email plumbing changes minimal and safe
+
+I do not want a new round of email-plumbing churn.
+
+Constraints:
+
+do not reopen webhook / Graph / capture-first / classifier / backfill work,
+
+do not change routing_status semantics,
+
+do not create a fragile new special-case email path.
+
+Only make the smallest safe changes needed so that:
+
+account matching can read Account Owner,
+
+and downstream quote ownership fallback uses it.
+
+If an existing account/customer matching service already resolves the customer for an inbound email, plug Account Owner into that existing flow rather than inventing a parallel path.
+
+5. Shared/distribution email behavior
+
+This is important:
+if a customer emails from a distribution/shared address and that email is associated to the customer account, the system should still fall back to the Account Owner.
+
+In other words:
+
+account match first,
+
+then owner fallback from the account profile,
+
+rather than leaving the quote unowned just because the sender is a shared/distribution email.
+
+6. What I need you to do
+
+Inspect and explain:
+
+where the Intel tab Account Information portlet gets its data,
+
+what existing owner/salesperson fields already exist,
+
+where Quote Requests currently derives the Rep column,
+
+and where inbound known-account matching currently happens.
+
+Implement the cleanest solution:
+
+reuse an existing true account-owner field if appropriate, or
+
+add a dedicated canonical Account Owner field if needed.
+
+Wire the result through:
+
+Intel tab Account Information portlet,
+
+backend read/write path,
+
+account/email-to-owner fallback mapping,
+
+Quote Requests Rep column fallback.
+
+Add tests / guardrails:
+
+known account with Account Owner shows owner in Intel tab,
+
+editing Account Owner persists correctly,
+
+known account + no explicit quote owner → Quote Requests shows Account Owner,
+
+explicit quote owner still overrides Account Owner,
+
+shared/distribution email linked to account still resolves to Account Owner fallback,
+
+account with no owner remains honestly unassigned.
+
+Deliverables back
+
+Whether you reused an existing owner field or created a new canonical Account Owner field.
+
+The exact schema/API/UI changes.
+
+The assignment precedence in plain English.
+
+Files changed.
+
+One before/after proof showing:
+
+a known account that previously showed blank rep in Quote Requests,
+
+then after Account Owner is set, the row shows the correct owner.
+
+Desired outcome:
+Account Owner becomes the single account-level ownership field in the Intel tab, and email/quote mapping uses it as the default fallback owner for known accounts going forward.
