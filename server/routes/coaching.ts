@@ -445,10 +445,17 @@ export function registerCoachingRoutes(app: Express) {
 
       const openTasks = allTasks.filter(t => t.assignedTo === amId && t.status === "open");
 
+      // UI Trust Micro-Batch (Task #1075) — was hardcoded `0` inside a noop
+      // try/catch which made the prep-summary card silently misleading. Now
+      // counts real pending topics across every 1:1 session this AM is part
+      // of (as either AM or manager). Failure logs but does not 500 the
+      // whole prep-summary response.
       let openTopics = 0;
       try {
-        openTopics = 0;
-      } catch {}
+        openTopics = await storage.countOpenTopicsForAm(amId);
+      } catch (e) {
+        console.error("prep-summary openTopics count error:", e);
+      }
 
       let lastSessionDate: string | null = null;
       let daysSinceSession: number | null = null;

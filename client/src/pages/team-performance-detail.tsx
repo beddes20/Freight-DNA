@@ -403,15 +403,24 @@ export default function TeamPerformanceDetailPage() {
   const search = useSearch();
   const [, navigate] = useLocation();
   const period = (new URLSearchParams(search).get("period") ?? "current") as PeriodOption;
+  // UI Trust Micro-Batch (Task #1075) — Task #1060 added the My Team / All
+  // Teams toggle on the parent page and serializes `scope` into the URL
+  // when navigating to a card drill-down (team-performance.tsx:1089). The
+  // server already honors `scope` (server/routes.ts:3648) but the detail
+  // page wasn't forwarding it, so clicking a card in "All Teams" view
+  // returned the caller's "Mine" tree instead. Read scope from the URL,
+  // include it in the queryKey so cache doesn't collide across scopes,
+  // and pass it through to the API.
+  const scope = (new URLSearchParams(search).get("scope") === "all" ? "all" : "mine") as "mine" | "all";
   const { user } = useAuth();
   const canCoach = !!user && ["admin", "director", "national_account_manager", "sales_director"].includes(user.role);
 
   const config = metric ? METRIC_CONFIGS[metric] : null;
 
   const { data, isLoading, isError } = useQuery<DetailResponse>({
-    queryKey: ["/api/team/performance/detail", metric, period],
+    queryKey: ["/api/team/performance/detail", metric, period, scope],
     queryFn: async () => {
-      const res = await fetch(`/api/team/performance/detail/${metric}?period=${period}`, { credentials: "include" });
+      const res = await fetch(`/api/team/performance/detail/${metric}?period=${period}&scope=${scope}`, { credentials: "include" });
       if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
       return res.json();
     },

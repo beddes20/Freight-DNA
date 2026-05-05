@@ -335,6 +335,99 @@ export function registerTaskRoutes(app: Express) {
     }
   });
 
+  // ── Task Forward (UI Trust Micro-Batch / Task #1075) ────────────────────
+  // task-dialog.tsx has shipped a "Forward Task" affordance for some time
+  // that POSTs here, but the route was missing — every click 404'd. This
+  // creates a NEW task that copies the source task's title, company/contact
+  // linkage, lane context, and lever, addressed to the new assignee. The
+  // assignable-set rules mirror POST /api/tasks exactly so a rep cannot
+  // forward to someone they couldn't have assigned to in the first place.
+  app.post("/api/tasks/:id/forward", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const source = await storage.getTask(pStr(req.params.id));
+      if (!source) return res.status(404).json({ error: "Task not found" });
+
+      const { assignedTo, notes } = req.body as { assignedTo?: string; notes?: string | null };
+      if (!assignedTo || typeof assignedTo !== "string") {
+        return res.status(400).json({ error: "Assignee is required" });
+      }
+
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      let assignableIds: Set<string>;
+      if (user.role === "admin") {
+        assignableIds = new Set(allUsers.map(u => u.id));
+      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        assignableIds = new Set(teamIds);
+        if (user.managerId) assignableIds.add(user.managerId);
+        allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
+      } else {
+        assignableIds = new Set([user.id]);
+        if (user.managerId) {
+          assignableIds.add(user.managerId);
+          allUsers.forEach(u => { if (u.managerId === user.managerId) assignableIds.add(u.id); });
+        }
+        allUsers.filter(u => u.role === "logistics_manager").forEach(u => assignableIds.add(u.id));
+        allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
+      }
+      if (!assignableIds.has(assignedTo)) {
+        return res.status(403).json({ error: "Cannot forward task to that user" });
+      }
+      if (source.companyId && !(await canAccessCompany(user, source.companyId))) {
+        return res.status(403).json({ error: "Cannot access source task's company" });
+      }
+
+      const trimmedNotes = typeof notes === "string" ? notes.trim() : "";
+      const forwarded = await storage.createTask({
+        title: source.title,
+        notes: trimmedNotes || source.notes || null,
+        description: source.description ?? null,
+        status: "open",
+        dueDate: source.dueDate ?? null,
+        assignedTo,
+        assignedBy: user.id,
+        companyId: source.companyId ?? null,
+        contactId: source.contactId ?? null,
+        companyName: source.companyName ?? null,
+        contactName: source.contactName ?? null,
+        opportunityId: source.opportunityId ?? null,
+        laneContext: source.laneContext ?? null,
+        lever: source.lever ?? null,
+        orgId: user.organizationId || null,
+        attachedLaneData: source.attachedLaneData ?? null,
+        createdAt: new Date().toISOString(),
+      });
+
+      // Drop a thread comment on the source so the original assignee/creator
+      // can see where it went without checking notifications.
+      storage.createTaskComment({
+        taskId: source.id,
+        authorId: user.id,
+        content: `Forwarded to ${allUsers.find(u => u.id === assignedTo)?.name ?? "another rep"}${trimmedNotes ? `: ${trimmedNotes}` : ""}`,
+        createdAt: new Date().toISOString(),
+        parentId: null,
+      }).catch((e) => console.error("Forward comment error:", e));
+
+      if (assignedTo !== user.id) {
+        storage.createNotification({
+          userId: assignedTo,
+          type: "task_assigned",
+          title: `${user.name} forwarded you a task`,
+          body: source.title,
+          link: "/tasks",
+          relatedId: forwarded.id,
+          read: false,
+        }).catch((e) => console.error("Forward notification error:", e));
+      }
+      res.status(201).json(forwarded);
+    } catch (error) {
+      console.error("Error forwarding task:", error);
+      res.status(500).json({ error: "Failed to forward task" });
+    }
+  });
+
   app.post("/api/tasks/:id/bump", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

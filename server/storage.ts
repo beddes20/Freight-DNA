@@ -655,6 +655,7 @@ getContactsByIds(ids: string[]): Promise<Contact[]>;
   updateSessionMeetingLink(sessionId: string, meetingLink: string | null): Promise<OneOnOneSession | undefined>;
   getActiveSessionsWithMeetingDate(): Promise<OneOnOneSession[]>;
   getActionItemsByPairing(namId: string, amId: string): Promise<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]>;
+  countOpenTopicsForAm(amId: string): Promise<number>;
 
   searchContacts(query: string, organizationId: string): Promise<Contact[]>;
   searchRfps(query: string, organizationId: string): Promise<Rfp[]>;
@@ -3154,6 +3155,28 @@ export class DatabaseStorage implements IStorage {
         isNotNull(oneOnOneSessions.meetingDate)
       )
     );
+  }
+
+  // UI Trust Micro-Batch (Task #1075) — replaces the legacy hardcoded
+  // `openTopics: 0` stub in the 1:1 prep-summary handler. Counts pending
+  // (status='pending') topics across every 1:1 session this AM is part of
+  // (as either the AM or the manager). Used by GET /api/1on1/prep-summary.
+  async countOpenTopicsForAm(amId: string): Promise<number> {
+    const sessions = await db.select({ id: oneOnOneSessions.id }).from(oneOnOneSessions).where(
+      or(
+        eq(oneOnOneSessions.amId, amId),
+        eq(oneOnOneSessions.namId, amId)
+      )
+    );
+    if (sessions.length === 0) return 0;
+    const sessionIds = sessions.map(s => s.id);
+    const open = await db.select({ id: oneOnOneTopics.id }).from(oneOnOneTopics).where(
+      and(
+        inArray(oneOnOneTopics.sessionId, sessionIds),
+        eq(oneOnOneTopics.status, "pending")
+      )
+    );
+    return open.length;
   }
 
   async getActionItemsByPairing(namId: string, amId: string): Promise<{ session: OneOnOneSession; topics: OneOnOneTopic[] }[]> {

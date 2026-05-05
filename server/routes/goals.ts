@@ -409,7 +409,20 @@ export function registerGoalRoutes(app: Express): void {
           read: false,
         }).catch(() => {});
       }
-      // Goal completion: auto-complete and notify when value crosses target
+      // Goal completion: auto-complete and notify when value crosses target.
+      //
+      // UI Trust Micro-Batch (Task #1075) — also auto-revert from "completed"
+      // back to "active" when a corrected currentValue drops below target.
+      // Without this, a goal that was auto-completed by an earlier upload
+      // stays "completed" on the leaderboard even after a downward
+      // correction, which silently inflates the win count.
+      if (isProgressUpdate && existing.status === "completed") {
+        const newVal = parseFloat(req.body.currentValue || "0");
+        const tgt = parseFloat(existing.target || "0");
+        if (tgt > 0 && newVal < tgt) {
+          await storage.updateGoal(pStr(req.params.id), { status: "active" }).catch(() => {});
+        }
+      }
       if (isProgressUpdate && existing.status !== "completed") {
         const newVal = parseFloat(req.body.currentValue || "0");
         const tgt = parseFloat(existing.target || "0");

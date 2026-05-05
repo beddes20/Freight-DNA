@@ -4951,3 +4951,79 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     /ALTER TABLE quote_opportunities[\s\S]{0,300}ADD COLUMN IF NOT EXISTS quote_hints JSONB/.test(migrationsSrc),
   );
 })();
+
+// ── Section 1075: UI Trust Micro-Batch (Task #1075) ──────────────────────
+// Locks in the four "looks real but isn't" fixes called out in
+// docs/production-parity-audit.md so they cannot silently regress:
+//   1. /api/1on1/prep-summary openTopics is no longer hardcoded to 0
+//   2. POST /api/tasks/:id/forward exists (UI affordance had been 404'ing)
+//   3. The Team Performance detail page passes `scope` through to the API
+//      (Task #1060 introduced the scope toggle but the detail call dropped it)
+//   4. PATCH /api/goals/:id auto-reverts a completed goal back to "active"
+//      when the corrected value drops below target
+(() => {
+  console.log("\n── Section 1075: UI Trust Micro-Batch ──");
+
+  const coachingSrc = readFile("server/routes/coaching.ts");
+  const tasksSrc = readFile("server/routes/tasks.ts");
+  const goalsRouteSrc = readFile("server/routes/goals.ts");
+  const detailPageSrc = readFile("client/src/pages/team-performance-detail.tsx");
+  const storageSrc = readFile("server/storage.ts");
+
+  // (1) prep-summary openTopics — must call the real storage method and
+  //     must not contain the legacy `openTopics = 0` hardcode-in-try block.
+  assert(
+    "server/routes/coaching.ts — prep-summary openTopics calls storage.countOpenTopicsForAm(amId)",
+    /storage\.countOpenTopicsForAm\(\s*amId\s*\)/.test(coachingSrc),
+  );
+  assert(
+    "server/routes/coaching.ts — legacy `openTopics = 0` no-op try/catch is gone",
+    !/try\s*\{\s*openTopics\s*=\s*0;\s*\}\s*catch\s*\{\}/.test(coachingSrc),
+  );
+  assert(
+    "server/storage.ts — IStorage declares countOpenTopicsForAm",
+    /countOpenTopicsForAm\(amId:\s*string\):\s*Promise<number>/.test(storageSrc),
+  );
+  assert(
+    "server/storage.ts — countOpenTopicsForAm filters topics by status='pending'",
+    /async countOpenTopicsForAm[\s\S]{0,800}eq\(\s*oneOnOneTopics\.status,\s*"pending"\s*\)/.test(storageSrc),
+  );
+
+  // (2) Tasks /forward route — the UI in task-dialog.tsx has been POSTing
+  //     to /api/tasks/:id/forward; the route must exist server-side.
+  assert(
+    'server/routes/tasks.ts — POST /api/tasks/:id/forward route is registered',
+    /app\.post\(\s*"\/api\/tasks\/:id\/forward"/.test(tasksSrc),
+  );
+  assert(
+    "server/routes/tasks.ts — forward route validates assignableIds (mirrors POST /api/tasks security)",
+    /\/api\/tasks\/:id\/forward[\s\S]{0,3500}assignableIds\.has\(assignedTo\)/.test(tasksSrc),
+  );
+  assert(
+    "server/routes/tasks.ts — forward route copies attachedLaneData / laneContext from source",
+    /\/api\/tasks\/:id\/forward[\s\S]{0,3500}attachedLaneData:\s*source\.attachedLaneData/.test(tasksSrc),
+  );
+
+  // (3) Team Performance detail — page must read scope from URL and forward
+  //     it to the API. Without this, drill-down in "All Teams" view returns
+  //     the caller's "Mine" tree instead of the org-wide rep set.
+  assert(
+    "client/src/pages/team-performance-detail.tsx — reads scope from URL",
+    /URLSearchParams\(search\)\.get\("scope"\)/.test(detailPageSrc),
+  );
+  assert(
+    "client/src/pages/team-performance-detail.tsx — passes scope query param to /api/team/performance/detail",
+    /\/api\/team\/performance\/detail\/\$\{metric\}\?period=\$\{period\}&scope=\$\{scope\}/.test(detailPageSrc),
+  );
+  assert(
+    "client/src/pages/team-performance-detail.tsx — scope is in the React Query queryKey (cache must not collide across scopes)",
+    /queryKey:\s*\[\s*"\/api\/team\/performance\/detail",\s*metric,\s*period,\s*scope\s*\]/.test(detailPageSrc),
+  );
+
+  // (4) Goals auto-revert — PATCH /api/goals/:id must flip a completed goal
+  //     back to "active" when the corrected currentValue drops below target.
+  assert(
+    "server/routes/goals.ts — auto-reverts from completed to active when newVal < target",
+    /existing\.status\s*===\s*"completed"[\s\S]{0,500}newVal\s*<\s*tgt[\s\S]{0,300}status:\s*"active"/.test(goalsRouteSrc),
+  );
+})();
