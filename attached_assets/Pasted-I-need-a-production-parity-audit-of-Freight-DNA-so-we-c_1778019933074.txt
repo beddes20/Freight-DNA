@@ -1,0 +1,130 @@
+I need a production parity audit of Freight-DNA so we can compare:
+
+what features/workflows we think are active,
+
+what the code currently supports,
+
+and what is actually working in production.
+
+I am no longer looking for isolated “smoking gun” bug hunts. I want a single source of truth that shows which parts of the platform are real, partial, broken, or only believed to be shipped.
+
+Goal
+
+Produce a Feature Inventory × Production Reality Matrix for the currently active platform experience.
+
+Scope
+
+Include at minimum:
+
+Dashboard
+
+1:1’s
+
+Tasks
+
+Goals
+
+Team Performance
+
+Customers
+
+Customer Quotes / Quote Requests
+
+Conversations / email intelligence
+
+Any other currently active production-facing tabs, queues, KPI cards, or major workflows
+
+For each feature/workflow, capture:
+
+Feature name
+
+Intended behavior in plain English
+
+Whether it is visible in production
+
+Who can access it
+
+Primary code path / service / endpoint
+
+Current state:
+
+Not built
+
+Partially built
+
+Built in code only
+
+Shipped to production
+
+Visible but misleading
+
+Working correctly in production
+
+Broken / regressed in production
+
+Evidence for the current state
+
+Gaps between intended behavior and actual production behavior
+
+Recommended next action
+
+Important requirement
+
+I need this based on evidence, not assumptions:
+
+code inspection
+
+route / endpoint review
+
+existing tests / guardrails
+
+production-visible behavior
+
+specimen-record tracing where needed
+
+If a feature is claimed to work, show the proof.
+If it is only partially implemented, say so clearly.
+If it is UI-present but operationally broken, mark it that way.
+
+Deliverables
+
+A concise inventory of all active production-facing features/workflows
+
+A matrix showing intended vs actual production state
+
+A list of the biggest “belief vs reality” gaps
+
+A list of features that are:
+
+trustworthy now
+
+partially real
+
+unsafe / misleading
+
+A recommended remediation order
+
+Output format
+
+Create a durable repo artifact, for example:
+
+docs/production-parity-audit.md
+
+and if helpful a machine-readable companion like:
+
+docs/production-parity-audit.csv
+
+Constraints
+
+Do not broad-refactor
+
+Do not reopen frozen email plumbing
+
+Read-only analysis first unless I explicitly approve follow-up fixes
+
+Be brutally honest and label uncertainty clearly
+
+Desired outcome
+
+I want one document that tells me:
+What is actually real in production, what only seems real, and what we should fix first.
