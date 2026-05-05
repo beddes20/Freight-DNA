@@ -376,6 +376,7 @@ export async function rankCarriersForOpportunity(
     assignedByUserId: null,
     laneScore: null,
     laneScoreFactors: null,
+    lifecycleStage: null,
     eligibilityConfidence: "medium",
     lastScoredAt: null,
     isEligible: true,

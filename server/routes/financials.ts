@@ -641,8 +641,18 @@ export function registerFinancialRoutes(app: Express): void {
       // Auto-run lane capacity engine after each financial upload (fire-and-forget)
       const orgId = req.session.organizationId;
       if (orgId) {
-        runRecurringLaneEngineForOrg(orgId, storage).then(result => {
+        runRecurringLaneEngineForOrg(orgId, storage).then(async result => {
           console.log(`[lane-engine] auto-run after upload for org=${orgId}: ${result.upserted} upserted, ${result.total} total`);
+          // Task #1026 — a fresh upload can flip lanes to Operationalized when
+          // a covered/won load post-dates an outreach attempt. Recompute the
+          // org's lifecycle stages once the engine finishes its upserts.
+          try {
+            const { recomputeOrgLaneLifecycleStages } = await import("../services/laneLifecycle");
+            const lc = await recomputeOrgLaneLifecycleStages(orgId);
+            console.log(`[lane-lifecycle] post-upload recompute for org=${orgId}: scanned=${lc.scanned} updated=${lc.updated}`);
+          } catch (err) {
+            console.error(`[lane-lifecycle] post-upload recompute error for org=${orgId}:`, err);
+          }
         }).catch(err => {
           console.error(`[lane-engine] auto-run error for org=${orgId}:`, err);
         });

@@ -1471,6 +1471,15 @@ export const recurringLanes = pgTable("recurring_lanes", {
   sourceQuoteId: varchar("source_quote_id"),
   dropTrailerShipper: boolean("drop_trailer_shipper").default(false).notNull(),
   dropTrailerReceiver: boolean("drop_trailer_receiver").default(false).notNull(),
+  // Task #1026 (LWQ A) — first-class lifecycle stage. Computed exclusively by
+  // `deriveLaneLifecycleStage` in `shared/laneLifecycle.ts` and persisted by
+  // `recomputeLaneLifecycleStage` in `server/services/laneLifecycle.ts`. UI
+  // surfaces read this column directly; they MUST NOT recompute the stage
+  // from raw signals (see code-quality-guardrails Section #1026).
+  // Allowed values: detected | qualified | assigned | contactable |
+  //                 contacted | engaged | operationalized
+  // NULL is permitted only for legacy rows pending the boot-time backfill.
+  lifecycleStage: text("lifecycle_stage"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

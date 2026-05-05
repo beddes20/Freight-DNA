@@ -3817,6 +3817,114 @@ console.log("\n── Section 35: Task #1030 LWQ E — engine surfaces relocated
 }
 
 
+// ── Section 1026: LWQ A — Lifecycle as first-class state ─────────────────
+// Lifecycle stages are derived once on the server (`shared/laneLifecycle.ts`
+// → consumed by `server/services/laneLifecycle.ts`) and persisted on
+// `recurring_lanes.lifecycle_stage`. The UI must NEVER redefine the ladder
+// or write the column directly, and the operationalized predicate must
+// keep the "covered/won load with pickup AFTER first outreach" semantics.
+console.log("── Section 1026: LWQ A — Lifecycle as first-class state ──");
+{
+  const sharedSrc = readFile("shared/laneLifecycle.ts");
+  assert(
+    "shared/laneLifecycle.ts exports LIFECYCLE_STAGES with all 7 stages",
+    /LIFECYCLE_STAGES[\s\S]*detected[\s\S]*qualified[\s\S]*assigned[\s\S]*contactable[\s\S]*contacted[\s\S]*engaged[\s\S]*operationalized/.test(sharedSrc),
+  );
+  assert(
+    "shared/laneLifecycle.ts exports the pure deriveLaneLifecycleStage()",
+    /export function deriveLaneLifecycleStage\b/.test(sharedSrc),
+  );
+
+  const svcSrc = readFile("server/services/laneLifecycle.ts");
+  assert(
+    "laneLifecycle service guards Operationalized with firstOutreachAt",
+    /firstOutreachAt/.test(svcSrc),
+  );
+  assert(
+    "laneLifecycle service requires pickup AFTER first outreach attempt",
+    /pickupDate\}\s*>\s*\$\{pickupCutoff\}/.test(svcSrc)
+      && /pickupCutoff\s*=\s*firstOutreachAt\.toISOString\(\)/.test(svcSrc),
+  );
+  assert(
+    "laneLifecycle service exports recomputeLaneLifecycleStage()",
+    /export async function recomputeLaneLifecycleStage\b/.test(svcSrc),
+  );
+  assert(
+    "laneLifecycle service exports recomputeOrgLaneLifecycleStages()",
+    /export async function recomputeOrgLaneLifecycleStages\b/.test(svcSrc),
+  );
+
+  // Only the lifecycle service + the boot-time backfill may write the column.
+  // (The lane-cache projection module is allowed to *read* it, so we only
+  // forbid object-literal writes like `lifecycleStage:` / `lifecycle_stage =`.)
+  const allowedWriters = new Set([
+    "server/services/laneLifecycle.ts",
+    "server/runMigrations.ts",
+    // Read-only consumer: projects `lifecycleStage` from a Drizzle select
+    // and shapes it onto an in-memory row for the lifecycle-counts endpoint.
+    // Never persists the column — guarded separately by the lifecycle-counts
+    // assertions below.
+    "server/routes/laneCarrierOutreach.ts",
+    // Synthetic / pseudo-lane builders. These construct in-memory
+    // RecurringLane-shaped objects (never inserted/updated) to satisfy the
+    // type contract of helpers like `rankCarriersForLane`. They set
+    // `lifecycleStage: null` purely as a type filler.
+    "server/proactiveOpportunityService.ts",
+    "server/routes/procurementOutreach.ts",
+  ]);
+  const serverFiles = walkFiles("server", ".ts");
+  const offenders: string[] = [];
+  for (const f of serverFiles) {
+    const rel = path.relative(ROOT, f).replaceAll("\\", "/");
+    if (allowedWriters.has(rel)) continue;
+    const src = fs.readFileSync(f, "utf-8");
+    // Match only WRITES — object-literal assignments to lifecycleStage that
+    // are NOT a Drizzle select-projection (e.g. `lifecycleStage: recurringLanes.lifecycleStage`).
+    // Reads/projections are explicitly allowed; persistence is the gate.
+    const writeRe = /\blifecycleStage\s*:\s*(?!recurringLanes\.lifecycleStage\b)/;
+    if (writeRe.test(src) || /\blifecycle_stage\s*=\s*/.test(src)) {
+      offenders.push(rel);
+    }
+  }
+  assert(
+    "lifecycle_stage is written ONLY by laneLifecycle service + runMigrations backfill",
+    offenders.length === 0,
+    offenders.length ? `unexpected writers: ${offenders.join(", ")}` : undefined,
+  );
+
+  // The UI must not redefine the lifecycle ladder or import the derivation.
+  const uiPages = [
+    "client/src/pages/lane-work-queue.tsx",
+    "client/src/pages/lane-story.tsx",
+    "client/src/pages/my-procurement.tsx",
+  ];
+  for (const rel of uiPages) {
+    const full = path.join(ROOT, rel);
+    if (!fs.existsSync(full)) continue;
+    const src = fs.readFileSync(full, "utf-8");
+    assert(
+      `${rel} does not redefine deriveLaneLifecycleStage`,
+      !/function deriveLaneLifecycleStage\b/.test(src) && !/const deriveLaneLifecycleStage\b/.test(src),
+    );
+  }
+
+  // The lifecycle-counts endpoint must reuse the shared owner-filter +
+  // pickup-scope helpers — never roll its own scoping.
+  const routeSrc = readFile("server/routes/laneCarrierOutreach.ts");
+  assert(
+    "lifecycle-counts endpoint is registered",
+    /\/api\/recurring-lanes\/lifecycle-counts/.test(routeSrc),
+  );
+  assert(
+    "lifecycle-counts endpoint reuses applyOwnerFilter + applyPickupScope",
+    /lifecycle-counts[\s\S]{0,4000}applyOwnerFilter[\s\S]{0,4000}applyPickupScope/.test(routeSrc),
+  );
+  assert(
+    "lifecycle-counts endpoint is feature-flag gated via assertFlagEnabled",
+    /lifecycle-counts[\s\S]{0,2000}assertFlagEnabled/.test(routeSrc),
+  );
+}
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
   console.error("Failures:");

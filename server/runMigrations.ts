@@ -6226,6 +6226,55 @@ export async function runEmailIntelV1_5Migrations() {
     console.log("[migrations] Task #943 email intel v1.5 fact tables ensured");
   } catch (err) {
     console.error("[migrations] Task #943 email intel v1.5 tables error:", err);
+  }
+
+  // ── Task #1026 (LWQ A) — recurring_lanes.lifecycle_stage column ───────────
+  // Adds a first-class lifecycle stage column and (idempotently) backfills
+  // every NULL row from the current derivation rules. Re-runnable on every
+  // boot — only NULL rows are recomputed inline; org-wide refreshes happen
+  // through the storage write hooks and the financial-upload ingest path.
+  try {
+    await client.query(`ALTER TABLE recurring_lanes ADD COLUMN IF NOT EXISTS lifecycle_stage text`);
+    console.log("[migrations] Task #1026 lifecycle_stage column ensured");
+
+    const { rows: nullRows } = await client.query<{ id: string }>(
+      `SELECT id FROM recurring_lanes WHERE lifecycle_stage IS NULL`,
+    );
+    if (nullRows.length > 0) {
+      console.log(`[migrations] Task #1026 backfilling lifecycle_stage for ${nullRows.length} lane(s)…`);
+      // Lazy-import the evaluator to avoid pulling the storage layer into
+      // the migrations module's static import graph.
+      const { recomputeLaneLifecycleStage } = await import("./services/laneLifecycle");
+      let updated = 0;
+      for (const r of nullRows) {
+        try {
+          const stage = await recomputeLaneLifecycleStage(r.id);
+          if (stage) updated++;
+        } catch (err) {
+          console.error(`[migrations] Task #1026 backfill failed for lane=${r.id}:`, err);
+        }
+      }
+      console.log(`[migrations] Task #1026 lifecycle_stage backfill complete (updated=${updated})`);
+    } else {
+      console.log("[migrations] Task #1026 lifecycle_stage backfill — no NULL rows");
+    }
+
+    // Enum guard — a CHECK constraint pinning the column to the seven
+    // canonical `LIFECYCLE_STAGES` values. NULL is allowed so future
+    // INSERTs that omit the column still succeed; the storage write
+    // hooks in `recomputeLaneLifecycleStage` populate it shortly after.
+    // Idempotent: drop-and-add inside the same transaction makes the
+    // boot path safe to re-run when stages are added later.
+    await client.query(`
+      ALTER TABLE recurring_lanes DROP CONSTRAINT IF EXISTS recurring_lanes_lifecycle_stage_check;
+      ALTER TABLE recurring_lanes ADD CONSTRAINT recurring_lanes_lifecycle_stage_check
+        CHECK (lifecycle_stage IS NULL OR lifecycle_stage IN (
+          'detected','qualified','assigned','contactable','contacted','engaged','operationalized'
+        ));
+    `);
+    console.log("[migrations] Task #1026 lifecycle_stage CHECK constraint ensured");
+  } catch (err) {
+    console.error("[migrations] Task #1026 lifecycle_stage migration error:", err);
   } finally {
     client.release();
   }

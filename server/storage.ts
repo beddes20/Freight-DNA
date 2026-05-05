@@ -6460,21 +6460,39 @@ export class DatabaseStorage implements IStorage {
       data.equipmentType ? eq(recurringLanes.equipmentType, data.equipmentType) : undefined,
     );
     const existing = await db.select().from(recurringLanes).where(baseCond).limit(1);
+    let row: RecurringLane;
     if (existing[0]) {
       // Preserve operator-set fields — engine must not overwrite manual state changes
       const { hasPreferredCarrierProgram: _pcp, resolvedAt: _rat, snoozedUntil: _snu, ...engineUpdateData } = data;
-      const [row] = await db.update(recurringLanes)
+      const [updated] = await db.update(recurringLanes)
         .set({ ...engineUpdateData, updatedAt: new Date() })
         .where(eq(recurringLanes.id, existing[0].id))
         .returning();
-      return row;
+      row = updated;
+    } else {
+      const [inserted] = await db.insert(recurringLanes).values(data).returning();
+      row = inserted;
     }
-    const [row] = await db.insert(recurringLanes).values(data).returning();
+    // Task #1026 — recompute lifecycle_stage after every write to recurring_lanes.
+    // Lazy import + safe wrapper avoids circular deps and keeps the originating
+    // write path resilient to lifecycle-evaluator failures.
+    void (async () => {
+      const { recomputeLaneLifecycleStageSafe } = await import("./services/laneLifecycle");
+      await recomputeLaneLifecycleStageSafe(row.id);
+    })();
     return row;
   }
 
   async updateRecurringLane(id: string, data: Partial<InsertRecurringLane>): Promise<RecurringLane | undefined> {
     const [row] = await db.update(recurringLanes).set({ ...data, updatedAt: new Date() }).where(eq(recurringLanes.id, id)).returning();
+    // Task #1026 — recompute lifecycle_stage. Skip when the patch only touched
+    // the lifecycle column itself (lifecycle service updates are the writer).
+    if (row && !("lifecycleStage" in data)) {
+      void (async () => {
+        const { recomputeLaneLifecycleStageSafe } = await import("./services/laneLifecycle");
+        await recomputeLaneLifecycleStageSafe(row.id);
+      })();
+    }
     return row;
   }
 
@@ -6543,6 +6561,17 @@ export class DatabaseStorage implements IStorage {
           )
         );
     }
+    // Task #1026 — eligibility flips can change the lifecycle stage
+    // (qualified → detected for the now-ineligible lanes). This bulk
+    // path bypasses `updateRecurringLane` so we recompute org-wide.
+    void (async () => {
+      const { recomputeOrgLaneLifecycleStages } = await import("./services/laneLifecycle");
+      try {
+        await recomputeOrgLaneLifecycleStages(orgId);
+      } catch (err) {
+        console.error(`[lane-lifecycle] retractIneligibleLanes recompute failed for org=${orgId}:`, err);
+      }
+    })();
   }
 
   // ── Lane Carrier Outreach v1 — Carrier Bench ──────────────────────────────
@@ -6619,8 +6648,20 @@ export class DatabaseStorage implements IStorage {
         .limit(1);
       existingId = existing?.id;
     }
+    // Task #1026 — bench writes change `contactableCount` and engaged-
+    // status counts that the lifecycle derivation reads. Schedule a
+    // best-effort recompute against this lane after the row settles.
+    const scheduleLifecycleRecompute = (laneId: string | null | undefined) => {
+      if (!laneId) return;
+      void (async () => {
+        const { recomputeLaneLifecycleStageSafe } = await import("./services/laneLifecycle");
+        await recomputeLaneLifecycleStageSafe(laneId);
+      })();
+    };
+
     if (existingId) {
       const [row] = await db.update(laneCarrierInterest).set({ ...data, updatedAt: new Date() }).where(eq(laneCarrierInterest.id, existingId)).returning();
+      scheduleLifecycleRecompute(row?.laneId ?? data.laneId);
       return row;
     }
 
@@ -6629,6 +6670,7 @@ export class DatabaseStorage implements IStorage {
     // from the same user (e.g. double-click) merge cleanly instead of returning a 500.
     try {
       const [row] = await db.insert(laneCarrierInterest).values(data).returning();
+      scheduleLifecycleRecompute(row?.laneId ?? data.laneId);
       return row;
     } catch (insertErr: any) {
       if (insertErr?.code === "23505" && !data.carrierId && data.carrierName) {
@@ -6646,6 +6688,7 @@ export class DatabaseStorage implements IStorage {
             .set({ ...data, updatedAt: new Date() })
             .where(eq(laneCarrierInterest.id, existing.id))
             .returning();
+          scheduleLifecycleRecompute(row?.laneId ?? data.laneId);
           return row;
         }
       }
@@ -6655,6 +6698,14 @@ export class DatabaseStorage implements IStorage {
 
   async updateLaneCarrierInterest(id: string, data: Partial<InsertLaneCarrierInterest>): Promise<LaneCarrierInterest | undefined> {
     const [row] = await db.update(laneCarrierInterest).set({ ...data, updatedAt: new Date() }).where(eq(laneCarrierInterest.id, id)).returning();
+    // Task #1026 — interest-status changes (e.g. → available_now) flip
+    // the lane to `engaged`. Recompute against the row's lane.
+    if (row?.laneId) {
+      void (async () => {
+        const { recomputeLaneLifecycleStageSafe } = await import("./services/laneLifecycle");
+        await recomputeLaneLifecycleStageSafe(row.laneId);
+      })();
+    }
     return row;
   }
 
@@ -6662,6 +6713,12 @@ export class DatabaseStorage implements IStorage {
 
   async createCarrierOutreachLog(data: InsertCarrierOutreachLog): Promise<CarrierOutreachLog> {
     const [row] = await db.insert(carrierOutreachLogs).values(data).returning();
+    // Task #1026 — every outreach attempt may flip lifecycle (→ contacted /
+    // engaged) or, post-financial-upload, → operationalized. Recompute now.
+    void (async () => {
+      const { recomputeLaneLifecycleStageSafe } = await import("./services/laneLifecycle");
+      await recomputeLaneLifecycleStageSafe(row.laneId ?? data.laneId ?? null);
+    })();
     return row;
   }
 

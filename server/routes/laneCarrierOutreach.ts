@@ -1054,6 +1054,118 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
     }
   });
 
+  // ── Task #1026 (LWQ A) — Lifecycle stage counts ──────────────────────────
+  // Returns a per-stage count for the org, scoped through the same Workflow OS
+  // Owner-filter + pickup-scope helpers as `/work-queue`. Reads the persisted
+  // `lifecycleStage` column written by `recomputeLaneLifecycleStage` — no
+  // re-derivation here. Task C consumes this; the existing `/work-queue`
+  // payload is intentionally untouched.
+  app.get("/api/recurring-lanes/lifecycle-counts", requireUser, async (req, res) => {
+    const user = req.user!;
+    if (!await assertFlagEnabled(user.organizationId, res)) return;
+    try {
+      const ownerFilterValue = parseOwnerFilterParam(qOptStr(req.query.owner));
+      const pickupScopeRaw = qOptStr(req.query.pickupScope);
+      const pickupScope: PickupScopeValue = isPickupScopeValue(pickupScopeRaw)
+        ? pickupScopeRaw
+        : DEFAULT_PICKUP_SCOPE;
+
+      const [orgLanes, orgUsers] = await Promise.all([
+        db.select({
+          laneId: recurringLanes.id,
+          ownerUserId: recurringLanes.ownerUserId,
+          companyId: recurringLanes.companyId,
+          origin: recurringLanes.origin,
+          originState: recurringLanes.originState,
+          destination: recurringLanes.destination,
+          destinationState: recurringLanes.destinationState,
+          equipmentType: recurringLanes.equipmentType,
+          lifecycleStage: recurringLanes.lifecycleStage,
+        }).from(recurringLanes).where(eq(recurringLanes.orgId, user.organizationId)),
+        storage.getUsers(user.organizationId),
+      ]);
+
+      // companies → assignedTo lookup (am_book sub-scope).
+      let companyAssignedToByCompanyId = new Map<string, string | null>();
+      if (ownerFilterValue === "am_book") {
+        const ids = Array.from(new Set(orgLanes.map(l => l.companyId).filter(Boolean) as string[]));
+        if (ids.length > 0) {
+          try {
+            const companies = await storage.getCompaniesByIds(ids, user.organizationId);
+            companyAssignedToByCompanyId = new Map(companies.map(c => [c.id, c.assignedTo ?? null]));
+          } catch (err) {
+            console.error("[lifecycle-counts] companies-by-ids fetch error:", err);
+          }
+        }
+      }
+
+      // Pickup context — same source as work-queue so the actionable scope
+      // hides exactly the same lanes here as on the LWQ list.
+      let openOppByLaneSig: Map<string, OpenOppLaneContext> = new Map();
+      try {
+        openOppByLaneSig = await buildOpenOppContextByLaneSig(db, user.organizationId);
+      } catch (err) {
+        console.error("[lifecycle-counts] open-opp context build error:", err);
+      }
+      const todayIso = todayIsoInOrgTz(new Date());
+
+      type Row = WorkflowOsRow & {
+        pickupWindowStart: string | null;
+        status?: string | null;
+        lifecycleStage: string | null;
+      };
+      const rows: Row[] = orgLanes.map(l => {
+        const sig = laneSig(l.origin, l.originState, l.destination, l.destinationState, l.equipmentType);
+        const ctx = openOppByLaneSig.get(sig);
+        // Project to a canonical LWQ-open status so `applyPickupScope`
+        // (actionable scope) treats these rows the same way `/work-queue`
+        // does: unowned lanes → `unassigned`, owned lanes → `inProgress`.
+        // Both are members of `ACTIONABLE_OPEN_STATUSES.lwq`, so neither
+        // is silently hidden by status — hiding only happens via the
+        // pickup-freshness rules, which is what we want.
+        const status: string = l.ownerUserId ? "inProgress" : "unassigned";
+        return {
+          ownership: null,
+          legacyOwnerId: l.ownerUserId,
+          ownerUserId: l.ownerUserId,
+          delegatedToUserId: null,
+          companyId: l.companyId,
+          pickupWindowStart: ctx?.nextPickupAt ?? null,
+          status,
+          lifecycleStage: l.lifecycleStage ?? null,
+        };
+      });
+
+      const ownerCtx = {
+        user: user as WorkflowOsUser,
+        orgUsers: orgUsers as WorkflowOsUser[],
+        companyAssignedToByCompanyId,
+      };
+      const owned = applyOwnerFilter(rows, ownerFilterValue, ownerCtx);
+      const scoped = applyPickupScope(owned, pickupScope, { surface: "lwq" as const, todayIso });
+
+      // Flat per-stage payload keyed by `LIFECYCLE_STAGES`. Lanes whose
+      // persisted stage is missing or unrecognized are not counted; the
+      // boot migration backfills NULLs so this should be 0 in practice.
+      const counts: Record<string, number> = {
+        detected: 0,
+        qualified: 0,
+        assigned: 0,
+        contactable: 0,
+        contacted: 0,
+        engaged: 0,
+        operationalized: 0,
+      };
+      for (const r of scoped) {
+        const stage = (r.lifecycleStage ?? "") as string;
+        if (stage in counts) counts[stage]++;
+      }
+      res.json(counts);
+    } catch (err) {
+      res.status(500).json({ error: getErrorMessage(err) });
+    }
+  });
+
   // ── Unactioned Hot Reply Count (for sidebar badge) ──────────────────────────
 
   app.get("/api/recurring-lanes/unactioned-reply-count", requireUser, async (req, res) => {
