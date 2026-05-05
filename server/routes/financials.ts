@@ -5,6 +5,9 @@ import { storage } from "../storage";
 import { getVisibleCompanyIds, requireUser } from "../auth";
 import { runRecurringLaneEngineForOrg } from "../recurringLaneCapacityEngine";
 import { runImportFromWorkbook as runAvailableFreightImportFromWorkbook } from "../availableFreightImporter";
+import { ingestUploadIntoFact } from "../services/freightDailyUploadFact";
+import { db } from "../storage";
+import { sql as sqlLib } from "drizzle-orm";
 import {
   resolveColumns,
   getRepFromRow,
@@ -636,6 +639,51 @@ export function registerFinancialRoutes(app: Express): void {
       cacheInvalidatePrefix(`margin-metrics:`);
       cacheInvalidatePrefix(`account-summary:`);
       cacheInvalidatePrefix(`dispatcher-summary:`);
+
+      // Task #1051 — Unified ReplitDailyUpload fact writer. Every upload row
+      // (both transaction sheet and the AVL "Available Freight" sheet) is
+      // normalized into freight_daily_upload_fact synchronously before we
+      // respond, so Financials, Available Freight, and the Lane Work Queue
+      // all see the same canonical row set tied to one uploadId.
+      //
+      // Atomicity contract: createFinancialUpload uses the raw pg pool (not
+      // a Drizzle transaction) so we cannot wrap both writes in one BEGIN.
+      // Instead we apply a compensating-transaction pattern — if the fact
+      // ingest throws, we delete the just-written financial_uploads row so
+      // the upload appears atomic from the caller's perspective. The
+      // contract is "one upload, three surfaces, same row set" — partial
+      // success is forbidden. See docs/unified-replit-daily-upload.md.
+      const orgIdForFact = req.session.organizationId;
+      if (orgIdForFact) {
+        const avlSheetName = workbook.SheetNames.find(
+          s => s.trim().toLowerCase() === "available freight",
+        );
+        const avlRows: any[] = avlSheetName
+          ? XLSX.utils.sheet_to_json(workbook.Sheets[avlSheetName], { defval: "" })
+          : [];
+        try {
+          const factSummary = await ingestUploadIntoFact({
+            orgId: orgIdForFact,
+            uploadId: upload.id,
+            txnRows: sheets.rows,
+            avlRows,
+          });
+          console.log(
+            `[unified-upload] fact rows for upload=${upload.id}: ` +
+            `${factSummary.inserted} inserted (${factSummary.moved} moved, ${factSummary.total} total)`,
+          );
+        } catch (factErr) {
+          // Compensating rollback — wipe the upload row so the surfaces
+          // never disagree about whether this upload "happened".
+          console.error(`[unified-upload] fact ingest failed for upload=${upload.id} — rolling back upload row:`, factErr);
+          await db.execute(sqlLib`DELETE FROM freight_daily_upload_fact WHERE upload_id = ${upload.id}`).catch(() => {});
+          await db.execute(sqlLib`DELETE FROM financial_uploads WHERE id = ${upload.id}`).catch(rollbackErr => {
+            console.error(`[unified-upload] CRITICAL: compensating rollback also failed for upload=${upload.id}:`, rollbackErr);
+          });
+          throw factErr;
+        }
+      }
+
       res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
 
       // Auto-run lane capacity engine after each financial upload (fire-and-forget)
@@ -695,6 +743,42 @@ export function registerFinancialRoutes(app: Express): void {
       res.status(204).send();
     } catch (error) {
       res.status(500).json({ error: "Failed to delete upload" });
+    }
+  });
+
+  /**
+   * Task #1051 — shared "last upload at" freshness endpoint.
+   *
+   * Single source of truth for the freshness pill rendered above Financials,
+   * Available Freight, and the Lane Work Queue. Returns the most recent
+   * ReplitDailyUpload + the canonical fact-row counts so the UI can render
+   * a consistent "Synced 12m ago — 1,284 rows (1,103 moved)" affordance.
+   */
+  app.get("/api/unified-upload/latest", requireUser, async (req, res) => {
+    try {
+      const orgId = req.session.organizationId;
+      if (!orgId) return res.json({ uploadId: null, uploadedAt: null, fileName: null, rowCount: 0, factRowCount: 0, movedRowCount: 0 });
+      const uploads = await storage.getFinancialUploadsForOrg(orgId);
+      const latest = uploads.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))[0];
+      if (!latest) return res.json({ uploadId: null, uploadedAt: null, fileName: null, rowCount: 0, factRowCount: 0, movedRowCount: 0 });
+      const counts = await db.execute<{ total: string; moved: string }>(sqlLib`
+        SELECT COUNT(*)::text AS total,
+               COUNT(*) FILTER (WHERE moved = true)::text AS moved
+          FROM freight_daily_upload_fact
+         WHERE org_id = ${orgId} AND upload_id = ${latest.id}
+      `);
+      const row = counts.rows[0];
+      res.json({
+        uploadId: latest.id,
+        uploadedAt: latest.uploadedAt,
+        fileName: latest.fileName,
+        rowCount: latest.rowCount,
+        factRowCount: Number(row?.total ?? 0),
+        movedRowCount: Number(row?.moved ?? 0),
+      });
+    } catch (err) {
+      console.error("[unified-upload/latest] error:", err);
+      res.status(500).json({ error: "Failed to load latest upload" });
     }
   });
 

@@ -92,6 +92,13 @@ function buildPseudoLane(
     sourceQuoteId: null,
     dropTrailerShipper: false,
     dropTrailerReceiver: false,
+    // Task #1051 — pseudo lane is scoring-only; no fact-table backing.
+    movesLast30Days: null,
+    lastMovedAt: null,
+    qualificationReason: null,
+    supportingCustomers: null,
+    recentCarriers: null,
+    lastEligibleAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };

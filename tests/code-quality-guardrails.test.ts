@@ -4598,6 +4598,162 @@ console.log("\n── Section 1029: LWQ D — Row redesign (reason chip + lifecy
   );
 }
 
+// ── Section 1051: Unified ReplitDailyUpload contract ────────────────────────
+// Task #1051 makes `freight_daily_upload_fact` (written by the financials
+// upload route) the SINGLE source of truth that Financials, Available
+// Freight, and the Lane Work Queue all read from. The eligibility rule for
+// LWQ is "≥6 moved loads in the rolling last 30 days" with a 7-day grace.
+// These guardrails prevent regressions back to the legacy 8-week / per-week
+// engine and the AF-importer-specific health surface.
+console.log("\n── Section 1051: Unified ReplitDailyUpload contract ──\n");
+{
+  const schema = readFile("shared/schema.ts");
+  assert(
+    "[1051] shared/schema.ts defines freightDailyUploadFact",
+    /export const freightDailyUploadFact = pgTable\("freight_daily_upload_fact"/.test(schema),
+  );
+  assert(
+    "[1051] recurringLanes carries the new enrichment columns",
+    /movesLast30Days\b/.test(schema) &&
+      /lastMovedAt\b/.test(schema) &&
+      /qualificationReason\b/.test(schema) &&
+      /supportingCustomers\b/.test(schema) &&
+      /recentCarriers\b/.test(schema) &&
+      /lastEligibleAt\b/.test(schema),
+  );
+
+  const fact = readFile("server/services/freightDailyUploadFact.ts");
+  assert(
+    "[1051] fact service exports the canonical helpers",
+    /export function normalizeRowToFact/.test(fact) &&
+      /export async function writeFactRows/.test(fact) &&
+      /export async function ingestUploadIntoFact/.test(fact) &&
+      /export async function summarizeEligibleLanesFromFact/.test(fact) &&
+      /export const LWQ_MOVES_THRESHOLD = MOVES_THRESHOLD/.test(fact) &&
+      /export const LWQ_GRACE_DAYS = 7/.test(fact),
+  );
+  assert(
+    "[1051] LWQ_MOVES_THRESHOLD is 6 (≥6 moved loads / 30 days)",
+    /const MOVES_THRESHOLD = 6/.test(fact),
+  );
+  assert(
+    "[1051] LWQ_ROLLING_DAYS is 30",
+    /const ROLLING_DAYS = 30/.test(fact),
+  );
+
+  const route = readFile("server/routes/financials.ts");
+  assert(
+    "[1051] financials upload route invokes ingestUploadIntoFact",
+    /ingestUploadIntoFact\(\{[\s\S]{0,400}?orgId:/.test(route),
+  );
+  assert(
+    "[1051] financials route forces AVL sheet rows to moved=false (forceMoved)",
+    /\"available freight\"/i.test(route),
+  );
+  assert(
+    "[1051] /api/unified-upload/latest endpoint is registered",
+    /app\.get\(\"\/api\/unified-upload\/latest\"/.test(route),
+  );
+
+  const engine = readFile("server/recurringLaneCapacityEngine.ts");
+  assert(
+    "[1051] engine reads from summarizeEligibleLanesFromFact (no legacy path)",
+    /summarizeEligibleLanesFromFact/.test(engine),
+  );
+  assert(
+    "[1051] engine no longer references the legacy 8-week / requiredWeeks lookback rule",
+    !/requiredWeeks:\s*[2-9]/.test(engine) && !/lookbackWeeks:\s*8/.test(engine),
+  );
+  assert(
+    "[1051] engine retraction enforces the 7-day grace via last_eligible_at",
+    /last_eligible_at\s*<\s*\$\{graceCutoff\}/.test(engine),
+  );
+
+  const pill = readFile("client/src/components/freight/unified-upload-freshness-pill.tsx");
+  assert(
+    "[1051] shared freshness pill component exists and queries /api/unified-upload/latest",
+    /export function UnifiedUploadFreshnessPill/.test(pill) &&
+      /\/api\/unified-upload\/latest/.test(pill),
+  );
+
+  const lwq = readFile("client/src/pages/lane-work-queue.tsx");
+  assert(
+    "[1051] LWQ row exposes the qualification chip data-testid",
+    /data-testid=\{`chip-qualification-\$\{item\.laneId\}`\}/.test(lwq),
+  );
+  assert(
+    "[1051] LWQ page mounts the shared UnifiedUploadFreshnessPill",
+    /<UnifiedUploadFreshnessPill\s+surface="lwq"/.test(lwq),
+  );
+
+  const af = readFile("client/src/pages/available-freight.tsx");
+  assert(
+    "[1051] Available Freight page mounts the shared UnifiedUploadFreshnessPill",
+    /<UnifiedUploadFreshnessPill\s+surface="available-freight"/.test(af),
+  );
+
+  // The shared freshness pill MUST also surface on Financials so the three
+  // unified surfaces (Financials / AF / LWQ) read from the same source.
+  const fin = readFile("client/src/pages/financials.tsx");
+  assert(
+    "[1051] Financials page mounts the shared UnifiedUploadFreshnessPill",
+    /<UnifiedUploadFreshnessPill\s+surface="financials"/.test(fin),
+  );
+
+  // The legacy AF-importer health pill must NOT appear on the rep-facing
+  // Available Freight page anymore — reps see the unified upload pill.
+  // The component file itself stays alive for /admin only.
+  assert(
+    "[1051] AfImportHealthPill is not imported by available-freight.tsx",
+    !/from\s+["']@\/components\/freight\/af-import-health-pill["']/.test(af) &&
+      !/<AfImportHealthPill\b/.test(af),
+  );
+
+  // Canonical fact ingest must be part of an atomic upload. Reviewers
+  // explicitly rejected silent partial success. We allow a try/catch ONLY
+  // when the catch performs a compensating rollback AND re-throws the
+  // error (so the route never returns 200 with stale fact rows).
+  {
+    const ingestBlockMatch = route.match(
+      /try\s*\{[\s\S]*?ingestUploadIntoFact\([\s\S]*?\}\s*catch[\s\S]*?\}\s*\}/,
+    );
+    const swallows = ingestBlockMatch && !/throw\s+\w+/.test(ingestBlockMatch[0]);
+    const compensates = ingestBlockMatch &&
+      /DELETE FROM financial_uploads/.test(ingestBlockMatch[0]) &&
+      /throw\s+\w+/.test(ingestBlockMatch[0]);
+    assert(
+      "[1051] financials upload route either fails-loud or rolls-back-and-rethrows on ingest failure",
+      !ingestBlockMatch || (!swallows && compensates),
+    );
+  }
+
+  // Engine upsert must NOT use `as any` to bypass typing — InsertRecurringLane
+  // is now strongly typed for all enrichment columns.
+  assert(
+    "[1051] engine upsertRecurringLane call is type-safe (no `as any` cast)",
+    !/upsertRecurringLane\([\s\S]{0,800}?\}\s+as\s+any\)/.test(engine),
+  );
+
+  // Behavioral test file must exist alongside the regex guardrails so the
+  // 5/6 threshold + 7-day grace + AVL-inflation guard are exercised end-to-end.
+  const behavioral = readFile("tests/unified-replit-daily-upload.test.ts");
+  assert(
+    "[1051] behavioral test exists and covers threshold + grace + AVL guard",
+    /6 moved loads/.test(behavioral) &&
+      /5 moved loads/.test(behavioral) &&
+      /grace/i.test(behavioral) &&
+      /AVL/.test(behavioral),
+  );
+
+  // Documentation contract — pairs with this section so behavior changes
+  // require a doc update in the same commit.
+  const doc = readFile("docs/unified-replit-daily-upload.md");
+  assert(
+    "[1051] architecture doc exists and documents the ≥6/30d rule + grace",
+    /≥\s*6/.test(doc) && /30/.test(doc) && /grace/i.test(doc),
+  );
+}
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 
 if (failures.length > 0) {

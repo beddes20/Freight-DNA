@@ -27,6 +27,7 @@ import { ContextNotePopover, useRevealContextNoteRow } from "@/components/contex
 import { EmbeddedPlayCard } from "@/components/dna-copilot/embedded-play-card";
 import { formatLaneDisplay, formatWeeklyLoadRange, formatCustomerName } from "@shared/laneFormatters";
 import { Badge } from "@/components/ui/badge";
+import { UnifiedUploadFreshnessPill } from "@/components/freight/unified-upload-freshness-pill";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -247,6 +248,15 @@ interface LaneItem {
   // attaches alongside the strategic enrichment so the row's "12d" pill
   // surfaces without recomputation.
   daysSinceLastTouchpoint?: number | null;
+  // Task #1051 — Unified ReplitDailyUpload enrichment. The engine writes
+  // these straight from `freight_daily_upload_fact` (≥6 moved loads in the
+  // last 30 days). The row UI surfaces them as a qualification chip so reps
+  // see *why* a lane qualified without opening the lane story.
+  movesLast30Days?: number | null;
+  lastMovedAt?: string | null;
+  qualificationReason?: string | null;
+  supportingCustomers?: Array<{ name: string; count: number }> | null;
+  recentCarriers?: Array<{ name: string; payeeCode: string | null; lastMovedAt: string; count: number }> | null;
 }
 
 interface WorkQueue {
@@ -1157,6 +1167,48 @@ function LaneRow({
 
           {/* Metrics row */}
           <div className="flex items-center gap-4 mt-2 flex-wrap">
+            {/* Task #1051 — Qualification reason chip backed by
+                freight_daily_upload_fact (≥6 moved loads in last 30 days). */}
+            {item.qualificationReason && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] gap-1 border-emerald-300 text-emerald-700 dark:border-emerald-700 dark:text-emerald-400 cursor-help"
+                    data-testid={`chip-qualification-${item.laneId}`}
+                  >
+                    {item.movesLast30Days ?? 0}× / 30d
+                  </Badge>
+                </TooltipTrigger>
+                <TooltipContent className="text-xs max-w-[280px] p-3 space-y-1.5">
+                  <p className="font-semibold">Why this lane qualifies</p>
+                  <p className="text-muted-foreground">{item.qualificationReason}</p>
+                  {item.lastMovedAt && (
+                    <p className="text-muted-foreground">Last moved: <span className="text-foreground">{item.lastMovedAt}</span></p>
+                  )}
+                  {item.supportingCustomers && item.supportingCustomers.length > 0 && (
+                    <div>
+                      <p className="font-medium text-foreground">Supporting customers</p>
+                      <ul className="text-muted-foreground space-y-0.5">
+                        {item.supportingCustomers.slice(0, 3).map(c => (
+                          <li key={c.name}>• {c.name} ({c.count})</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {item.recentCarriers && item.recentCarriers.length > 0 && (
+                    <div>
+                      <p className="font-medium text-foreground">Recent carriers</p>
+                      <ul className="text-muted-foreground space-y-0.5">
+                        {item.recentCarriers.slice(0, 3).map(c => (
+                          <li key={`${c.payeeCode ?? ""}-${c.name}`}>• {c.name} ({c.count})</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="text-[11px] text-muted-foreground cursor-help">
@@ -3086,6 +3138,10 @@ export default function LaneWorkQueuePage() {
             <p className="text-xs text-muted-foreground">
               {isLoading ? "Loading…" : `${totalLanes} eligible lane${totalLanes !== 1 ? "s" : ""} needing attention`}
             </p>
+            <div className="mt-1">
+              {/* Task #1051 — shared "last upload at" pill. */}
+              <UnifiedUploadFreshnessPill surface="lwq" />
+            </div>
             {/* Scope indicator — shows hierarchy context */}
             {queue?.scopeLabel && (
               <span

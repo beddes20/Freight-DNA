@@ -387,6 +387,13 @@ export async function rankCarriersForOpportunity(
     sourceQuoteId: null,
     dropTrailerShipper: false,
     dropTrailerReceiver: false,
+    // Task #1051 — synthetic lanes have no upload-fact backing yet.
+    movesLast30Days: null,
+    lastMovedAt: null,
+    qualificationReason: null,
+    supportingCustomers: null,
+    recentCarriers: null,
+    lastEligibleAt: null,
     createdAt: opportunity.generatedAt,
     updatedAt: opportunity.generatedAt,
   };

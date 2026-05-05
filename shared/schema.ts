@@ -1480,6 +1480,22 @@ export const recurringLanes = pgTable("recurring_lanes", {
   //                 contacted | engaged | operationalized
   // NULL is permitted only for legacy rows pending the boot-time backfill.
   lifecycleStage: text("lifecycle_stage"),
+  // Task #1051 — Unified ReplitDailyUpload enrichment. These fields are
+  // derived by the recurring lane engine from the canonical
+  // `freight_daily_upload_fact` table (moved=true rows in the rolling last
+  // 30 days). They are the contract the LWQ row UI reads to render the
+  // qualification chip + supporting evidence; do not recompute them in the
+  // UI. See docs/unified-replit-daily-upload.md (sections "Engine rule"
+  // and "LWQ enrichment contract").
+  movesLast30Days: integer("moves_last_30_days"),
+  lastMovedAt: text("last_moved_at"),
+  qualificationReason: text("qualification_reason"),
+  supportingCustomers: jsonb("supporting_customers"),
+  recentCarriers: jsonb("recent_carriers"),
+  // 7-day grace period anchor: the most recent run where the lane met the
+  // ≥6/30d rule. The engine retracts eligibility only once `now - lastEligibleAt >
+  // graceDays`. Stored as ISO string to match the engine's other timestamp cols.
+  lastEligibleAt: text("last_eligible_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -7932,3 +7948,69 @@ export const insertContextNoteEventSchema = createInsertSchema(contextNoteEvents
 });
 export type InsertContextNoteEvent = z.infer<typeof insertContextNoteEventSchema>;
 export type ContextNoteEvent = typeof contextNoteEvents.$inferSelect;
+
+// ─── Task #1051 — Unified ReplitDailyUpload fact table ───────────────────────
+//
+// Single canonical source for Financials, Available Freight, and Lane Work
+// Queue. Every row uploaded through `POST /api/financials/upload` (whether it
+// came from the transaction sheet or the AVL/Available Freight sheet) is
+// normalized into one row in this table by
+// `server/services/freightDailyUploadFact.ts`.
+//
+// `moved=true` rows feed the Lane Work Queue eligibility rule (≥6 moved loads
+// in the rolling last 30 days, with a 7-day grace period before retraction).
+// `moved=false` rows correspond to AVL / quote-only loads and feed the
+// Available Freight cockpit. All three surfaces share the same upload-id and
+// "last upload at" timestamp via the `/api/unified-upload/latest` endpoint.
+//
+// See docs/unified-replit-daily-upload.md for the architecture contract.
+export const freightDailyUploadFact = pgTable("freight_daily_upload_fact", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  uploadId: varchar("upload_id").notNull().references(() => financialUploads.id, { onDelete: "cascade" }),
+  // Stable load identifier from the TMS export (Order #, load number, etc.)
+  // when present. Falls back to a fingerprint hash of the row when absent so
+  // dedup across overlapping uploads still works.
+  loadKey: text("load_key").notNull(),
+  // Customer / company name as it appeared on the row (display-cleaned).
+  customer: text("customer"),
+  // Lane geography — lower-cased for stable joins.
+  originCity: text("origin_city"),
+  originState: text("origin_state"),
+  destCity: text("dest_city"),
+  destState: text("dest_state"),
+  equipment: text("equipment"),
+  // Carrier identification — payee code + display name.
+  carrierName: text("carrier_name"),
+  carrierPayeeCode: text("carrier_payee_code"),
+  // Source rows record either a ship date (transaction) or a pickup window
+  // (AVL). Stored as ISO strings to preserve formatting from the TMS.
+  shipDate: text("ship_date"),
+  deliveryDate: text("delivery_date"),
+  // Operational state from the TMS — POD/DEL/TRANSIT/BOOKED → moved=true,
+  // AVL / open / quote → moved=false. The boolean is the canonical signal
+  // engines key off; brokerageStatus is preserved for diagnostics.
+  brokerageStatus: text("brokerage_status"),
+  orderType: text("order_type"),
+  moved: boolean("moved").notNull().default(false),
+  // Money — kept nullable because not every row carries every column.
+  totalRevenue: decimal("total_revenue", { precision: 14, scale: 2 }),
+  carrierTotal: decimal("carrier_total", { precision: 14, scale: 2 }),
+  marginPct: decimal("margin_pct", { precision: 6, scale: 2 }),
+  loadedMiles: integer("loaded_miles"),
+  // Timestamps — ingestedAt is the wall clock of the writer; the upload's
+  // own uploadedAt is the canonical "data freshness" time and lives on
+  // financial_uploads.
+  ingestedAt: timestamp("ingested_at").defaultNow().notNull(),
+}, (t) => ({
+  orgUploadIdx: index("freight_daily_upload_fact_org_upload_idx").on(t.orgId, t.uploadId),
+  orgMovedShipIdx: index("freight_daily_upload_fact_org_moved_ship_idx").on(t.orgId, t.moved, t.shipDate),
+  orgLaneIdx: index("freight_daily_upload_fact_org_lane_idx").on(t.orgId, t.originCity, t.destCity, t.equipment),
+  loadKeyUq: uniqueIndex("freight_daily_upload_fact_load_key_uq").on(t.orgId, t.uploadId, t.loadKey),
+}));
+export const insertFreightDailyUploadFactSchema = createInsertSchema(freightDailyUploadFact).omit({
+  id: true,
+  ingestedAt: true,
+});
+export type InsertFreightDailyUploadFact = z.infer<typeof insertFreightDailyUploadFactSchema>;
+export type FreightDailyUploadFact = typeof freightDailyUploadFact.$inferSelect;

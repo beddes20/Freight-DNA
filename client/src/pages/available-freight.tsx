@@ -84,7 +84,7 @@ import {
 } from "@/components/freight/freshness-pill";
 // Task #967 — shared live-sync health pill.
 import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
-import { AfImportHealthPill } from "@/components/freight/af-import-health-pill";
+import { UnifiedUploadFreshnessPill } from "@/components/freight/unified-upload-freshness-pill";
 import { HiddenCountsDisclosure, type HiddenCountsSummary } from "@/components/freight/hidden-counts";
 import { AfOpsSignalsBar } from "@/components/freight/af-ops-signals-bar";
 import {
@@ -2481,6 +2481,9 @@ export default function AvailableFreightPage() {
             <FreshnessPill signal={feed?.freshness} />
             {/* Task #967 — shared live-sync health pill. */}
             <LiveSyncPill testId="pill-live-sync-af" />
+            {/* Task #1051 — shared "last upload at" pill (single source of
+                truth across Financials/AF/LWQ). */}
+            <UnifiedUploadFreshnessPill surface="available-freight" />
             {/* Task #1021 — AF import health pill demoted to the tertiary
                 right-aligned cluster on the freshness row below so it
                 stops competing with the page title. */}
@@ -2763,14 +2766,11 @@ export default function AvailableFreightPage() {
             pill is replaced by the small "Ops & health" link in the
             mode bar above. The full pill, hidden-loads detail, dedupe
             audit, and auto-pilot preview live inside Ops mode below. */}
-        {mode === "ops" && (
-          <div
-            className="flex items-center gap-2 ml-auto"
-            data-testid="cluster-tertiary-health"
-          >
-            <AfImportHealthPill testId="pill-af-import-health" />
-          </div>
-        )}
+        {/* Task #1051 — AF-importer-specific health surface removed from the
+            rep-facing header. Reps see the unified UnifiedUploadFreshnessPill
+            in the page header (single source of truth for the underlying
+            ReplitDailyUpload). The legacy import-health endpoint stays alive
+            for /admin only. */}
       </div>
 
       {/* Saved-view tab strip + freshness pulse */}
@@ -3857,7 +3857,9 @@ export default function AvailableFreightPage() {
                 the next outreach batch before reps see it in Action mode.
               </p>
               <div className="flex flex-wrap items-center gap-2">
-                <AfImportHealthPill testId="pill-af-import-health-ops" />
+                {/* Task #1051 — AfImportHealthPill demoted to /admin only.
+                    Ops mode shows the shared upload-freshness pill instead. */}
+                <UnifiedUploadFreshnessPill surface="available-freight" />
                 <Button
                   variant="outline"
                   size="sm"

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { UnifiedUploadFreshnessPill } from "@/components/freight/unified-upload-freshness-pill";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
@@ -628,6 +629,11 @@ export default function Financials() {
             <p className="text-white/60 mt-1 text-sm">
               {financialData ? `${financialData.rowCount.toLocaleString()} total records · ${financialData.fileName}` : "Upload your Excel data to get started"}
             </p>
+            {/* Task #1051 — shared "last upload at" pill (Financials, AF, LWQ
+                all read the same canonical ReplitDailyUpload). */}
+            <div className="mt-2">
+              <UnifiedUploadFreshnessPill surface="financials" />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button
