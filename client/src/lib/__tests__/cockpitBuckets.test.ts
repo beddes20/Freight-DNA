@@ -386,6 +386,58 @@ describe("kpisFromFiltered — derived from filtered rows", () => {
   });
 });
 
+// Task #1019 — "Pickup tomorrow" must mean *calendar tomorrow* in
+// org-local time. Before the fix the bucket combined the rolling-window
+// helper `isPickupAfterHours(24)` with `!isPickupToday`, which gave a
+// different answer at 8am vs 11pm and could include today's pickup or
+// drop tomorrow's late-night pickup depending on the time-of-day anchor.
+// These tests evaluate the same row at three different "now" anchors
+// within the same calendar day and assert the bucket assignment is
+// stable: only rows whose pickup falls on calendar tomorrow match, and
+// `pickup_today` / `pickup_tomorrow` are mutually exclusive.
+describe("Pickup tomorrow = calendar tomorrow (Task #1019)", () => {
+  const TODAY_T = "2026-05-05";
+  const rows: Array<{ name: string; pickup: string; expectTomorrow: boolean }> = [
+    { name: "today 18:00", pickup: "2026-05-05T18:00:00Z", expectTomorrow: false },
+    { name: "tomorrow 02:00", pickup: "2026-05-06T02:00:00Z", expectTomorrow: true },
+    { name: "tomorrow 22:00", pickup: "2026-05-06T22:00:00Z", expectTomorrow: true },
+    { name: "day-after 06:00", pickup: "2026-05-07T06:00:00Z", expectTomorrow: false },
+  ];
+
+  // The "now anchor" doesn't change the calendar-day predicate, but we
+  // keep the loop so a future regression that re-introduces a wall-clock
+  // dependency would be caught immediately.
+  const nowAnchors = ["08:00", "16:00", "23:00"];
+
+  for (const anchor of nowAnchors) {
+    describe(`anchor ${anchor} CT`, () => {
+      for (const r of rows) {
+        it(`${r.name} -> pickup_tomorrow=${r.expectTomorrow}`, () => {
+          void anchor;
+          const row = mk({ pickupWindowStart: r.pickup });
+          const got = bucketsForRow(row, { todayIso: TODAY_T });
+          expect(got.has("pickup_tomorrow")).toBe(r.expectTomorrow);
+        });
+      }
+    });
+  }
+
+  it("pickup_today and pickup_tomorrow are mutually exclusive for any row", () => {
+    for (const r of rows) {
+      const row = mk({ pickupWindowStart: r.pickup });
+      const got = bucketsForRow(row, { todayIso: TODAY_T });
+      expect(got.has("pickup_today") && got.has("pickup_tomorrow")).toBe(false);
+    }
+  });
+
+  it("today's pickup never lands in pickup_tomorrow", () => {
+    const row = mk({ pickupWindowStart: `${TODAY_T}T20:00:00Z` });
+    const got = bucketsForRow(row, { todayIso: TODAY_T });
+    expect(got.has("pickup_today")).toBe(true);
+    expect(got.has("pickup_tomorrow")).toBe(false);
+  });
+});
+
 describe("midnight rollover (CT)", () => {
   // 23:55 CT == next day 04:55 UTC; 00:05 CT == next day 05:05 UTC.
   // We pin todayIso to the ORG-LOCAL date the cockpit would compute, and

@@ -13,7 +13,7 @@
 import {
   isPickupToday,
   isPickupWithinHours,
-  isPickupAfterHours,
+  isPickupOnCalendarDayOffset,
   ACTIONABLE_OPEN_STATUSES,
 } from "./pickupFreshness";
 
@@ -207,13 +207,15 @@ export function bucketsForRow(
   const freshness = row.freshnessMinutes ?? null;
 
   if (status === "ready_to_send") out.add("ready_to_send");
-  if (isPickupToday(pickup, ctx.todayIso)) out.add("pickup_today");
-  // Tomorrow = at-least 24h ahead AND within 48h.
-  if (
-    isPickupAfterHours(pickup, 24, ctx.todayIso) &&
-    isPickupWithinHours(pickup, 48, ctx.todayIso) &&
-    !isPickupToday(pickup, ctx.todayIso)
-  ) {
+  // Task #1019 — `pickup_today` and `pickup_tomorrow` are calendar-day
+  // buckets anchored in org-local time. Both go through the same
+  // `isPickupOnCalendarDayOffset` helper so they are mutually exclusive
+  // by construction and never drift with the time-of-day the way the
+  // older `isPickupAfterHours(24) && isPickupWithinHours(48)` combo did.
+  if (isPickupOnCalendarDayOffset(pickup, ctx.todayIso, 0)) {
+    out.add("pickup_today");
+  }
+  if (isPickupOnCalendarDayOffset(pickup, ctx.todayIso, 1)) {
     out.add("pickup_tomorrow");
   }
   if (

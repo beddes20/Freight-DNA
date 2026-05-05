@@ -196,6 +196,21 @@ export function isPickupWithinHours(
 // of today (org-local). Mirrors the pre-#875 `pickupAfterHours` chip used
 // by the "Pickup tomorrow" built-in view (within 48h AND after 24h ⇒
 // dayKey ≥ today+1, dayKey ≤ today+2).
+
+// True when the pickup day equals `today + offsetDays` in org-local time.
+// Use this for *calendar-day* buckets (e.g. "Pickup tomorrow" = offset 1)
+// where rolling-window helpers like `isPickupAfterHours(24)` would drift
+// based on time-of-day. `offsetDays` may be negative (e.g. -1 = yesterday).
+export function isPickupOnCalendarDayOffset(
+  pickupIso: string | null | undefined,
+  todayIso: string,
+  offsetDays: number,
+): boolean {
+  const dayKey = pickupDayKey(pickupIso);
+  if (!dayKey) return false;
+  return dayKey === addDaysIso(todayIso, offsetDays);
+}
+
 export function isPickupAfterHours(
   pickupIso: string | null | undefined,
   hours: number,
