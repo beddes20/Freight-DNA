@@ -582,7 +582,7 @@ function unknownCustomerIdsFromMap(customerMap: Map<string, QuoteCustomer>): Set
   return out;
 }
 
-function applyFilters(
+export function applyFilters(
   rows: QuoteOpportunity[],
   f: QuoteFilters,
   // Task #615 — single chokepoint for the customer-only rule. Any customer
@@ -592,9 +592,29 @@ function applyFilters(
   // The flag is hard-wired ON: there is no opt-in to surface non-customer
   // rows on the Quote Opportunities feed.
   nonCustomerCustomerIds?: Set<string>,
+  // Task #1042 — second chokepoint, paired with the customer-only one.
+  // When provided, drop rows whose `repId` is non-null AND not in this set
+  // (i.e. attributed to a logistics_manager / logistics_coordinator /
+  // generic-sales rep). Rows with `repId === null` are NOT dropped here —
+  // the existing customer chokepoint and Account-Owner fallback still
+  // govern their visibility, preserving Task #1012 behavior.
+  customerFacingRepIds?: Set<string>,
 ): QuoteOpportunity[] {
   return rows.filter((r) => {
     if (nonCustomerCustomerIds && nonCustomerCustomerIds.has(r.customerId)) return false;
+    // Task #1042 — routing-status gate. The Customer Quotes main queue is
+    // customer-side only: the classifier already tagged carrier-side rows
+    // (`auto_carrier`) and unsure rows (`needs_routing`); they must never
+    // appear in the list / snapshot / funnel / CSV. The Needs Routing tab
+    // queries `routing_status = 'needs_routing'` directly via its own
+    // endpoint and is unaffected by this gate.
+    if (r.routingStatus === "auto_carrier" || r.routingStatus === "needs_routing") return false;
+    // Task #1042 — rep-role gate. Drops rows whose `repId` is non-null but
+    // points at a rep that is NOT in the org's customer-facing rep set
+    // (built by `loadContext` from the AM/NAM-linked + non-suppressed
+    // reps). Null `repId` falls through so the customer chokepoint and
+    // Account-Owner fallback (Task #1012) still govern those rows.
+    if (customerFacingRepIds && r.repId && !customerFacingRepIds.has(r.repId)) return false;
     if (f.customerId && r.customerId !== f.customerId) return false;
     if (f.laneGroupId && r.laneGroupId !== f.laneGroupId) return false;
     if (f.repId && r.repId !== f.repId) return false;
@@ -1289,7 +1309,7 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
   for (const r of all) {
     if (!ctx.customerMap.has(r.customerId)) exclusionIds.add(r.customerId);
   }
-  const filtered = applyFilters(all, filters, exclusionIds);
+  const filtered = applyFilters(all, filters, exclusionIds, ctx.customerFacingRepIds);
   // Customer Quotes portlet bug-fix — Tier-1 rep resolution from
   // `email_messages.to_email`. Built per-request because it depends on the
   // page's specific opportunities, not the org-level context.
@@ -1787,7 +1807,7 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     .orderBy(desc(quoteOpportunities.requestDate));
 
   const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
-  const filtered = applyFilters(allOpps, filters, nonCustomerIds);
+  const filtered = applyFilters(allOpps, filters, nonCustomerIds, ctx.customerFacingRepIds);
   const won = filtered.filter(r => isWon(r.outcomeStatus));
   const lost = filtered.filter(r => isLost(r.outcomeStatus));
   const pending = filtered.filter(r => r.outcomeStatus === "pending");
@@ -3775,7 +3795,7 @@ export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<s
   const ctx = await loadContext(orgId);
   const all = await db.select().from(quoteOpportunities).where(eq(quoteOpportunities.organizationId, orgId));
   const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
-  const filtered = applyFilters(all, filters, nonCustomerIds);
+  const filtered = applyFilters(all, filters, nonCustomerIds, ctx.customerFacingRepIds);
   // Customer Quotes portlet bug-fix — same Tier-1 rep + canonical-name
   // wiring as listQuotes so the CSV export matches what users see in the
   // table. Skipping this would let the export silently regress to
@@ -4942,7 +4962,7 @@ export async function getFunnel(
   const effectiveFilters: QuoteFilters = scopedRepId
     ? { ...filters, repId: scopedRepId }
     : filters;
-  const filtered = applyFilters(allOpps, effectiveFilters, nonCustomerIds);
+  const filtered = applyFilters(allOpps, effectiveFilters, nonCustomerIds, ctx.customerFacingRepIds);
 
   if (filtered.length === 0) {
     return emptyFunnelResult(scopedRepId ?? null);
