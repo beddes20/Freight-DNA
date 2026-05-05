@@ -227,6 +227,9 @@ interface LaneItem {
   pickupDaysAgo?: number | null;
   status?: "unassigned" | "noContactable" | "assignedUntouched" | "inProgress";
   pickupWindowStart?: string | null;
+  // Task #1028 (LWQ C) — Outreach mode reply-urgency. Server attaches when
+  // `?mode=outreach`; absent in other modes so the field stays opt-in.
+  hotReplyCount?: number;
 }
 
 interface WorkQueue {
@@ -1398,6 +1401,8 @@ function BucketSection({
   selectedLaneIds,
   onToggleSelect,
   votriByLane,
+  preserveServerOrder = false,
+  flatList = false,
 }: {
   title: string;
   description: string;
@@ -1413,6 +1418,16 @@ function BucketSection({
   selectedLaneIds?: Set<string>;
   onToggleSelect?: (laneId: string) => void;
   votriByLane?: Map<string, LaneVotriData>;
+  // Task #1028 (LWQ C) — when true, the parent has asked the server to
+  // rank these rows (Strategic mode → strategicPriority desc; Outreach
+  // mode → hotReplyCount desc). Skip the local signal-tier resort so we
+  // don't silently override server ranking. When false the legacy
+  // signal/frequency/laneScore fallback applies (used in Triage/Admin).
+  preserveServerOrder?: boolean;
+  // Task #1028 (LWQ C) — when true, render rows as a single flat list
+  // (no customer grouping). Used by Outreach mode where the unit of
+  // work is "the next reply to act on", not "this customer's lanes".
+  flatList?: boolean;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const [allCustomersExpanded, setAllCustomersExpanded] = useState(false);
@@ -1421,9 +1436,12 @@ function BucketSection({
     // Task #651 — pass the shared lane-signal snapshot so signal priority
     // is the highest sort tier and the parent's signal-tiered ordering
     // (see `sortedUnassigned`) survives this re-sort.
-    const sorted = sortItems(items, votriByLane);
-    return highFreqOnly ? sorted.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD) : sorted;
-  }, [items, highFreqOnly, votriByLane]);
+    // Task #1028 (LWQ C) — when the server-side ranking is authoritative
+    // (Strategic / Outreach modes), keep the items in the order the
+    // server returned them and only apply the highFreq filter.
+    const ordered = preserveServerOrder ? items : sortItems(items, votriByLane);
+    return highFreqOnly ? ordered.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD) : ordered;
+  }, [items, highFreqOnly, votriByLane, preserveServerOrder]);
 
   const hiddenCount = items.length - visibleItems.length;
 
@@ -1494,6 +1512,32 @@ function BucketSection({
                 ? "No 2+/week lanes in this bucket."
                 : "No lanes in this bucket."}
             </p>
+          ) : flatList ? (
+            // Task #1028 (LWQ C) — Outreach mode flat renderer. The unit
+            // of work is "the next reply to act on", so we render rows
+            // directly in the server's reply-urgency order without the
+            // customer-group accordion.
+            <div
+              className="flex flex-col gap-1 rounded-lg border border-border bg-card px-2 py-2"
+              data-testid={`flat-list-${bucket}`}
+            >
+              {visibleItems.map(item => (
+                <LazyLaneRow
+                  key={item.laneId}
+                  item={item}
+                  completionThreshold={completionThreshold}
+                  onOpen={onOpen}
+                  onOpenCockpit={onOpenCockpit}
+                  bucket={bucket}
+                  teamMembers={teamMembers}
+                  selected={selectedLaneIds?.has(item.laneId) ?? false}
+                  onToggleSelect={onToggleSelect}
+                  votriData={item.origin && item.destination
+                    ? votriByLane?.get(`${item.origin}|${item.destination}`)
+                    : undefined}
+                />
+              ))}
+            </div>
           ) : (
             customerGroups.map(group => (
               <CustomerGroup
@@ -1970,6 +2014,42 @@ function BuildLaneDialog({ open, onClose, onCreated, currentUser, teamMembers, i
 
 // ── Page ───────────────────────────────────────────────────────────────────────
 
+// Task #1028 (LWQ C) — Page mode is the primary mental model the user
+// picks. Each mode is a thin renderer over the shared row/bucket
+// pipeline; nothing about the underlying universe (owner-filter,
+// pickup-scope, customer/highFreq/manual) changes between modes.
+//   strategic — customer-grouped, ranked by Task B's strategicPriority;
+//               default for reps. Foregrounds Untouched + In Progress.
+//   outreach  — flat list, sorted by reply urgency (hotReplyCount). Feeds
+//               the existing CarrierOutreachPanel on row click.
+//   triage    — Unassigned + No Contactable buckets, role-gated.
+//   admin     — admin/director/NAM/sales_director only — links to
+//               /admin/lane-engine where the engine console lives.
+const LWQ_MODES = ["strategic", "outreach", "triage", "admin"] as const;
+type LwqMode = typeof LWQ_MODES[number];
+function isLwqMode(v: unknown): v is LwqMode {
+  return typeof v === "string" && (LWQ_MODES as readonly string[]).includes(v);
+}
+// Roles allowed into each gated mode. Strategic + Outreach are always
+// available so reps never get locked out of the actionable views. The
+// admin set MUST stay in lockstep with /admin/lane-engine's ALLOWED_ROLES
+// (Task #1030) so a role allowed in here also has the destination page.
+const LWQ_TRIAGE_ROLES = ["admin", "director", "national_account_manager", "logistics_manager"] as const;
+const LWQ_ADMIN_ROLES = ["admin", "director", "national_account_manager", "sales_director"] as const;
+function canAccessLwqMode(role: string | undefined, mode: LwqMode): boolean {
+  if (mode === "strategic" || mode === "outreach") return true;
+  if (mode === "triage") return (LWQ_TRIAGE_ROLES as readonly string[]).includes(role ?? "");
+  if (mode === "admin") return (LWQ_ADMIN_ROLES as readonly string[]).includes(role ?? "");
+  return false;
+}
+// Default mode by role. Reps land on Strategic (the "what should I work
+// on next for the business" view); managers also default to Strategic
+// so the rep + manager experience matches by default. Either can flip
+// via the selector or a deep link.
+function defaultLwqModeForRole(_role: string | undefined): LwqMode {
+  return "strategic";
+}
+
 // Read filter state from URL query string on first render so direct links
 // and rep-to-rep handoffs preserve the filter context. Default to today's
 // "no filters" behavior on a bare /lane-work-queue load.
@@ -2048,6 +2128,42 @@ export default function LaneWorkQueuePage() {
   const [ownerFilter, setOwnerFilter] = useState<OwnerFilterValue>(() => readUrlFilters().owner);
   const [pickupScope, setPickupScope] = useState<PickupScopeValue>(() => readUrlFilters().pickupScope);
 
+  // Task #1028 (LWQ C) — Page mode. Read from URL on first paint with a
+  // role-fallback to `strategic` (also used when an unauthorized role
+  // deep-links into `triage` / `admin`). Round-tripped via the existing
+  // URL serialize effect below so the back button + saved-view machinery
+  // both see it. Because the auth context can resolve AFTER first paint
+  // (hydration race), we capture the URL-requested mode in a ref and
+  // promote it once the role becomes known and authorized — otherwise
+  // an admin/director who deep-linked into `?mode=admin` would be
+  // silently downgraded to Strategic.
+  const requestedModeRef = useRef<LwqMode | null>(null);
+  const [mode, setMode] = useState<LwqMode>(() => {
+    const role = user?.role;
+    const def = defaultLwqModeForRole(role);
+    if (typeof window === "undefined") return def;
+    const v = new URLSearchParams(window.location.search).get("mode");
+    if (!isLwqMode(v)) return def;
+    requestedModeRef.current = v;
+    return canAccessLwqMode(role, v) ? v : def;
+  });
+  // When auth resolves: (a) downgrade unauthorized active modes to
+  // Strategic, and (b) restore a URL-requested mode the first paint
+  // had to drop because the role wasn't known yet.
+  useEffect(() => {
+    const role = user?.role;
+    if (!role) return;
+    if (!canAccessLwqMode(role, mode)) {
+      setMode(defaultLwqModeForRole(role));
+      return;
+    }
+    const requested = requestedModeRef.current;
+    if (requested && requested !== mode && canAccessLwqMode(role, requested)) {
+      setMode(requested);
+      requestedModeRef.current = null;
+    }
+  }, [user?.role, mode]);
+
   // Sync filter state → URL (replaceState so we don't spam history with
   // every toggle). Strips empty params so /lane-work-queue stays clean
   // when no filters are active. We start from the canonical
@@ -2067,6 +2183,7 @@ export default function LaneWorkQueuePage() {
     incoming.forEach((v, k) => {
       if (k === "owner" || k === "pickupScope") return;
       if (k === "highFreq" || k === "manual" || k === "customer") return;
+      if (k === "mode") return;
       if (!params.has(k)) params.set(k, v);
     });
     if (highFreqOnly) params.set("highFreq", "1"); else params.delete("highFreq");
@@ -2076,12 +2193,17 @@ export default function LaneWorkQueuePage() {
     // Drop the canonical defaults so the URL stays clean on the home view.
     if (ownerFilter === "all") params.delete("owner");
     if (pickupScope === DEFAULT_PICKUP_SCOPE) params.delete("pickupScope");
+    // Task #1028 (LWQ C) — `mode` is LWQ-private (not in the cross-surface
+    // saved-view contract). Only serialize when set away from the
+    // role-default so the URL stays clean for the common case.
+    if (mode !== defaultLwqModeForRole(user?.role)) params.set("mode", mode);
+    else params.delete("mode");
     const qs = params.toString();
     const newUrl = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
     if (newUrl !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
       window.history.replaceState(null, "", newUrl);
     }
-  }, [highFreqOnly, manualOnly, customerFilter, ownerFilter, pickupScope]);
+  }, [highFreqOnly, manualOnly, customerFilter, ownerFilter, pickupScope, mode, user?.role]);
 
   // Active filter count drives whether the "Clear all" affordance shows.
   // Owner + pickupScope only count as "active" when set away from their
@@ -2395,6 +2517,12 @@ export default function LaneWorkQueuePage() {
     window.history.replaceState({}, "", url.toString());
   }, [sortMode]);
 
+  // Task #1028 (LWQ C) — Strategic mode forces the strategic sort so the
+  // server attaches `strategicPriority` + `priorityExplanation` and
+  // ranks each bucket by composite. Other modes leave the sort dropdown
+  // free for the rep to pick (default vs strategic).
+  const effectiveSortMode: LwqSortMode = mode === "strategic" ? "strategic" : sortMode;
+
   const workQueueQueryParams = useMemo(() => {
     const sp = new URLSearchParams();
     if (ownerFilter && ownerFilter !== "all") {
@@ -2406,11 +2534,15 @@ export default function LaneWorkQueuePage() {
     if (pickupScope && pickupScope !== DEFAULT_PICKUP_SCOPE) {
       sp.set("pickupScope", pickupScope);
     }
-    if (sortMode === "strategic") sp.set("sort", "strategic");
+    if (effectiveSortMode === "strategic") sp.set("sort", "strategic");
+    // Task #1028 (LWQ C) — thread `mode` so the server can attach the
+    // mode-specific enrichment (Outreach → hotReplyCount + reply-urgency
+    // sort; other modes are no-ops on the server today).
+    sp.set("mode", mode);
     return sp.toString();
-  }, [ownerFilter, pickupScope, sortMode]);
+  }, [ownerFilter, pickupScope, effectiveSortMode, mode]);
   const { data: queue, isLoading, isError, refetch } = useQuery<WorkQueue>({
-    queryKey: ["/api/recurring-lanes/work-queue", { owner: ownerFilter, pickupScope, sort: sortMode }],
+    queryKey: ["/api/recurring-lanes/work-queue", { owner: ownerFilter, pickupScope, sort: effectiveSortMode, mode }],
     // SSE-mid-fetch race guard; append ?debug=lwq to log dropped fetches.
     queryFn: () =>
       fetchWithFreshnessGuard<WorkQueue>({
@@ -2506,10 +2638,20 @@ export default function LaneWorkQueuePage() {
     );
   }, [queue]);
 
-  const totalLanes = (queue?.unassigned?.length ?? 0) +
-    (queue?.noContactable?.length ?? 0) +
-    (queue?.assignedUntouched?.length ?? 0) +
-    (queue?.inProgress?.length ?? 0);
+  // Task #1028 (LWQ C) — Header eligible-count is mode-scoped so the
+  // top-of-page total always reconciles with the buckets currently
+  // rendered. Pre-1028 this aggregated all four buckets, which made
+  // Strategic mode claim more "lanes needing attention" than it ever
+  // surfaced — a contract violation flagged by code review.
+  const totalLanes = (() => {
+    const u = queue?.unassigned?.length ?? 0;
+    const n = queue?.noContactable?.length ?? 0;
+    const a = queue?.assignedUntouched?.length ?? 0;
+    const p = queue?.inProgress?.length ?? 0;
+    if (mode === "outreach" || mode === "strategic") return a + p;
+    if (mode === "triage") return u + n;
+    return u + n + a + p; // admin
+  })();
 
   // Sort unassigned: hot-market lanes (VOTRI signal = "hot") are elevated to the top,
   // then warm, then cool, then stale/unknown — within each signal tier, sort by avgLoadsPerWeek desc.
@@ -2519,7 +2661,7 @@ export default function LaneWorkQueuePage() {
   // server's strategic ranking. Pass the bucket through unchanged in
   // that mode; otherwise apply the legacy signal-tiered fallback.
   const sortedUnassigned = useMemo(() => {
-    if (sortMode === "strategic") return filteredQueue?.unassigned ?? [];
+    if (effectiveSortMode === "strategic") return filteredQueue?.unassigned ?? [];
     const SIGNAL_PRIORITY: Record<string, number> = {
       hot: 3, warm: 2, stable: 1, cool: 1, stale: 0,
     };
@@ -2538,36 +2680,97 @@ export default function LaneWorkQueuePage() {
       const bVal = parseLoadsPerWeek(b.avgLoadsPerWeek) ?? 0;
       return bVal - aVal;
     });
-  }, [filteredQueue?.unassigned, votriByLane, sortMode]);
+  }, [filteredQueue?.unassigned, votriByLane, effectiveSortMode]);
 
   // Task #1030 — freshnessSignal query moved to /admin/lane-engine. The
   // LWQ header dot rolls freshness into the engine-health verdict.
 
-  // Task #871 — flat ordering of every lane currently visible across the
-  // four buckets. j/k navigates this list and Enter / L acts on the
-  // focused entry. The order matches what reps see top-to-bottom on the
-  // page so keyboard focus tracks the visual order exactly.
+  // Task #1028 (LWQ C) — Outreach mode flat list. Spec ordering is:
+  //   1. Hot replies first (any bucket)         → hotReplyCount desc
+  //   2. Then awaiting follow-up SLA breaches   → inProgress with no
+  //      hot reply (carriers contacted, no answer yet)
+  //   3. Then untouched contactable lanes       → assignedUntouched
+  //      with no hot reply
+  // The server batches in `hotReplyCount` and sorts each bucket by
+  // hotReplyCount desc. We do a single merged urgency sort across
+  // both assigned buckets so a hot reply on an Untouched lane still
+  // beats a non-hot In-Progress lane (which would not be true if we
+  // just concatenated the two server buckets).
+  const outreachFlatItems = useMemo<LaneItem[]>(() => {
+    if (!filteredQueue) return [];
+    // Tag each row with its source bucket so we can use it as a
+    // tiebreaker when hotReplyCount matches (inProgress = follow-up
+    // SLA work, beats Untouched).
+    const tagged: Array<{ row: LaneItem; bucketRank: number }> = [
+      ...filteredQueue.inProgress.map(row => ({ row, bucketRank: 1 })),
+      ...filteredQueue.assignedUntouched.map(row => ({ row, bucketRank: 2 })),
+    ];
+    tagged.sort((a, b) => {
+      const aHot = a.row.hotReplyCount ?? 0;
+      const bHot = b.row.hotReplyCount ?? 0;
+      if (bHot !== aHot) return bHot - aHot;
+      if (a.bucketRank !== b.bucketRank) return a.bucketRank - b.bucketRank;
+      return (b.row.laneScore ?? 0) - (a.row.laneScore ?? 0);
+    });
+    return tagged.map(t => t.row);
+  }, [filteredQueue]);
+
+  // Task #871 / Task #1028 (LWQ C) — flat ordering of every lane
+  // currently visible across the foregrounded buckets in the active
+  // mode. j/k navigates this list and Enter / L acts on the focused
+  // entry. The order matches what reps see top-to-bottom on the page
+  // so keyboard focus tracks the visual order exactly. Mode-scoping
+  // is critical here: pre-1028 this aggregated all four buckets, which
+  // meant Triage rows could be focused even while Strategic mode hid
+  // them, and the hidden-counts summary disagreed with the visible
+  // total.
   const flatLaneOrder = useMemo(() => {
     if (!filteredQueue) return [] as LaneItem[];
+    if (mode === "outreach") return outreachFlatItems;
+    if (mode === "triage") {
+      return [...sortedUnassigned, ...filteredQueue.noContactable];
+    }
+    if (mode === "strategic") {
+      return [...filteredQueue.assignedUntouched, ...filteredQueue.inProgress];
+    }
+    // admin — every bucket is foregrounded
     return [
       ...sortedUnassigned,
       ...filteredQueue.noContactable,
       ...filteredQueue.assignedUntouched,
       ...filteredQueue.inProgress,
     ];
-  }, [filteredQueue, sortedUnassigned]);
+  }, [filteredQueue, sortedUnassigned, outreachFlatItems, mode]);
 
   // Task #871 — hidden-counts disclosure. Mirrors the AF disclosure: it
   // explains *why* the visible total dropped (filters: high-frequency,
   // manual-only, customer scope) without burying the rep in extra UI.
   const hiddenCountsSummary = useMemo<HiddenCountsSummary | null>(() => {
     if (!queue) return null;
-    const all: LaneItem[] = [
-      ...(queue.unassigned ?? []),
-      ...(queue.noContactable ?? []),
-      ...(queue.assignedUntouched ?? []),
-      ...(queue.inProgress ?? []),
-    ];
+    // Task #1028 (LWQ C) — baseline for the disclosure is the lanes the
+    // *active mode* would surface, not the org-wide total. Otherwise
+    // Strategic mode would claim a larger total-in-scope than the rows
+    // it ever renders, which violates the "counts reconcile with the
+    // visible list" contract that the cross-tab tiles rely on.
+    const bucketsForMode = (m: LwqMode): LaneItem[] => {
+      switch (m) {
+        case "outreach":
+          return [...(queue.assignedUntouched ?? []), ...(queue.inProgress ?? [])];
+        case "triage":
+          return [...(queue.unassigned ?? []), ...(queue.noContactable ?? [])];
+        case "strategic":
+          return [...(queue.assignedUntouched ?? []), ...(queue.inProgress ?? [])];
+        case "admin":
+        default:
+          return [
+            ...(queue.unassigned ?? []),
+            ...(queue.noContactable ?? []),
+            ...(queue.assignedUntouched ?? []),
+            ...(queue.inProgress ?? []),
+          ];
+      }
+    };
+    const all = bucketsForMode(mode);
     const totalInScope = all.length;
     const visible = flatLaneOrder.length;
     const hiddenByCustomer = customerFilter !== "__all__"
@@ -2588,7 +2791,7 @@ export default function LaneWorkQueuePage() {
         { id: "manual-only-filter", label: "Manual-lanes-only filter", count: hiddenByManual },
       ],
     };
-  }, [queue, flatLaneOrder, customerFilter, highFreqOnly, manualOnly]);
+  }, [queue, flatLaneOrder, customerFilter, highFreqOnly, manualOnly, mode]);
 
   // Task #871 — open the cockpit overlay for a given LaneItem.
   const openCockpitForLane = (it: LaneItem) => {
@@ -2824,6 +3027,34 @@ export default function LaneWorkQueuePage() {
             See docs/workflow-os-spec.md sections A & G. The bucket sections
             below remain LWQ's status grammar — they're not duplicated here.
           */}
+          {/*
+            Task #1028 (LWQ C) — Primary mode selector. Drives the page's
+            mental model (Strategic / Outreach / Triage / Admin). Triage
+            and Admin entries are hidden when the current role can't
+            access them so the dropdown reflects what's actually
+            reachable. The hidden `text-lwq-mode-active` span is the
+            E2E-stable readout the guardrail and Playwright tests pin.
+          */}
+          <Select value={mode} onValueChange={(v) => {
+            if (!isLwqMode(v)) return;
+            if (!canAccessLwqMode(user?.role, v)) return;
+            setMode(v);
+          }}>
+            <SelectTrigger className="h-8 text-xs w-44 gap-1" data-testid="select-lwq-mode">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="strategic" data-testid="option-mode-strategic">Mode: Strategic</SelectItem>
+              <SelectItem value="outreach" data-testid="option-mode-outreach">Mode: Outreach</SelectItem>
+              {canAccessLwqMode(user?.role, "triage") && (
+                <SelectItem value="triage" data-testid="option-mode-triage">Mode: Triage</SelectItem>
+              )}
+              {canAccessLwqMode(user?.role, "admin") && (
+                <SelectItem value="admin" data-testid="option-mode-admin">Mode: Admin</SelectItem>
+              )}
+            </SelectContent>
+          </Select>
+          <span className="sr-only" data-testid="text-lwq-mode-active">{mode}</span>
           <OwnerFilterSelect
             value={ownerFilter}
             onChange={setOwnerFilter}
@@ -2868,15 +3099,23 @@ export default function LaneWorkQueuePage() {
             re-sorting unassigned. Weights are admin-tunable on
             /admin/carrier-intelligence-scoring.
           */}
-          <Select value={sortMode} onValueChange={(v) => setSortMode(v as LwqSortMode)}>
-            <SelectTrigger className="h-8 text-xs w-40 gap-1" data-testid="select-lwq-sort-mode">
-              <SelectValue placeholder="Sort: Default" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="default" data-testid="option-sort-default">Sort: Default</SelectItem>
-              <SelectItem value="strategic" data-testid="option-sort-strategic">Sort: Strategic</SelectItem>
-            </SelectContent>
-          </Select>
+          {/*
+            Task #1028 (LWQ C) — Sort selector is hidden in Strategic mode
+            (sort is forced to `strategic`) and Outreach mode (sort is
+            forced to reply-urgency on the server). It remains visible in
+            Triage + Admin so power users still control row order there.
+          */}
+          {(mode === "triage" || mode === "admin") && (
+            <Select value={sortMode} onValueChange={(v) => setSortMode(v as LwqSortMode)}>
+              <SelectTrigger className="h-8 text-xs w-40 gap-1" data-testid="select-lwq-sort-mode">
+                <SelectValue placeholder="Sort: Default" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default" data-testid="option-sort-default">Sort: Default</SelectItem>
+                <SelectItem value="strategic" data-testid="option-sort-strategic">Sort: Strategic</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           <StaleCountChip
             hiddenStale={queue?.hiddenStale ?? 0}
             currentScope={pickupScope}
@@ -3034,25 +3273,38 @@ export default function LaneWorkQueuePage() {
               </div>
             )}
 
-            {/* Summary stat chips — reflect filtered counts */}
+            {/* Summary stat chips — reflect filtered counts. Task #1028
+                (LWQ C): tiles are mode-scoped so the chip strip always
+                reconciles with the buckets actually rendered below.
+                  strategic / outreach → Untouched + In Progress
+                  triage               → Unassigned + No Contact Info
+                  admin                → all four */}
             {filteredQueue && (
-              <div className="flex gap-3 flex-wrap mb-6">
-                <div className="bg-orange-500/10 border border-orange-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]">
-                  <p className="text-lg font-bold text-orange-400">{filteredQueue.unassigned.length}</p>
-                  <p className="text-[10px] text-orange-400/70">Unassigned</p>
-                </div>
-                <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]">
-                  <p className="text-lg font-bold text-red-400">{filteredQueue.noContactable.length}</p>
-                  <p className="text-[10px] text-red-400/70">No Contact Info</p>
-                </div>
-                <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]">
-                  <p className="text-lg font-bold text-blue-400">{filteredQueue.assignedUntouched.length}</p>
-                  <p className="text-[10px] text-blue-400/70">Untouched</p>
-                </div>
-                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]">
-                  <p className="text-lg font-bold text-amber-400">{filteredQueue.inProgress.length}</p>
-                  <p className="text-[10px] text-amber-400/70">In Progress</p>
-                </div>
+              <div className="flex gap-3 flex-wrap mb-6" data-testid="strip-lwq-summary-tiles">
+                {(mode === "triage" || mode === "admin") && (
+                  <div className="bg-orange-500/10 border border-orange-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]" data-testid="tile-lwq-unassigned">
+                    <p className="text-lg font-bold text-orange-400">{filteredQueue.unassigned.length}</p>
+                    <p className="text-[10px] text-orange-400/70">Unassigned</p>
+                  </div>
+                )}
+                {(mode === "triage" || mode === "admin") && (
+                  <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]" data-testid="tile-lwq-no-contact">
+                    <p className="text-lg font-bold text-red-400">{filteredQueue.noContactable.length}</p>
+                    <p className="text-[10px] text-red-400/70">No Contact Info</p>
+                  </div>
+                )}
+                {(mode === "strategic" || mode === "outreach" || mode === "admin") && (
+                  <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]" data-testid="tile-lwq-untouched">
+                    <p className="text-lg font-bold text-blue-400">{filteredQueue.assignedUntouched.length}</p>
+                    <p className="text-[10px] text-blue-400/70">Untouched</p>
+                  </div>
+                )}
+                {(mode === "strategic" || mode === "outreach" || mode === "admin") && (
+                  <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 text-center min-w-[80px]" data-testid="tile-lwq-inprogress">
+                    <p className="text-lg font-bold text-amber-400">{filteredQueue.inProgress.length}</p>
+                    <p className="text-[10px] text-amber-400/70">In Progress</p>
+                  </div>
+                )}
                 {/* High-frequency summary chip */}
                 {highFreqCount > 0 && (
                   <button
@@ -3086,78 +3338,166 @@ export default function LaneWorkQueuePage() {
             {/* Task #1030 — engine-debug-panel and sourcing-performance-panel
                 relocated to /admin/lane-engine. */}
 
-            {/* Buckets — use filteredQueue */}
-            {filteredQueue && (
-              <>
-                <BucketSection
-                  title="Unassigned"
-                  description={
-                    highFreqOnly
-                      ? "Showing 2+/wk lanes only — highest procurement priority."
-                      : "These lanes have no owner — assign one to get outreach started. Sorted highest frequency first."
-                  }
-                  icon={UserX}
-                  iconColor="bg-orange-500/10 text-orange-400"
-                  items={sortedUnassigned}
-                  completionThreshold={completionThreshold}
-                  onOpen={setOpenLaneId}
-                  onOpenCockpit={openCockpitForLane}
-                  bucket="unassigned"
-                  teamMembers={teamMembers}
-                  highFreqOnly={highFreqOnly}
-                  selectedLaneIds={selectedLaneIds}
-                  onToggleSelect={handleToggleSelect}
-                  votriByLane={votriByLane}
-                />
-                <BucketSection
-                  title="No Contactable Carriers"
-                  description="Assigned but carriers have no phone or email — update the carrier catalog."
-                  icon={AlertCircle}
-                  iconColor="bg-red-500/10 text-red-400"
-                  items={filteredQueue.noContactable}
-                  completionThreshold={completionThreshold}
-                  onOpen={setOpenLaneId}
-                  onOpenCockpit={openCockpitForLane}
-                  bucket="noContactable"
-                  teamMembers={teamMembers}
-                  highFreqOnly={highFreqOnly}
-                  selectedLaneIds={selectedLaneIds}
-                  onToggleSelect={handleToggleSelect}
-                  votriByLane={votriByLane}
-                />
-                <BucketSection
-                  title="Assigned — Untouched"
-                  description="Owner assigned and carriers are contactable — no outreach logged yet."
-                  icon={Truck}
-                  iconColor="bg-blue-500/10 text-blue-400"
-                  items={filteredQueue.assignedUntouched}
-                  completionThreshold={completionThreshold}
-                  onOpen={setOpenLaneId}
-                  onOpenCockpit={openCockpitForLane}
-                  bucket="assignedUntouched"
-                  teamMembers={teamMembers}
-                  highFreqOnly={highFreqOnly}
-                  selectedLaneIds={selectedLaneIds}
-                  onToggleSelect={handleToggleSelect}
-                  votriByLane={votriByLane}
-                />
-                <BucketSection
-                  title="In Progress"
-                  description="Outreach started — keep going to hit the target."
-                  icon={CheckCircle2}
-                  iconColor="bg-amber-500/10 text-amber-400"
-                  items={filteredQueue.inProgress}
-                  completionThreshold={completionThreshold}
-                  onOpen={setOpenLaneId}
-                  onOpenCockpit={openCockpitForLane}
-                  bucket="inProgress"
-                  teamMembers={teamMembers}
-                  highFreqOnly={highFreqOnly}
-                  selectedLaneIds={selectedLaneIds}
-                  onToggleSelect={handleToggleSelect}
-                  votriByLane={votriByLane}
-                />
-              </>
+            {/*
+              Task #1028 (LWQ C) — Mode-scoped bucket rendering.
+                strategic → Untouched + In Progress (assigned lanes the rep
+                            can act on; ranked by Task B's strategicPriority)
+                outreach  → Untouched + In Progress as a single flat list
+                            (server already sorted each by hotReplyCount)
+                triage    → Unassigned + No Contactable (intake / hygiene)
+                admin     → all four buckets PLUS the link block to
+                            /admin/lane-engine where Run Engine, Leak
+                            Console and per-row Edit/Delete live (Task E).
+              The four BucketSection renders are intentionally repeated
+              per mode (rather than a helper) so guardrails can keep
+              pinning their data-testids by literal substring.
+            */}
+            {filteredQueue && (mode === "strategic" || mode === "admin") && (
+              <BucketSection
+                title="Assigned — Untouched"
+                description="Owner assigned and carriers are contactable — no outreach logged yet."
+                icon={Truck}
+                iconColor="bg-blue-500/10 text-blue-400"
+                items={filteredQueue.assignedUntouched}
+                completionThreshold={completionThreshold}
+                onOpen={setOpenLaneId}
+                onOpenCockpit={openCockpitForLane}
+                bucket="assignedUntouched"
+                teamMembers={teamMembers}
+                highFreqOnly={highFreqOnly}
+                selectedLaneIds={selectedLaneIds}
+                onToggleSelect={handleToggleSelect}
+                votriByLane={votriByLane}
+                preserveServerOrder={mode === "strategic"}
+              />
+            )}
+            {filteredQueue && (mode === "strategic" || mode === "admin") && (
+              <BucketSection
+                title="In Progress"
+                description="Outreach started — keep going to hit the target."
+                icon={CheckCircle2}
+                iconColor="bg-amber-500/10 text-amber-400"
+                items={filteredQueue.inProgress}
+                completionThreshold={completionThreshold}
+                onOpen={setOpenLaneId}
+                onOpenCockpit={openCockpitForLane}
+                bucket="inProgress"
+                teamMembers={teamMembers}
+                highFreqOnly={highFreqOnly}
+                selectedLaneIds={selectedLaneIds}
+                onToggleSelect={handleToggleSelect}
+                votriByLane={votriByLane}
+                preserveServerOrder={mode === "strategic"}
+              />
+            )}
+            {filteredQueue && mode === "outreach" && (
+              <BucketSection
+                title="Reply Urgency"
+                description="Lanes with Hot replies first, then awaiting follow-ups, then untouched contactable lanes. Sorted by hot-reply count desc."
+                icon={CheckCircle2}
+                iconColor="bg-amber-500/10 text-amber-400"
+                items={outreachFlatItems}
+                completionThreshold={completionThreshold}
+                onOpen={setOpenLaneId}
+                onOpenCockpit={openCockpitForLane}
+                bucket="inProgress"
+                teamMembers={teamMembers}
+                highFreqOnly={highFreqOnly}
+                selectedLaneIds={selectedLaneIds}
+                onToggleSelect={handleToggleSelect}
+                votriByLane={votriByLane}
+                preserveServerOrder
+                flatList
+              />
+            )}
+            {filteredQueue && (mode === "triage" || mode === "admin") && (
+              <BucketSection
+                title="Unassigned"
+                description={
+                  highFreqOnly
+                    ? "Showing 2+/wk lanes only — highest procurement priority."
+                    : "These lanes have no owner — assign one to get outreach started. Sorted highest frequency first."
+                }
+                icon={UserX}
+                iconColor="bg-orange-500/10 text-orange-400"
+                items={sortedUnassigned}
+                completionThreshold={completionThreshold}
+                onOpen={setOpenLaneId}
+                onOpenCockpit={openCockpitForLane}
+                bucket="unassigned"
+                teamMembers={teamMembers}
+                highFreqOnly={highFreqOnly}
+                selectedLaneIds={selectedLaneIds}
+                onToggleSelect={handleToggleSelect}
+                votriByLane={votriByLane}
+              />
+            )}
+            {filteredQueue && (mode === "triage" || mode === "admin") && (
+              <BucketSection
+                title="No Contactable Carriers"
+                description="Assigned but carriers have no phone or email — update the carrier catalog."
+                icon={AlertCircle}
+                iconColor="bg-red-500/10 text-red-400"
+                items={filteredQueue.noContactable}
+                completionThreshold={completionThreshold}
+                onOpen={setOpenLaneId}
+                onOpenCockpit={openCockpitForLane}
+                bucket="noContactable"
+                teamMembers={teamMembers}
+                highFreqOnly={highFreqOnly}
+                selectedLaneIds={selectedLaneIds}
+                onToggleSelect={handleToggleSelect}
+                votriByLane={votriByLane}
+              />
+            )}
+            {/*
+              Task #1028 (LWQ C) — Admin mode link block. The engine
+              console itself lives at /admin/lane-engine (Task #1030);
+              this block is a permanent jump-off so admins don't have
+              to remember the URL. Hidden in every other mode so the
+              rep daily view stays focused.
+            */}
+            {mode === "admin" && (
+              <div
+                className="rounded-lg border border-border bg-card px-4 py-3 mb-6 flex flex-col gap-2"
+                data-testid="block-lwq-admin-links"
+              >
+                <div>
+                  <p className="text-sm font-semibold text-foreground mb-1">Admin tools</p>
+                  <p className="text-xs text-muted-foreground">
+                    Run Engine, Leak Console, source-freshness, scoring weights,
+                    KPIs, and per-row Edit / Delete live on the Lane Engine
+                    console (Task&nbsp;#1030). Admin mode also unhides Unassigned
+                    and No Contactable above so you can review them in one pass.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <Link href="/admin/lane-engine">
+                    <a
+                      className="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:underline"
+                      data-testid="link-lwq-admin-lane-engine"
+                    >
+                      Open Lane Engine console →
+                    </a>
+                  </Link>
+                  <Link href="/admin/lane-engine?panel=leak">
+                    <a
+                      className="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:underline"
+                      data-testid="link-lwq-admin-leak-console"
+                    >
+                      Open Leak Console →
+                    </a>
+                  </Link>
+                  <Link href="/admin/carrier-intelligence-scoring">
+                    <a
+                      className="inline-flex items-center gap-1.5 text-xs text-amber-400 hover:underline"
+                      data-testid="link-lwq-admin-scoring-weights"
+                    >
+                      Edit scoring weights →
+                    </a>
+                  </Link>
+                </div>
+              </div>
             )}
 
             {!isLoading && totalLanes === 0 && (

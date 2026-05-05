@@ -323,7 +323,7 @@ test.describe('Lane assignment + SSE cross-tab sync', () => {
     try {
       // Filter both pages to the seeded customer so the seeded lane is the
       // only one in view — keeps assertions quick and deterministic.
-      const lwqUrl = `/lanes/work-queue?customer=${encodeURIComponent(lane.companyName)}`;
+      const lwqUrl = `/lanes/work-queue?mode=triage&customer=${encodeURIComponent(lane.companyName)}`;
       await gotoAuth(pageA, lwqUrl);
       await gotoAuth(pageB, lwqUrl);
 
@@ -475,12 +475,13 @@ test.describe('Lane Cockpit keyboard (Task #889)', () => {
     // other manual lanes the dev-bypass org carries.
     await gotoAuth(
       page,
-      `/lanes/work-queue?customer=${encodeURIComponent(lane.companyName)}`,
+      `/lanes/work-queue?mode=triage&customer=${encodeURIComponent(lane.companyName)}`,
     );
 
     // Wait for the seeded lane row to render — it sits under the
     // `bucket-unassigned` group (no owner) and inside the stamped
-    // customer group container.
+    // customer group container. Task #1028 (LWQ C) puts Unassigned
+    // behind the Triage mode, so we deep-link `?mode=triage`.
     const row = page.locator(`[data-testid="work-queue-row-${lane.laneId}"]`);
     // The customer group is collapsed by default; expand it so the row
     // mounts and the shared keyboard's `next` (j) handler can focus it.

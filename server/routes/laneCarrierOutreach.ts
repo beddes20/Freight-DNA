@@ -766,9 +766,20 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
 
       // Task #1027 (LWQ B) — opt-in strategic ranking. Default sort is
       // unchanged (laneScore desc) so this rolls out behind a URL param;
-      // Task C will flip the default for Strategic mode.
+      // Task #1028 (LWQ C) flips it on for Strategic mode automatically.
       const sortMode: "default" | "strategic" =
         qOptStr(req.query.sort) === "strategic" ? "strategic" : "default";
+
+      // Task #1028 (LWQ C) — page mode. Drives reply-urgency enrichment
+      // (Outreach) and is echoed in `meta.mode` so the client view-model
+      // and the queryKey stay in lockstep with the server payload. Unknown
+      // values fall back to `strategic` so a stray `?mode=foo` cannot
+      // silently strip enrichment.
+      const modeParam = qOptStr(req.query.mode);
+      const mode: "strategic" | "outreach" | "triage" | "admin" =
+        modeParam === "outreach" || modeParam === "triage" || modeParam === "admin"
+          ? modeParam
+          : "strategic";
 
       const { visibleUserIds, canSeeUnassigned, scopeLabel } = await storage.resolveVisibleUserIds(
         user.id, user.organizationId, user.role
@@ -827,6 +838,11 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         strategicPriority?: number;
         priorityExplanation?: LaneStrategicResult;
         lifecycleStage?: string | null;
+        // Task #1028 (LWQ C) — reply-urgency metadata for Outreach mode.
+        // Attached when `?mode=outreach` so each row carries the same Hot
+        // signal the cockpit chip uses; the client sorts each bucket by
+        // it (then laneScore) to surface follow-ups first.
+        hotReplyCount?: number;
       };
 
       type LeanBuckets = {
@@ -1229,6 +1245,48 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         scopedBuckets.inProgress.sort(byPriority);
       }
 
+      // ── Task #1028 (LWQ C) — Outreach mode reply-urgency enrichment ──────
+      // When the client opts into Outreach mode, attach `hotReplyCount` to
+      // every visible row (sourced from the same `lane_carrier_interest`
+      // hot statuses the cockpit chip uses) and sort each bucket by it
+      // (then laneScore desc) so lanes with awaiting hot replies bubble
+      // to the top of the flat list the client renders.
+      if (mode === "outreach") {
+        const allScoped = [
+          ...scopedBuckets.unassigned,
+          ...scopedBuckets.noContactable,
+          ...scopedBuckets.assignedUntouched,
+          ...scopedBuckets.inProgress,
+        ];
+        const laneIds = allScoped.map(r => r.laneId);
+        const hotByLaneId = new Map<string, number>();
+        if (laneIds.length > 0) {
+          const hotRows = await db.select({
+            laneId: laneCarrierInterest.laneId,
+            n: sql<string>`COUNT(*)`,
+          }).from(laneCarrierInterest).where(and(
+            inArray(laneCarrierInterest.laneId, laneIds),
+            inArray(laneCarrierInterest.interestStatus, ["available_now", "available_next_week"]),
+          )).groupBy(laneCarrierInterest.laneId);
+          for (const h of hotRows) hotByLaneId.set(h.laneId, Number(h.n) || 0);
+        }
+        const attachHot = (rows: LeanItem[]): void => {
+          for (const r of rows) r.hotReplyCount = hotByLaneId.get(r.laneId) ?? 0;
+        };
+        attachHot(scopedBuckets.unassigned);
+        attachHot(scopedBuckets.noContactable);
+        attachHot(scopedBuckets.assignedUntouched);
+        attachHot(scopedBuckets.inProgress);
+        const byUrgency = (a: LeanItem, b: LeanItem) =>
+          ((b.hotReplyCount ?? 0) - (a.hotReplyCount ?? 0))
+          || ((b.laneScore ?? 0) - (a.laneScore ?? 0))
+          || a.laneId.localeCompare(b.laneId);
+        scopedBuckets.unassigned.sort(byUrgency);
+        scopedBuckets.noContactable.sort(byUrgency);
+        scopedBuckets.assignedUntouched.sort(byUrgency);
+        scopedBuckets.inProgress.sort(byUrgency);
+      }
+
       // Keyset pagination within each bucket. The cursor's leading number is
       // `laneScore` for the default sort and the rounded `strategicPriority`
       // (×100) when `?sort=strategic` is active.
@@ -1285,7 +1343,7 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
         });
 
       const source = leanQueue ? "cache" : "full";
-      console.log(`[work-queue] org=${user.organizationId} source=${source} scope=${scopeLabel} sort=${sortMode} buckets=${JSON.stringify(totals)} hiddenStale=${hiddenStale} owner=${typeof ownerFilterValue === "string" ? ownerFilterValue : `specific:${ownerFilterValue.specificUserId}`} pickupScope=${pickupScope} limit=${limit} cursor=${cursor ?? "none"} requestedBy=${user.id}(${user.role})`);
+      console.log(`[work-queue] org=${user.organizationId} source=${source} scope=${scopeLabel} sort=${sortMode} mode=${mode} buckets=${JSON.stringify(totals)} hiddenStale=${hiddenStale} owner=${typeof ownerFilterValue === "string" ? ownerFilterValue : `specific:${ownerFilterValue.specificUserId}`} pickupScope=${pickupScope} limit=${limit} cursor=${cursor ?? "none"} requestedBy=${user.id}(${user.role})`);
       res.json({
         unassigned: stampLiveOpps(uPaged.items),
         noContactable: stampLiveOpps(ncPaged.items),
@@ -1308,6 +1366,10 @@ export function registerLaneCarrierOutreachRoutes(app: Express): void {
           // (Task D row reason chip) know whether `priorityExplanation`
           // is populated on every row.
           sort: sortMode,
+          // Task #1028 (LWQ C) — echo back the active mode so the client
+          // view-model can confirm the payload matches the mode it asked
+          // for (and so guardrail tests can pin the contract).
+          mode,
         },
         pagination: {
           limit,

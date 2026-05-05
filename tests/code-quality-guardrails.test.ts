@@ -4134,11 +4134,17 @@ console.log("\n── Section 1027: LWQ B — Strategic priority composite ─�
   );
   assert(
     "LWQ page threads sort=strategic into the work-queue request",
-    /sortMode\s*===\s*["']strategic["'][\s\S]{0,200}sp\.set\(\s*["']sort["']\s*,\s*["']strategic["']\s*\)/.test(lwqSrc),
+    // Task #1028 (LWQ C) extended this: strategic mode forces the
+    // strategic sort via `effectiveSortMode`, so accept either the
+    // legacy `sortMode === "strategic"` literal or the new derived
+    // `effectiveSortMode === "strategic"` guard before the sp.set.
+    /(sortMode|effectiveSortMode)\s*===\s*["']strategic["'][\s\S]{0,200}sp\.set\(\s*["']sort["']\s*,\s*["']strategic["']\s*\)/.test(lwqSrc),
   );
   assert(
     "LWQ page skips client-side resort when strategic mode is active",
-    /if\s*\(\s*sortMode\s*===\s*["']strategic["']\s*\)\s*return\s+filteredQueue\?\.unassigned/.test(lwqSrc),
+    // Task #1028 (LWQ C) renamed the local guard to effectiveSortMode
+    // when Strategic mode forces the strategic sort. Accept either.
+    /if\s*\(\s*(sortMode|effectiveSortMode)\s*===\s*["']strategic["']\s*\)\s*return\s+filteredQueue\?\.unassigned/.test(lwqSrc),
   );
 
   // (i) Unit tests for the pure scorer exist (code review required them).
@@ -4156,6 +4162,139 @@ console.log("\n── Section 1027: LWQ B — Strategic priority composite ─�
       && /null lifecycle/i.test(unitSrc)
       && /strategicTierBoost/i.test(unitSrc)
       && /hotReplyCount/i.test(unitSrc),
+  );
+}
+
+// ── Section 1028: LWQ C — Mode split (Strategic/Outreach/Triage/Admin) ─────
+// The Lane Work Queue page exposes a primary mode selector. Each mode is
+// a thin renderer over the shared row pipeline; the mode contract MUST
+// stay in lockstep with the server payload's `meta.mode` echo and with
+// /admin/lane-engine's RBAC list (Task #1030) so a role allowed into the
+// Admin mode also reaches the destination page. This guardrail pins:
+//   (a) the LwqMode enum (exactly the four allowed values),
+//   (b) the rep default = "strategic",
+//   (c) Triage and Admin are role-gated (canAccessLwqMode rejects
+//       arbitrary roles for those two modes),
+//   (d) the testids the Playwright tests pin,
+//   (e) the work-queue queryKey threads `mode` so each mode keeps its
+//       own cache slot, and
+//   (f) the server enriches the Outreach payload with hotReplyCount and
+//       echoes the active mode back via `meta.mode`.
+console.log("\n── Section 1028: LWQ C — Mode split (Strategic/Outreach/Triage/Admin) ──\n");
+{
+  const lwqSrc = readFile("client/src/pages/lane-work-queue.tsx");
+  const serverSrc = readFile("server/routes/laneCarrierOutreach.ts");
+
+  // (a) Enum: exactly the four allowed values, in this order.
+  assert(
+    "LWQ defines LWQ_MODES enum with exactly [strategic, outreach, triage, admin]",
+    /const LWQ_MODES\s*=\s*\[\s*"strategic"\s*,\s*"outreach"\s*,\s*"triage"\s*,\s*"admin"\s*\]\s*as const/.test(lwqSrc),
+  );
+  assert(
+    "LWQ exports the LwqMode type derived from LWQ_MODES",
+    /type LwqMode\s*=\s*typeof LWQ_MODES\[number\]/.test(lwqSrc),
+  );
+
+  // (b) Default for reps (and every other role) is `strategic`.
+  assert(
+    "LWQ defaults to mode=strategic for every role (rep default)",
+    /function defaultLwqModeForRole[\s\S]{0,200}return\s+"strategic"/.test(lwqSrc),
+  );
+
+  // (c) Triage + Admin role-gated; Strategic + Outreach unconditional.
+  assert(
+    "LWQ canAccessLwqMode allows Strategic + Outreach for every role",
+    /canAccessLwqMode[\s\S]{0,400}mode\s*===\s*"strategic"\s*\|\|\s*mode\s*===\s*"outreach"[\s\S]{0,40}return true/.test(lwqSrc),
+  );
+  assert(
+    "LWQ Triage role list is admin/director/national_account_manager/logistics_manager",
+    /LWQ_TRIAGE_ROLES\s*=\s*\[\s*"admin"\s*,\s*"director"\s*,\s*"national_account_manager"\s*,\s*"logistics_manager"\s*\]/.test(lwqSrc),
+  );
+  assert(
+    "LWQ Admin role list matches /admin/lane-engine ALLOWED_ROLES (admin/director/NAM/sales_director)",
+    /LWQ_ADMIN_ROLES\s*=\s*\[\s*"admin"\s*,\s*"director"\s*,\s*"national_account_manager"\s*,\s*"sales_director"\s*\]/.test(lwqSrc),
+  );
+  // The "sales" role must NOT appear in either gated list (per spec).
+  assert(
+    "LWQ gated role lists do NOT include the bare \"sales\" role",
+    !/(LWQ_TRIAGE_ROLES|LWQ_ADMIN_ROLES)[^\]]*"sales"[^_]/.test(lwqSrc),
+  );
+
+  // (d) Required test ids exist for E2E.
+  assert(
+    "LWQ renders data-testid=\"select-lwq-mode\" header selector",
+    /data-testid="select-lwq-mode"/.test(lwqSrc),
+  );
+  assert(
+    "LWQ renders data-testid=\"text-lwq-mode-active\" readout for E2E pinning",
+    /data-testid="text-lwq-mode-active"/.test(lwqSrc),
+  );
+
+  // (e) work-queue queryKey threads `mode` so each mode keeps its own
+  //     react-query cache entry (mirrors the owner+pickupScope contract
+  //     from Section 26).
+  assert(
+    "LWQ work-queue queryKey threads `mode` alongside owner+pickupScope+sort",
+    /queryKey:\s*\[\s*"\/api\/recurring-lanes\/work-queue",\s*\{[^}]*\bmode\b/.test(lwqSrc),
+  );
+
+  // (f) Server contract: parses ?mode=, attaches hotReplyCount on
+  //     Outreach, and echoes mode back in meta.
+  assert(
+    "server work-queue route parses ?mode= with strategic/outreach/triage/admin enum",
+    /const modeParam[\s\S]{0,200}modeParam === "outreach" \|\| modeParam === "triage" \|\| modeParam === "admin"/.test(serverSrc),
+  );
+  assert(
+    "server LeanItem carries optional hotReplyCount field for Outreach mode",
+    /hotReplyCount\?:\s*number/.test(serverSrc),
+  );
+  assert(
+    "server attaches hotReplyCount + reply-urgency sort when mode === \"outreach\"",
+    /if \(mode === "outreach"\)/.test(serverSrc) && /r\.hotReplyCount = hotByLaneId\.get/.test(serverSrc),
+  );
+  assert(
+    "server echoes meta.mode back so the client view-model can verify the contract",
+    /meta:\s*\{[\s\S]{0,2000}\bmode,/.test(serverSrc),
+  );
+
+  // (g) Mode-scoped surface — summary chip strip and the header
+  //     `eligible lanes` count must reconcile with the buckets actually
+  //     rendered in the active mode. Unassigned + No Contact tiles are
+  //     hidden in Strategic/Outreach; Untouched + In Progress tiles are
+  //     hidden in Triage; Admin shows all four.
+  assert(
+    "LWQ Unassigned tile is gated to (triage || admin) modes",
+    /mode === "triage" \|\| mode === "admin"\)\s*&&\s*\(\s*<div[^>]*data-testid="tile-lwq-unassigned"/.test(lwqSrc),
+  );
+  assert(
+    "LWQ No Contact tile is gated to (triage || admin) modes",
+    /mode === "triage" \|\| mode === "admin"\)\s*&&\s*\(\s*<div[^>]*data-testid="tile-lwq-no-contact"/.test(lwqSrc),
+  );
+  assert(
+    "LWQ Untouched tile is gated to (strategic || outreach || admin) modes",
+    /mode === "strategic" \|\| mode === "outreach" \|\| mode === "admin"\)\s*&&\s*\(\s*<div[^>]*data-testid="tile-lwq-untouched"/.test(lwqSrc),
+  );
+  assert(
+    "LWQ In Progress tile is gated to (strategic || outreach || admin) modes",
+    /mode === "strategic" \|\| mode === "outreach" \|\| mode === "admin"\)\s*&&\s*\(\s*<div[^>]*data-testid="tile-lwq-inprogress"/.test(lwqSrc),
+  );
+  assert(
+    "LWQ totalLanes header count is mode-scoped (only foregrounded buckets)",
+    /const totalLanes = \(\(\) => \{[\s\S]{0,600}mode === "outreach" \|\| mode === "strategic"[\s\S]{0,40}return a \+ p[\s\S]{0,200}mode === "triage"[\s\S]{0,40}return u \+ n/.test(lwqSrc),
+  );
+
+  // (h) Admin-mode controls block: must surface the Lane Engine,
+  //     Leak Console, and scoring-weights jump-offs (the engine controls
+  //     themselves live at /admin/lane-engine per Task #1030).
+  assert(
+    "LWQ Admin mode renders the admin-tools block (gated to mode === admin)",
+    /mode === "admin"[\s\S]{0,300}data-testid="block-lwq-admin-links"/.test(lwqSrc),
+  );
+  assert(
+    "LWQ Admin block links to Lane Engine, Leak Console, and scoring-weights",
+    /data-testid="link-lwq-admin-lane-engine"/.test(lwqSrc) &&
+      /data-testid="link-lwq-admin-leak-console"/.test(lwqSrc) &&
+      /data-testid="link-lwq-admin-scoring-weights"/.test(lwqSrc),
   );
 }
 
