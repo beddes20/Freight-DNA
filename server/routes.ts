@@ -3534,14 +3534,38 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const amEquivRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
-      if (amEquivRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
+      // Task #1060 — Team Performance is open to all users. Scope defaults to
+      // "mine" (the caller's reporting tree); "all" returns the full org-wide
+      // rep set (the same set the admin path used to compute by default).
+      const scope = qStr(req.query.scope) === "all" ? "all" : "mine";
+      const orgId = req.session.organizationId!;
+      const REP_ROLES = ["account_manager", "national_account_manager", "logistics_manager", "logistics_coordinator", "director", "sales_director", "sales"];
       let teamIds: string[];
-      if (isAdmin(user)) {
-        const allUsers = await storage.getUsers(req.session.organizationId!);
-        teamIds = allUsers.filter(u => u.role === "account_manager" || u.role === "national_account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator" || u.role === "director" || u.role === "sales_director" || u.role === "sales").map(u => u.id);
+      let teamMappingMissing = false;
+      if (scope === "all") {
+        const allUsers = await storage.getUsers(orgId);
+        teamIds = allUsers.filter(u => REP_ROLES.includes(u.role)).map(u => u.id);
       } else {
+        // "mine" — the caller's reporting tree (self + transitive direct reports).
         teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        // For an IC with no direct reports, also include peers under the same
+        // manager so they see their actual team rather than just themselves.
+        if (teamIds.length <= 1 && user.managerId) {
+          const allUsers = await storage.getUsers(orgId);
+          const peerIds = allUsers.filter(u => u.managerId === user.managerId).map(u => u.id);
+          const merged = new Set<string>(teamIds);
+          for (const id of peerIds) merged.add(id);
+          teamIds = Array.from(merged);
+        }
+        if (teamIds.length === 0) {
+          return res.json({ reps: [], teamMappingMissing: true });
+        }
+        // If after expansion the only resolvable member is the caller and they
+        // have no manager, surface the empty-team signal so the page can render
+        // a friendly explainer instead of a one-card grid.
+        if (teamIds.length === 1 && teamIds[0] === user.id && !user.managerId) {
+          teamMappingMissing = true;
+        }
       }
 
       const now = new Date();
@@ -3604,7 +3628,10 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           prevMeaningfulTouchpoints: prev?.meaningfulTouchpoints ?? 0,
         };
       });
-      res.json(result);
+      // Task #1060 — wrap response in `{ reps, teamMappingMissing }` so the
+      // page can render an honest "no team mapped" empty-state for ICs whose
+      // reporting line has not been set up yet, while preserving the rep list.
+      res.json({ reps: result, teamMappingMissing });
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch team performance" });
     }
@@ -3615,8 +3642,10 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const amEquivRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
-      if (amEquivRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
+      // Task #1060 — Detail drill-down inherits the open-access policy from
+      // the parent /api/team/performance endpoint so cards remain clickable
+      // for everyone. Scope is honored the same way (default "mine").
+      const detailScope = qStr(req.query.scope) === "all" ? "all" : "mine";
 
       const metric = pStr(req.params.metric);
       const period = (qStr(req.query.period)) || "current";
@@ -3638,11 +3667,18 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
 
       let teamIds: string[];
-      if (isAdmin(user)) {
-        const allUsers = await storage.getUsers(req.session.organizationId!);
-        teamIds = allUsers.filter(u => ["account_manager","national_account_manager","logistics_manager","logistics_coordinator","director","sales_director","sales"].includes(u.role)).map(u => u.id);
+      if (detailScope === "all") {
+        const allUsersForScope = await storage.getUsers(req.session.organizationId!);
+        teamIds = allUsersForScope.filter(u => ["account_manager","national_account_manager","logistics_manager","logistics_coordinator","director","sales_director","sales"].includes(u.role)).map(u => u.id);
       } else {
         teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        if (teamIds.length <= 1 && user.managerId) {
+          const allUsersForScope = await storage.getUsers(req.session.organizationId!);
+          const peerIds = allUsersForScope.filter(u => u.managerId === user.managerId).map(u => u.id);
+          const merged = new Set<string>(teamIds);
+          for (const id of peerIds) merged.add(id);
+          teamIds = Array.from(merged);
+        }
       }
 
       const allUsers = await storage.getUsers(req.session.organizationId!);

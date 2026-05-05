@@ -63,7 +63,6 @@ export const navItems: NavItem[] = [
     url: "/team-performance",
     icon: TrendingUp,
     description: "Team metrics, leaderboards, and performance trends.",
-    roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
   },
 ];
 

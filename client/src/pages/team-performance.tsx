@@ -21,6 +21,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 type PeriodOption = "current" | "last" | "ytd";
+type ScopeOption = "mine" | "all";
 
 function getPeriodLabel(period: PeriodOption): string {
   const now = new Date();
@@ -611,12 +612,20 @@ export default function TeamPerformancePage() {
   const [, navigate] = useLocation();
   const search = useSearch();
   const urlPeriod = new URLSearchParams(search).get("period") as PeriodOption | null;
+  const urlScope = new URLSearchParams(search).get("scope") as ScopeOption | null;
   const [period, setPeriod] = useState<PeriodOption>(urlPeriod || "current");
+  // Task #1060 — Team Performance is open to all users; non-admins default to
+  // their own reporting tree ("mine") and can opt into the org-wide view ("all").
+  const [scope, setScope] = useState<ScopeOption>(urlScope === "all" ? "all" : "mine");
   const [sortBy, setSortBy] = useState<SortOption>("alpha");
 
   useEffect(() => {
-    const p = new URLSearchParams(search).get("period") as PeriodOption | null;
+    const params = new URLSearchParams(search);
+    const p = params.get("period") as PeriodOption | null;
     if (p && p !== period) setPeriod(p);
+    const s = params.get("scope") as ScopeOption | null;
+    const nextScope: ScopeOption = s === "all" ? "all" : "mine";
+    if (nextScope !== scope) setScope(nextScope);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
   const [showBulkSend, setShowBulkSend] = useState(false);
@@ -624,14 +633,20 @@ export default function TeamPerformancePage() {
   const [bulkResult, setBulkResult] = useState<BulkSendResult | null>(null);
   const [nominationTarget, setNominationTarget] = useState<RepPerf | null>(null);
 
-  const { data: reps = [], isLoading } = useQuery<RepPerf[]>({
-    queryKey: ["/api/team/performance", period],
+  const { data: teamPerfResponse, isLoading } = useQuery<{ reps: RepPerf[]; teamMappingMissing: boolean }>({
+    queryKey: ["/api/team/performance", period, scope],
     queryFn: async () => {
-      const res = await fetch(`/api/team/performance?period=${period}`, { credentials: "include" });
+      const res = await fetch(`/api/team/performance?period=${period}&scope=${scope}`, { credentials: "include" });
       if (!res.ok) throw new Error(`Failed to fetch team performance: ${res.status}`);
-      return res.json();
+      const json = await res.json();
+      // Back-compat: tolerate either the legacy bare-array shape or the new
+      // `{ reps, teamMappingMissing }` envelope.
+      if (Array.isArray(json)) return { reps: json as RepPerf[], teamMappingMissing: false };
+      return { reps: json.reps ?? [], teamMappingMissing: !!json.teamMappingMissing };
     },
   });
+  const reps: RepPerf[] = teamPerfResponse?.reps ?? [];
+  const teamMappingMissing = !!teamPerfResponse?.teamMappingMissing;
 
   const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
     queryKey: ["/api/financials/account-summary", period],
@@ -763,10 +778,13 @@ export default function TeamPerformancePage() {
     },
   });
 
-  if (!user || user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
+  // Task #1060 — Team Performance is open to all authenticated users. The
+  // legacy "Access denied" early-return for account_manager / logistics_manager
+  // / logistics_coordinator has been removed. We still need a `user` to render.
+  if (!user) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
-        <p>Access denied</p>
+        <p>Loading…</p>
       </div>
     );
   }
@@ -962,12 +980,37 @@ export default function TeamPerformancePage() {
                 <SelectItem value="accounts">Most Accounts</SelectItem>
               </SelectContent>
             </Select>
+            {/* Task #1060 — My Team / All Teams scope toggle. Default is "mine"
+                (the caller's reporting tree); flipping to "all" returns the
+                org-wide rep set. Persisted to the URL so deep-links survive. */}
+            <div className="flex items-center rounded-lg border border-white/15 bg-white/5 p-0.5 gap-0.5" data-testid="toggle-team-scope">
+              {([
+                { v: "mine", label: "My Team" },
+                { v: "all", label: "All Teams" },
+              ] as Array<{ v: ScopeOption; label: string }>).map(opt => (
+                <button
+                  key={opt.v}
+                  data-testid={`toggle-team-scope-${opt.v}`}
+                  onClick={() => {
+                    setScope(opt.v);
+                    navigate(`/team-performance?period=${period}&scope=${opt.v}`, { replace: true });
+                  }}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                    scope === opt.v
+                      ? "bg-white/15 text-white shadow-sm"
+                      : "text-white/60 hover:text-white hover:bg-white/10"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
             <div className="flex items-center rounded-lg border border-white/15 bg-white/5 p-0.5 gap-0.5" data-testid="toggle-period">
               {(["current", "last", "ytd"] as PeriodOption[]).map((opt) => (
                 <button
                   key={opt}
                   data-testid={`button-period-${opt}`}
-                  onClick={() => { setPeriod(opt); navigate(`/team-performance?period=${opt}`, { replace: true }); }}
+                  onClick={() => { setPeriod(opt); navigate(`/team-performance?period=${opt}&scope=${scope}`, { replace: true }); }}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                     period === opt
                       ? "bg-white/15 text-white shadow-sm"
@@ -1000,6 +1043,37 @@ export default function TeamPerformancePage() {
         </div>
       ) : (
         <>
+          {/* Task #1060 — Honest empty-state for users without a resolvable
+              reporting line. The All Teams toggle remains available so they
+              can still pivot to the org-wide view. */}
+          {teamMappingMissing && scope === "mine" && (
+            <Card className="border-amber-300/40 bg-amber-50/40 dark:bg-amber-950/20" data-testid="card-team-mapping-missing">
+              <CardContent className="pt-4 pb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-amber-900 dark:text-amber-200" data-testid="text-team-mapping-missing-title">
+                    We couldn't find a team mapping for you
+                  </p>
+                  <p className="text-xs text-amber-800/80 dark:text-amber-200/80">
+                    Ask your manager or an admin to set your reporting line.
+                    In the meantime you can switch to All Teams to browse the
+                    full org view.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs border-amber-400 text-amber-900 dark:text-amber-100 hover:bg-amber-100 dark:hover:bg-amber-900/40"
+                  data-testid="button-switch-to-all-teams"
+                  onClick={() => {
+                    setScope("all");
+                    navigate(`/team-performance?period=${period}&scope=all`, { replace: true });
+                  }}
+                >
+                  Switch to All Teams
+                </Button>
+              </CardContent>
+            </Card>
+          )}
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               {[
@@ -1012,7 +1086,7 @@ export default function TeamPerformancePage() {
                 <Card
                   key={stat.label}
                   className="cursor-pointer hover:shadow-md hover:border-primary/30 transition-all"
-                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}`)}
+                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}&scope=${scope}`)}
                   data-testid={`portlet-${stat.metric}`}
                 >
                   <CardContent className="pt-4 pb-3">
@@ -1036,7 +1110,7 @@ export default function TeamPerformancePage() {
                 <Card
                   key={stat.label}
                   className="cursor-pointer hover:shadow-md hover:border-primary/30 transition-all"
-                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}`)}
+                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}&scope=${scope}`)}
                   data-testid={`portlet-${stat.metric}`}
                 >
                   <CardContent className="pt-4 pb-3">
