@@ -1,11 +1,13 @@
-// Task #1012 — Owner Rep widget for the company-detail page.
+// Account Owner widget for the company-detail Overview tab. (Originally
+// shipped as Task #1012 "Quote Owner Rep" — relabeled to Account Owner
+// as part of the unification on `companies.ownerRepId`.)
 //
-// Resolves the CRM company name to its `quote_customers` row (if any)
-// via /api/customer-quotes/customers/by-name, then lets a user pick or
-// clear the primary owner rep. The owner rep is the fallback used at
-// inbound-quote ingestion time (when sender/inbox routing didn't
-// resolve a rep) and is also projected as the display rep on
-// unassigned Quote Requests rows.
+// NOTE: this widget continues to write to `quote_customers.owner_rep_id`
+// for backward-compat. The canonical Account Owner field lives on
+// `companies.ownerRepId` and is edited from the Intel tab Account
+// Information portlet. Quote Requests Rep fallback now reads from the
+// canonical field — this widget remains as a secondary surface during
+// burn-in and will be retired once telemetry confirms zero divergence.
 //
 // Empty state ("Not yet a quote customer") is the honest answer when
 // the company hasn't received any quotes yet — no row is created
@@ -109,10 +111,10 @@ export function QuoteCustomerOwnerWidget({ companyName }: Props) {
       await queryClient.invalidateQueries({
         queryKey: ["/api/customer-quotes/customers/by-name", companyName],
       });
-      toast({ title: "Owner rep updated" });
+      toast({ title: "Account Owner updated" });
     },
     onError: (err: unknown) => {
-      const msg = err instanceof Error ? err.message : "Could not update owner rep";
+      const msg = err instanceof Error ? err.message : "Could not update Account Owner";
       toast({ title: "Update failed", description: msg, variant: "destructive" });
     },
   });
@@ -122,7 +124,7 @@ export function QuoteCustomerOwnerWidget({ companyName }: Props) {
       <Card data-testid="card-quote-customer-owner">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm flex items-center gap-2">
-            <UserCircle2 className="h-4 w-4" /> Quote Owner Rep
+            <UserCircle2 className="h-4 w-4" /> Account Owner
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -137,7 +139,7 @@ export function QuoteCustomerOwnerWidget({ companyName }: Props) {
       <Card data-testid="card-quote-customer-owner">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm flex items-center gap-2">
-            <UserCircle2 className="h-4 w-4" /> Quote Owner Rep
+            <UserCircle2 className="h-4 w-4" /> Account Owner
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -160,7 +162,7 @@ export function QuoteCustomerOwnerWidget({ companyName }: Props) {
     <Card data-testid="card-quote-customer-owner">
       <CardHeader className="pb-3">
         <CardTitle className="text-sm flex items-center gap-2">
-          <UserCircle2 className="h-4 w-4" /> Quote Owner Rep
+          <UserCircle2 className="h-4 w-4" /> Account Owner
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -213,8 +215,8 @@ export function QuoteCustomerOwnerWidget({ companyName }: Props) {
 
         <p className="text-[11px] text-muted-foreground leading-snug">
           {canEdit
-            ? "Used as a fallback rep on inbound quote requests when the sender/inbox doesn't already resolve to one, and shown on unassigned Quote Requests rows linked to this account."
-            : "Owner rep is the fallback for unassigned quote requests. Only admins can change it."}
+            ? "Account Owner is the fallback rep on inbound quote requests when the sender/inbox doesn't already resolve to one, and is shown on unassigned Quote Requests rows linked to this account. The canonical Account Owner field lives on the Intel tab → Account Information portlet."
+            : "Account Owner is the fallback for unassigned quote requests. Only admins can change it."}
         </p>
       </CardContent>
     </Card>

@@ -1942,7 +1942,7 @@ function ListRow({
           {(q.repFromCustomerOwner || (!q.repName || q.repName === "—") && (q as { ownerRepName?: string }).ownerRepName) && (
             <span
               className="inline-flex items-center px-1.5 h-4 text-[9px] font-medium uppercase rounded border bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900"
-              title="Showing the customer's owner rep — this quote isn't assigned yet."
+              title="Showing the account's Account Owner — this quote isn't assigned yet."
               data-testid={`badge-owner-fallback-${q.id}`}
             >
               owner

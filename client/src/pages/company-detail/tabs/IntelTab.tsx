@@ -121,6 +121,8 @@ export function IntelTab({
 
   // ── Role checks ────────────────────────────────────────────────────────────
   const canEditSalesPerson = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales_director";
+  // Mirrors the server-side guard on PATCH /api/companies/:id/owner.
+  const canEditAccountOwner = canEditSalesPerson;
   const canManageSharedReps = currentUser?.role === "admin" || currentUser?.role === "national_account_manager";
   const canReassign = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
 
@@ -140,6 +142,10 @@ export function IntelTab({
   const [operatingHours, setOperatingHours] = useState("");
   const [accountSummary, setAccountSummary] = useState("");
   const [salesPersonIdEdit, setSalesPersonIdEdit] = useState("");
+  // Account Owner (canonical owner_rep_id on companies — drives email
+  // ingestion fallback + Quote Requests Rep fallback). Edited via the
+  // dedicated PATCH /api/companies/:id/owner endpoint (same RBAC).
+  const [accountOwnerIdEdit, setAccountOwnerIdEdit] = useState("");
 
   // ── Shared Reps state ──────────────────────────────────────────────────────
   const [addSharedRepOpen, setAddSharedRepOpen] = useState(false);
@@ -199,6 +205,16 @@ export function IntelTab({
         salesPersonId: salesPersonIdEdit || null,
         handoffNotes: handoffNotes.trim() || null,
       });
+      // Account Owner is persisted via the dedicated /owner endpoint
+      // (RBAC-gated server-side). Only fire when the value actually
+      // changed to avoid noisy 403s for users without owner-edit perms.
+      const currentOwner = (company as { ownerRepId?: string | null })?.ownerRepId ?? null;
+      const nextOwner = accountOwnerIdEdit || null;
+      if (canEditAccountOwner && currentOwner !== nextOwner) {
+        await apiRequest("PATCH", `/api/companies/${companyId}/owner`, {
+          ownerRepId: nextOwner,
+        });
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId] });
@@ -264,6 +280,7 @@ export function IntelTab({
     setOperatingHours(company?.operatingHours || "");
     setAccountSummary(company?.accountSummary || "");
     setSalesPersonIdEdit(company?.salesPersonId || "");
+    setAccountOwnerIdEdit((company as { ownerRepId?: string | null })?.ownerRepId || "");
     setPortalEdit(true);
   };
 
@@ -358,6 +375,28 @@ export function IntelTab({
                         ))}
                       </select>
                       <p className="text-[11px] text-muted-foreground">Auto-populated from the Salesperson column in uploaded financial data. Override manually if needed.</p>
+                    </div>
+                  )}
+                  {canEditAccountOwner && (
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
+                        <UserCheck className="h-3 w-3" /> Account Owner
+                      </label>
+                      <select
+                        className="w-full border rounded-md px-3 py-1.5 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-ring"
+                        value={accountOwnerIdEdit}
+                        onChange={e => setAccountOwnerIdEdit(e.target.value)}
+                        data-testid="select-account-owner"
+                      >
+                        <option value="">— None —</option>
+                        {assignableUsers
+                          .slice()
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .map(u => (
+                            <option key={u.id} value={u.id}>{u.name}</option>
+                          ))}
+                      </select>
+                      <p className="text-[11px] text-muted-foreground">Default fallback owner for inbound emails and quote requests when no specific rep is matched. Used as the Rep on Quote Requests rows that aren't explicitly assigned.</p>
                     </div>
                   )}
                 </div>
@@ -522,6 +561,27 @@ export function IntelTab({
                         <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><UserCheck className="h-3 w-3" /> Salesperson</p>
                         <p className="text-sm" data-testid="text-salesperson">
                           {spUser ? spUser.name : <span className="text-muted-foreground italic">Not assigned</span>}
+                        </p>
+                      </div>
+                    );
+                  })()}
+                  {(() => {
+                    const ownerId = (company as { ownerRepId?: string | null }).ownerRepId ?? null;
+                    const ownerUser = ownerId
+                      ? (assignableUsers.find(u => u.id === ownerId)
+                          || allUsersForSales.find(u => u.id === ownerId)
+                          || allSalesUsers.find(u => u.id === ownerId))
+                      : null;
+                    if (!ownerId && !canEditAccountOwner) return null;
+                    return (
+                      <div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mb-1"><UserCheck className="h-3 w-3" /> Account Owner</p>
+                        <p className="text-sm" data-testid="text-account-owner">
+                          {ownerUser
+                            ? ownerUser.name
+                            : ownerId
+                              ? <span className="text-muted-foreground italic">Assigned (user not in your view)</span>
+                              : <span className="text-muted-foreground italic">Not assigned</span>}
                         </p>
                       </div>
                     );

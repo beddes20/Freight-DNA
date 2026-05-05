@@ -17,6 +17,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { execSync } from "child_process";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
@@ -3459,6 +3460,73 @@ console.log("\n── Section 32: Quote Requests Mine-only trust contract ──
     /setMineOnly\(false\)[\s\S]{0,300}button-mine-only-show-all/.test(pageSrc)
       || /button-mine-only-show-all[\s\S]{0,300}setMineOnly\(false\)/.test(pageSrc),
     "Show-all button does not call setMineOnly(false) — user has no escape hatch from mine-only-on state",
+  );
+}
+
+// ── Section 35: Account Owner unification (canonical companies.ownerRepId) ─
+//
+// After the Task #1011 / #1012 ownership work landed, the team
+// consolidated on `companies.ownerRepId` as the single source of truth
+// for "Account Owner". This guard locks the contract:
+//   1. Quote Requests Rep fallback reads from the companies-derived
+//      `ownerRepNameByCustomerId` map, NOT from the deprecated
+//      `quote_customers.owner_rep_id` cache.
+//   2. The Intel tab Account Information portlet surfaces Account
+//      Owner (view + edit) with the canonical test ids.
+//   3. Terminology has been unified — no "Quote Owner Rep" label
+//      remains in user-facing UI.
+
+console.log("\n── Section 35: Account Owner unification ──────────────────────────────\n");
+
+{
+  const svcSrc = fs.readFileSync("server/services/customerQuotes.ts", "utf8");
+
+  // (1) The Tier-3 fallback in `enrich()` must read the
+  //     companies-derived map, not the quote_customers cache.
+  const enrichWindow = svcSrc.match(/let repFromCustomerOwner[\s\S]{0,1800}?repFromCustomerOwner = true/);
+  assert(enrichWindow, "Account Owner: could not isolate enrich() Tier-3 fallback for audit");
+  if (enrichWindow) {
+    const block = enrichWindow[0];
+    assert(
+      /opts\.ownerRepNameByCustomerId\?\.get\(r\.customerId\)/.test(block),
+      "Account Owner: enrich() Tier-3 must read from opts.ownerRepNameByCustomerId (companies.ownerRepId source of truth)",
+    );
+    assert(
+      !/customer\?\.ownerRepId/.test(block) && !/customer\.ownerRepId/.test(block),
+      "Account Owner: enrich() Tier-3 must NOT read from customer.ownerRepId (deprecated quote_customers cache)",
+    );
+  }
+}
+
+{
+  const tabSrc = fs.readFileSync("client/src/pages/company-detail/tabs/IntelTab.tsx", "utf8");
+
+  // (2) Intel tab Account Information portlet must expose Account
+  //     Owner with both view and edit test ids.
+  assert(
+    /data-testid="text-account-owner"/.test(tabSrc),
+    "Account Owner: IntelTab must render an Account Owner display row (text-account-owner)",
+  );
+  assert(
+    /data-testid="select-account-owner"/.test(tabSrc),
+    "Account Owner: IntelTab must render an Account Owner editor (select-account-owner) for permissioned users",
+  );
+  assert(
+    /\/api\/companies\/\$\{companyId\}\/owner/.test(tabSrc),
+    "Account Owner: IntelTab save must hit PATCH /api/companies/:id/owner (the RBAC-gated endpoint)",
+  );
+}
+
+{
+  // (3) No "Quote Owner Rep" label anywhere in client code — that
+  //     name was the pre-unification terminology.
+  const grep = execSync(
+    "rg -n --no-heading 'Quote Owner Rep' client/ || true",
+    { encoding: "utf8" },
+  ).trim();
+  assert(
+    grep === "",
+    `Account Owner: legacy "Quote Owner Rep" label must be relabeled to "Account Owner" everywhere. Found:\n${grep}`,
   );
 }
 

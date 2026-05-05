@@ -67,7 +67,7 @@ export function CustomerEmailIdentitiesCard({ companyId }: Props) {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="text-xs">
-          <span className="text-muted-foreground">Owner Rep (fallback when inbound email lands in an unmapped mailbox): </span>
+          <span className="text-muted-foreground">Account Owner (fallback when inbound email lands in an unmapped mailbox): </span>
           <span className="font-medium" data-testid="text-owner-rep-name">{ownerName ?? "— None set —"}</span>
           <p className="text-[11px] text-muted-foreground mt-1">
             Edit owner via the company's edit dialog (admin/director/NAM only).

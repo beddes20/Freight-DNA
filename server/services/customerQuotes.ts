@@ -1111,19 +1111,17 @@ function enrich(
         const preferred = displayNames?.get(r.repId);
         repName = preferred ?? repMap.get(r.repId)?.name ?? "—";
       } else if (!r.repId) {
-        // Task #1012 — when the row has no explicit rep, fall back to
-        // the linked customer's owner rep for *display only*. The
-        // underlying `repId` stays null so the row remains "unassigned"
-        // until something explicitly writes to it.
-        const customer = customerMap.get(r.customerId);
-        const ownerRepId = customer?.ownerRepId ?? null;
-        if (ownerRepId) {
-          const preferred = displayNames?.get(ownerRepId);
-          const ownerName = preferred ?? repMap.get(ownerRepId)?.name ?? null;
-          if (ownerName) {
-            repName = ownerName;
-            repFromCustomerOwner = true;
-          }
+        // Account Owner fallback (consolidation of Task #1011 + #1012).
+        // Source of truth is `companies.ownerRepId` — surfaced via
+        // `ownerRepNameByCustomerId` in `loadContext` (joins
+        // quote_customers → companies → users). The legacy
+        // `quote_customers.owner_rep_id` column is intentionally NOT
+        // read here — it's a deprecated cache kept for one release of
+        // safety, but the live signal must come from the CRM master.
+        const ownerName = opts.ownerRepNameByCustomerId?.get(r.customerId) ?? null;
+        if (ownerName) {
+          repName = ownerName;
+          repFromCustomerOwner = true;
         }
       }
     }
