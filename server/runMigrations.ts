@@ -5488,6 +5488,16 @@ export async function runMigrations() {
         ON quote_opportunities (organization_id, snoozed_until)
         WHERE snoozed_until IS NOT NULL
     `);
+    // Task #1053 — Email→Exec 2. Structured hint blob captured at ingest
+    // so the Needs Routing drawer can render parser provenance + classifier
+    // confidence and the rep can one-click "Confirm & Create" without
+    // retyping. Idempotent ADD COLUMN IF NOT EXISTS so deploys are safe
+    // regardless of whether the env was previously brought up via
+    // `npm run db:push` (dev) or this migration runner (production).
+    await clientSnoozedUntil.query(`
+      ALTER TABLE quote_opportunities
+        ADD COLUMN IF NOT EXISTS quote_hints JSONB
+    `);
   } finally {
     clientSnoozedUntil.release();
   }

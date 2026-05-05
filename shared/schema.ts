@@ -5889,6 +5889,25 @@ export const quoteOpportunities = pgTable("quote_opportunities", {
   routingDecisionAt: timestamp("routing_decision_at"),
   routingDecisionByUserId: varchar("routing_decision_by_user_id").references(() => users.id, { onDelete: "set null" }),
   routingNote: text("routing_note"),
+  // Task #1053 — Email→Exec 2. The structured hint blob captured at the
+  // moment of ingest so the Needs Routing drawer can render parser-extracted
+  // fields with their provenance + confidence and the rep can one-click
+  // "Confirm & Create" instead of retyping the lane/equipment/rate. Shape:
+  //   {
+  //     pickupCity, pickupState, deliveryCity, deliveryState: string|null,
+  //     equipment: string|null,
+  //     quotedRate: number|null,
+  //     customerHint: string|null,    // matched/derived customer name
+  //     contactHint:  { email: string|null, name: string|null } | null,
+  //     source: "regex" | "ai",       // which parser path won
+  //     confidence: number|null,      // classifier signal confidence (0..1)
+  //     extractedAt: ISO string
+  //   }
+  // Persisted on every ingested row (not just needs_routing) so the same
+  // structure is available if a row is later demoted/re-reviewed; idempotent
+  // by virtue of the (orgId, source=email, sourceReference) dedupe in the
+  // ingest path itself.
+  quoteHints: jsonb("quote_hints"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => ({
   orgIdx: index("quote_opportunities_org_idx").on(t.organizationId),

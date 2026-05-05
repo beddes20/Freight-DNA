@@ -775,6 +775,11 @@ export async function ingestQuoteFromEmail(
      */
     routingStatus?: "auto_customer" | "needs_routing" | "auto_carrier";
     routingNote?: string | null;
+    /** Task #1053 — Email→Exec 2. Classifier signal confidence (0..1) at
+     * the time the row was ingested. Persisted into `quoteHints.confidence`
+     * so the Needs Routing drawer can render a confidence badge alongside
+     * the parsed fields without re-running the classifier. */
+    hintConfidence?: number | null;
   },
 ): Promise<IngestionResult> {
   if (message.direction !== "inbound") {
@@ -821,9 +826,20 @@ export async function ingestQuoteFromEmail(
     body: message.body,
     referenceDate,
   });
+  // Task #1053 — track which parser path produced the row so the Needs
+  // Routing drawer can render a "regex" vs "ai" provenance badge. Extracted
+  // signals come from the LLM-based inline classifier upstream, so we tag
+  // both that path and the AI fallback as "ai"; only the deterministic
+  // heuristic regex parser counts as "regex".
   let parsed = fromExtracted ?? fromHeuristic;
+  let hintSource: "regex" | "ai" | null = fromExtracted
+    ? "ai"
+    : fromHeuristic
+      ? "regex"
+      : null;
   if (!parsed && opts?.useAiFallback !== false) {
     parsed = await parseQuoteEmailAi({ subject: message.subject, body: message.body });
+    if (parsed) hintSource = "ai";
   }
   if (!parsed) {
     // Task #952 — record the parse failure so an operator can:
@@ -1023,6 +1039,27 @@ export async function ingestQuoteFromEmail(
     // keep their behaviour without an explicit flag.
     routingStatus: opts?.routingStatus ?? "auto_customer",
     routingNote: opts?.routingNote ?? null,
+    // Task #1053 — Email→Exec 2. Persist the structured hint blob so the
+    // Needs Routing drawer can render parser provenance + confidence and
+    // the rep can one-click "Confirm & Create" instead of retyping.
+    quoteHints: {
+      pickupCity: parsed.originCity,
+      pickupState: parsed.originState,
+      deliveryCity: parsed.destCity,
+      deliveryState: parsed.destState,
+      equipment: parsed.equipment,
+      quotedRate: parsed.quotedAmount,
+      customerHint: customerName,
+      contactHint: message.fromEmail
+        ? {
+            email: message.fromEmail,
+            name: parseFromHeader(message.fromEmail)?.displayName ?? null,
+          }
+        : null,
+      source: hintSource,
+      confidence: typeof opts?.hintConfidence === "number" ? opts.hintConfidence : null,
+      extractedAt: new Date().toISOString(),
+    },
   }).returning();
 
   await db.insert(quoteEvents).values({

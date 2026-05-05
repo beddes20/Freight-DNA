@@ -317,6 +317,10 @@ async function classifyOne(message: EmailMessage, signal: AbortSignal): Promise<
           extractedData: quoteSignal?.extractedData ?? null,
           routingStatus,
           routingNote,
+          // Task #1053 — pass through the classifier's quote-signal
+          // confidence so it lands in `quoteHints.confidence` and the
+          // Needs Routing drawer can surface it as a badge.
+          hintConfidence: signalConf,
         });
         if (result.status === "ingested") {
           _totalQuoteIngestedInline++;

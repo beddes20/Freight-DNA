@@ -1572,6 +1572,36 @@ function NeedsRoutingPanel({
           [r.destCity, r.destState].filter(Boolean).join(", "),
         ].filter(Boolean).join(" → ") || "(lane not parsed)";
         const rememberMode = remember[r.id] ?? "none";
+        // Task #1053 — Email→Exec 2. Render the structured hint blob so
+        // the rep sees parser provenance + confidence at a glance and can
+        // one-click "Confirm & Create" without retyping. Hints are always
+        // present on rows the parser produced (rows that failed parsing
+        // are not ingested at all), so we render the panel whenever the
+        // backend returned a `quoteHints` object.
+        const hints = r.quoteHints as
+          | {
+              pickupCity?: string | null;
+              pickupState?: string | null;
+              deliveryCity?: string | null;
+              deliveryState?: string | null;
+              equipment?: string | null;
+              quotedRate?: number | string | null;
+              customerHint?: string | null;
+              contactHint?: { email?: string | null; name?: string | null } | null;
+              source?: "regex" | "ai" | null;
+              confidence?: number | null;
+            }
+          | null
+          | undefined;
+        const hasHints = !!hints;
+        const ratePretty =
+          hints?.quotedRate != null && hints.quotedRate !== ""
+            ? `$${Number(hints.quotedRate).toLocaleString()}`
+            : null;
+        const confPct =
+          typeof hints?.confidence === "number"
+            ? `${Math.round(hints.confidence * 100)}%`
+            : null;
         return (
           <Card key={r.id} className="p-3" data-testid={`row-needs-routing-${r.id}`}>
             <div className="flex items-start justify-between gap-3">
@@ -1587,6 +1617,57 @@ function NeedsRoutingPanel({
                   <span className="text-muted-foreground">Lane:</span> {lane}
                   {r.equipment ? <span className="ml-2 text-muted-foreground">· {r.equipment}</span> : null}
                 </div>
+                {hasHints ? (
+                  <div
+                    className="mt-2 rounded-md border border-border/60 bg-muted/30 px-2 py-1.5 text-xs space-y-1"
+                    data-testid={`hints-panel-${r.id}`}
+                  >
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="font-medium text-foreground">Hints</span>
+                      {hints?.source ? (
+                        <Badge
+                          variant="outline"
+                          className="h-4 px-1 text-[10px] uppercase"
+                          data-testid={`badge-hint-source-${r.id}`}
+                        >
+                          {hints.source}
+                        </Badge>
+                      ) : null}
+                      {confPct ? (
+                        <Badge
+                          variant="secondary"
+                          className="h-4 px-1 text-[10px]"
+                          data-testid={`badge-hint-confidence-${r.id}`}
+                        >
+                          conf {confPct}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-muted-foreground">
+                      <div data-testid={`hint-pickup-${r.id}`}>
+                        <span className="text-foreground/70">Pickup:</span>{" "}
+                        {[hints?.pickupCity, hints?.pickupState].filter(Boolean).join(", ") || "—"}
+                      </div>
+                      <div data-testid={`hint-delivery-${r.id}`}>
+                        <span className="text-foreground/70">Delivery:</span>{" "}
+                        {[hints?.deliveryCity, hints?.deliveryState].filter(Boolean).join(", ") || "—"}
+                      </div>
+                      <div data-testid={`hint-equipment-${r.id}`}>
+                        <span className="text-foreground/70">Equipment:</span> {hints?.equipment || "—"}
+                      </div>
+                      <div data-testid={`hint-rate-${r.id}`}>
+                        <span className="text-foreground/70">Quoted rate:</span> {ratePretty || "—"}
+                      </div>
+                      <div data-testid={`hint-customer-${r.id}`}>
+                        <span className="text-foreground/70">Customer:</span> {hints?.customerHint || "—"}
+                      </div>
+                      <div data-testid={`hint-contact-${r.id}`}>
+                        <span className="text-foreground/70">Contact:</span>{" "}
+                        {hints?.contactHint?.email || "—"}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
               </div>
               <div className="flex flex-col items-end gap-2 shrink-0">
                 <div className="flex items-center gap-1">
@@ -1596,7 +1677,7 @@ function NeedsRoutingPanel({
                     disabled={isRouting}
                     data-testid={`button-route-customer-${r.id}`}
                     onClick={() => onRoute(r.id, "customer", rememberMode)}
-                  >Customer</Button>
+                  >{hasHints ? "Confirm & Create" : "Customer"}</Button>
                   <Button
                     size="sm"
                     variant="outline"

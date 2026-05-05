@@ -4761,3 +4761,87 @@ if (failures.length > 0) {
   for (const f of failures) console.error(`  - ${f}`);
   process.exit(1);
 }
+
+// ── Section 1053: Email→Exec 2 — Needs Routing carries email hints ─────────
+// Locks the contract that every ingested quote_opportunity row carries a
+// structured `quoteHints` blob (parser-extracted lane/equipment/rate +
+// customer/contact + source provenance + classifier confidence) so the
+// Needs Routing drawer can render hints at a glance and the rep can
+// one-click "Confirm & Create" without retyping. Idempotency on
+// (orgId, source=email, sourceReference) is provided by the existing
+// dedupe inside `ingestQuoteFromEmail` (Section 33), not a second
+// pipeline.
+console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ──────────────────\n");
+
+(function pinNeedsRoutingHintsContract() {
+  const schemaSrc = readFile("shared/schema.ts");
+  const ingestSrc = readFile("server/services/quoteEmailIngestion.ts");
+  const classifierSrc = readFile("server/services/inlineEmailClassifier.ts");
+  const routesSrc = readFile("server/routes/customerQuotes.ts");
+  const pageSrc = readFile("client/src/pages/quote-requests.tsx");
+
+  assert(
+    "shared/schema.ts — quoteOpportunities.quoteHints jsonb column exists",
+    /quoteHints:\s*jsonb\(\s*["']quote_hints["']\s*\)/.test(schemaSrc),
+  );
+  assert(
+    "quoteEmailIngestion — accepts opts.hintConfidence on ingestQuoteFromEmail",
+    /hintConfidence\?:\s*number\s*\|\s*null/.test(ingestSrc),
+  );
+  assert(
+    "quoteEmailIngestion — derives hintSource ('regex'|'ai') from parser path",
+    /hintSource\s*:\s*"regex"\s*\|\s*"ai"/.test(ingestSrc),
+  );
+  assert(
+    "quoteEmailIngestion — writes quoteHints into the insert payload",
+    /quoteHints:\s*\{[\s\S]{0,1200}pickupCity[\s\S]{0,1200}deliveryCity[\s\S]{0,1200}equipment[\s\S]{0,1200}quotedRate[\s\S]{0,1200}customerHint[\s\S]{0,1200}contactHint[\s\S]{0,400}source[\s\S]{0,400}confidence/.test(ingestSrc),
+  );
+  assert(
+    "inlineEmailClassifier — passes hintConfidence: signalConf to ingestQuoteFromEmail",
+    /ingestQuoteFromEmail\([\s\S]{0,800}hintConfidence:\s*signalConf/.test(classifierSrc),
+  );
+  assert(
+    "routes/customerQuotes.ts — needs-routing SELECT exposes q.quote_hints AS \"quoteHints\"",
+    /q\.quote_hints\s+AS\s+"quoteHints"/.test(routesSrc),
+  );
+  assert(
+    "quote-requests.tsx — NeedsRoutingPanel reads r.quoteHints",
+    /r\.quoteHints/.test(pageSrc),
+  );
+  assert(
+    "quote-requests.tsx — renders hints panel data-testid=hints-panel-${id}",
+    /hints-panel-\$\{r\.id\}/.test(pageSrc),
+  );
+  assert(
+    "quote-requests.tsx — renders source + confidence badges",
+    /badge-hint-source-/.test(pageSrc) && /badge-hint-confidence-/.test(pageSrc),
+  );
+  assert(
+    "quote-requests.tsx — Customer button surfaces 'Confirm & Create' label when hints present",
+    /Confirm & Create/.test(pageSrc),
+  );
+  // Idempotency contract — the (orgId, source=email, sourceReference) dedupe
+  // in ingestQuoteFromEmail (Section 33) is the single source of truth; this
+  // task must NOT introduce a second pipeline that creates opps from hints.
+  assert(
+    "quoteEmailIngestion — idempotent dedupe on (org, source=email, sourceReference) is preserved",
+    /skipped_duplicate/.test(ingestSrc) &&
+      /eq\(quoteOpportunities\.sourceReference,\s*ref\)/.test(ingestSrc),
+  );
+  // The /route endpoint backs the "Confirm & Create" button. A
+  // double-click on the drawer must NOT 409 — the second call has to
+  // return ok with `idempotent:true` so the optimistic UI stays stable.
+  assert(
+    "routes/customerQuotes.ts — POST /:id/route is idempotent when current status already equals target",
+    /opp\.routingStatus === newStatus[\s\S]{0,400}idempotent:\s*true/.test(routesSrc),
+  );
+  // Production-deploy safety — the column must be added by the manual
+  // migration runner too, not only via dev `npm run db:push`. Without
+  // this, a fresh production deploy would fail at first ingest with
+  // "column quote_hints does not exist".
+  const migrationsSrc = readFile("server/runMigrations.ts");
+  assert(
+    "server/runMigrations.ts — adds quote_opportunities.quote_hints JSONB (idempotent ADD COLUMN IF NOT EXISTS)",
+    /ALTER TABLE quote_opportunities[\s\S]{0,300}ADD COLUMN IF NOT EXISTS quote_hints JSONB/.test(migrationsSrc),
+  );
+})();

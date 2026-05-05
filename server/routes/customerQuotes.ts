@@ -2517,6 +2517,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
                q.dest_city AS "destCity", q.dest_state AS "destState",
                q.equipment, q.request_date AS "requestDate",
                q.routing_status AS "routingStatus", q.routing_note AS "routingNote",
+               q.quote_hints AS "quoteHints",
                q.source_reference AS "sourceReference",
                c.name AS "customerName",
                em.id AS "messageId", em.subject AS "subject", em.from_email AS "fromEmail",
@@ -2595,14 +2596,24 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       `);
       const opp = oppRow.rows?.[0];
       if (!opp) return res.status(404).json({ error: "Quote not found" });
-      if (opp.routingStatus !== "needs_routing") {
-        return res.status(409).json({ error: "Quote is not in needs_routing state", currentStatus: opp.routingStatus });
-      }
 
       const newStatus =
         decision === "customer" ? "routed_customer"
         : decision === "carrier" ? "routed_carrier"
         : "dismissed";
+
+      // Task #1053 — idempotency contract for one-click "Confirm & Create".
+      // A double-click on the Needs Routing drawer's confirm button (or a
+      // race between two reps clicking simultaneously) must NOT create a
+      // duplicate row or 409. If the row is already in the requested
+      // terminal state we return ok with `idempotent:true` so the UI can
+      // collapse the drawer and the optimistic refetch stays consistent.
+      if (opp.routingStatus === newStatus) {
+        return res.json({ ok: true, id, newStatus, remembered: "none", idempotent: true });
+      }
+      if (opp.routingStatus !== "needs_routing") {
+        return res.status(409).json({ error: "Quote is not in needs_routing state", currentStatus: opp.routingStatus });
+      }
 
       await db.update(quoteOpportunities).set({
         routingStatus: newStatus,
