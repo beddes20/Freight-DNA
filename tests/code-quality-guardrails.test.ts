@@ -3440,7 +3440,101 @@ console.log("\n── Section 32: Quote Requests Mine-only trust contract ──
   );
 }
 
-// ── Summary ───────────────────────────────────────────────────────────────────
+// ── Section 34: Phase 1 Response-Time Visibility (read-only contract) ─────
+//
+// Locks in the contract for Phase 1: response-time signal must come from
+// the existing `quote_opportunities.responseTimeHours` column and a
+// read-only join against `email_messages`. Any change that re-routes
+// through new ingestion / classifier / webhook / backfill code must
+// trip these assertions BEFORE merging — Phase 2 (Playbook) and
+// Phase 3 (Coaching/Map) live on top of this contract.
+
+console.log("\n── Section 34: Phase 1 Response-Time Visibility (read-only) ──────────\n");
+
+{
+  const svcPath = "server/services/customerQuotes.ts";
+  const svcSrc = fs.readFileSync(svcPath, "utf8");
+
+  // (1) EnrichedQuote must project firstReplyMinutes + firstQuoteMinutes
+  //     so the UI never has to reach into raw quoteOpportunities.
+  assert(
+    /firstReplyMinutes:\s*number\s*\|\s*null/.test(svcSrc)
+      && /firstQuoteMinutes:\s*number\s*\|\s*null/.test(svcSrc),
+    "Phase 1: EnrichedQuote must declare firstReplyMinutes/firstQuoteMinutes (number|null) — UI badges depend on it",
+  );
+
+  // (2) attachResponseTimes must exist and be invoked from listQuotes
+  //     and getActionQueue (the only two surfaces that hand visible
+  //     pages to the UI).
+  assert(
+    /async function attachResponseTimes\(orgId: string, rows: EnrichedQuote\[\]\)/.test(svcSrc),
+    "Phase 1: attachResponseTimes(orgId, rows) helper missing in customerQuotes.ts",
+  );
+  const attachCalls = (svcSrc.match(/await attachResponseTimes\(/g) ?? []).length;
+  assert(
+    attachCalls >= 2,
+    `Phase 1: expected attachResponseTimes to be awaited from listQuotes and getActionQueue (≥2 sites), found ${attachCalls}`,
+  );
+
+  // (3) Read-only contract: the new helper must not write to email_messages
+  //     (or any other ingestion-side table). Detect any insert/update/upsert
+  //     within the helper body.
+  const helperMatch = svcSrc.match(/async function attachResponseTimes[\s\S]*?\n\}\n/);
+  assert(helperMatch, "Phase 1: could not isolate attachResponseTimes body for read-only audit");
+  if (helperMatch) {
+    const body = helperMatch[0];
+    assert(
+      !/db\.(insert|update|delete)\(/.test(body),
+      "Phase 1: attachResponseTimes must be read-only (no db.insert/update/delete) — Phase 1 explicitly forbids re-opening email plumbing",
+    );
+    assert(
+      !/processUserMailboxEmail|ingestQuoteFromEmail|classifyEmail/.test(body),
+      "Phase 1: attachResponseTimes must not call ingestion/classifier helpers — read-only derivation only",
+    );
+  }
+
+  // (4) Snapshot must surface the two new aggregate KPIs so the strip
+  //     can render avg quote time + % quoted ≤ 60 min.
+  assert(
+    /avgFirstQuoteMin:\s*number/.test(svcSrc)
+      && /pctFirstQuoteUnder60:\s*number/.test(svcSrc)
+      && /quotedCount:\s*number/.test(svcSrc),
+    "Phase 1: Snapshot.kpis must declare avgFirstQuoteMin, pctFirstQuoteUnder60, quotedCount",
+  );
+  assert(
+    /avgFirstQuoteMin,\s*pctFirstQuoteUnder60,\s*quotedCount/.test(svcSrc),
+    "Phase 1: getSnapshot return must wire {avgFirstQuoteMin, pctFirstQuoteUnder60, quotedCount} into kpis",
+  );
+}
+
+{
+  const pagePath = "client/src/pages/quote-requests.tsx";
+  const pageSrc = fs.readFileSync(pagePath, "utf8");
+
+  // (5) ResponseCell component must exist and be wired into the row.
+  assert(
+    /function ResponseCell\(/.test(pageSrc),
+    "Phase 1: ResponseCell component missing in quote-requests.tsx",
+  );
+  assert(
+    /<ResponseCell\s+quote=\{q\}\s*\/>/.test(pageSrc),
+    "Phase 1: ResponseCell must be rendered inside the quote row",
+  );
+  assert(
+    /data-testid=\{`badge-reply-\$\{quote\.id\}`\}/.test(pageSrc)
+      && /data-testid=\{`badge-quote-\$\{quote\.id\}`\}/.test(pageSrc),
+    "Phase 1: ResponseCell must expose badge-reply-{id} and badge-quote-{id} test IDs",
+  );
+
+  // (6) Both response-time KPI tiles must be present.
+  assert(
+    /testId="kpi-avg-quote-time"/.test(pageSrc)
+      && /testId="kpi-pct-quoted-under-60"/.test(pageSrc),
+    "Phase 1: KPI strip must include kpi-avg-quote-time and kpi-pct-quoted-under-60 tiles",
+  );
+}
+
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 if (failures.length > 0) {
   console.error("Failures:");

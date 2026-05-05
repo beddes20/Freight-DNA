@@ -83,6 +83,20 @@ export type EnrichedQuote = QuoteOpportunity & {
   // (`state: "na"` for non-pending rows) so client code never has to guard.
   slaState: import("@shared/quoteSla").QuoteSlaState;
   minutesSinceRequest: number;
+  // Phase 1 — Response Time Visibility.
+  // Both fields are minute-granularity, derived read-only from
+  // existing data (no new ingest/classifier work):
+  //   firstReplyMinutes: minutes from inbound (requestDate) to the
+  //     earliest outbound message in the SAME email_messages.thread_id.
+  //     Computed live in `attachResponseTimes` for the visible page.
+  //     null when the source thread can't be resolved or no outbound
+  //     reply exists yet.
+  //   firstQuoteMinutes: existing `responseTimeHours` * 60 (rounded).
+  //     Populated by the ingest pipeline when the priced reply is
+  //     detected; null when no priced reply has been recorded.
+  // The UI badges these against fixed SLA bands (≤15m / ≤60m).
+  firstReplyMinutes: number | null;
+  firstQuoteMinutes: number | null;
 };
 
 export type AlertSeverity = "high" | "medium" | "low";
@@ -146,6 +160,13 @@ export type Snapshot = {
     avgQuoted: number; avgCarrierCost: number;
     avgMarginDollar: number; avgMarginPct: number;
     avgResponseTime: number; pending: number; expiringSoon: number;
+    // Phase 1 — Response Time Visibility (read-only aggregates over the
+    // existing `responseTimeHours` column; no new ingestion). Computed
+    // from `won + quoted + lost` rows that have a recorded priced
+    // reply time. `pctFirstQuoteUnder60` is a percent (0–100).
+    avgFirstQuoteMin: number;
+    pctFirstQuoteUnder60: number;
+    quotedCount: number;
     // Today's email-sourced opps (post customer-only chokepoint). See
     // `automation-counters` for the leakage-path counter.
     autoCapturedToday: number;
@@ -998,6 +1019,15 @@ function enrich(
       outcomeReasonLabel: r.outcomeReasonId ? reasonMap.get(r.outcomeReasonId)?.label ?? null : null,
       slaState: sla.state,
       minutesSinceRequest: sla.minutesSinceRequest,
+      // Phase 1 — read-only response-time projections.
+      // firstReplyMinutes is filled later by `attachResponseTimes`
+      // (visible-page batch). firstQuoteMinutes is derived directly
+      // from the existing `responseTimeHours` column so no new
+      // ingestion path is needed.
+      firstReplyMinutes: null,
+      firstQuoteMinutes: r.responseTimeHours != null && num(r.responseTimeHours) > 0
+        ? Math.round(num(r.responseTimeHours) * 60)
+        : null,
     };
   });
 }
@@ -1161,11 +1191,67 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
 
   const page = enriched.slice(offset, offset + limit);
   await attachSourceThreads(orgId, page);
+  await attachResponseTimes(orgId, page);
   return {
     rows: page,
     total: enriched.length,
     offset, limit,
   };
+}
+
+/**
+ * Phase 1 — Response Time Visibility.
+ *
+ * Populates `firstReplyMinutes` for each row in the visible page by
+ * batch-querying `email_messages` for the earliest outbound message in
+ * the same `thread_id` after the inbound (requestDate). Strictly
+ * read-only — no new ingestion / classifier / webhook plumbing.
+ *
+ * Constraints:
+ *   - Bounded N: only runs for rows that already have `sourceThreadId`
+ *     attached (typically email-sourced rows on a 50-row page).
+ *   - Single grouped query per call (one `thread_id IN (…)` lookup).
+ *   - Falls through silently when no thread / no outbound found.
+ *
+ * `firstQuoteMinutes` is set in `enrich` from the existing
+ * `responseTimeHours` column and is NOT touched here.
+ */
+async function attachResponseTimes(orgId: string, rows: EnrichedQuote[]): Promise<void> {
+  const threadIds = Array.from(new Set(
+    rows.map(r => r.sourceThreadId).filter((t): t is string => !!t),
+  ));
+  if (threadIds.length === 0) return;
+  const inList = sql.join(threadIds.map(t => sql`${t}`), sql`, `);
+  const result = await db.execute<{
+    thread_id: string;
+    first_outbound_at: Date | string | null;
+  }>(sql`
+    SELECT thread_id,
+           MIN(COALESCE(provider_sent_at, created_at)) AS first_outbound_at
+      FROM email_messages
+     WHERE org_id = ${orgId}
+       AND direction = 'outbound'
+       AND thread_id IN (${inList})
+     GROUP BY thread_id
+  `);
+  const byThread = new Map<string, Date>();
+  for (const r of result.rows) {
+    if (r.first_outbound_at) {
+      byThread.set(r.thread_id, new Date(r.first_outbound_at as string | Date));
+    }
+  }
+  for (const r of rows) {
+    if (!r.sourceThreadId) continue;
+    const firstOut = byThread.get(r.sourceThreadId);
+    if (!firstOut) continue;
+    const inboundMs = r.requestDate.getTime();
+    const deltaMin = Math.round((firstOut.getTime() - inboundMs) / 60_000);
+    // Negative deltas can happen when the priced reply was logged
+    // ahead of the inbound (clock skew, or replies imported via
+    // self-heal before the inbound). Drop them rather than show a
+    // misleading negative reply time.
+    if (deltaMin >= 0) r.firstReplyMinutes = deltaMin;
+  }
 }
 
 /**
@@ -1278,6 +1364,7 @@ export async function getActionQueue(
     [...slaBreaching, ...expiringToday].map(r => [r.id, r] as const),
   ).values());
   await attachSourceThreads(orgId, merged);
+  await attachResponseTimes(orgId, merged);
 
   return { slaBreaching, expiringToday };
 }
@@ -1568,6 +1655,21 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     const q = num(r.quotedAmount); if (!q) return s; return s + ((q - num(r.carrierPaid)) / q) * 100;
   }, 0) / wonWithCarrier.length : 0;
   const avgResponseTime = total > 0 ? filtered.reduce((s, r) => s + num(r.responseTimeHours), 0) / total : 0;
+
+  // Phase 1 — Response Time Visibility (Snapshot aggregates).
+  // Read-only: derived from the existing `responseTimeHours` column
+  // populated by ingest. We only count rows that have a recorded
+  // priced-reply time (responseTimeHours > 0); pending rows where
+  // we never replied are excluded so a quiet day doesn't read as
+  // "0 minute average". Percentages over the same denominator.
+  const withQuoteTime = filtered.filter(r => num(r.responseTimeHours) > 0);
+  const quotedCount = withQuoteTime.length;
+  const avgFirstQuoteMin = quotedCount > 0
+    ? withQuoteTime.reduce((s, r) => s + num(r.responseTimeHours) * 60, 0) / quotedCount
+    : 0;
+  const pctFirstQuoteUnder60 = quotedCount > 0
+    ? (withQuoteTime.filter(r => num(r.responseTimeHours) * 60 <= 60).length / quotedCount) * 100
+    : 0;
 
   const now = new Date();
   const expiringSoon = pending.filter(r => r.validThrough && r.validThrough.getTime() - now.getTime() < 3 * 24 * 3600 * 1000 && r.validThrough.getTime() > now.getTime()).length;
@@ -1920,6 +2022,7 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
     kpis: {
       total, won: won.length, lost: lost.length, winRate, avgQuoted, avgCarrierCost,
       avgMarginDollar, avgMarginPct, avgResponseTime, pending: pending.length, expiringSoon,
+      avgFirstQuoteMin, pctFirstQuoteUnder60, quotedCount,
       autoCapturedToday,
       pendingLast7d,
       trend,

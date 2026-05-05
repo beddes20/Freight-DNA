@@ -143,6 +143,12 @@ type Quote = {
   // Free-email sender flag: not server-computed today; we infer from
   // sender domain when source thread metadata is available.
   isFreeEmailSender?: boolean;
+  // Phase 1 — Response Time Visibility (read-only projections from
+  // existing quote_opportunities + email_messages data; no new
+  // ingestion). Both fields can be null when the data isn't there yet
+  // (e.g. no priced reply, or non-email source with no thread).
+  firstReplyMinutes?: number | null;
+  firstQuoteMinutes?: number | null;
 };
 
 type ListResult = { rows: Quote[]; total: number; offset: number; limit: number };
@@ -184,6 +190,12 @@ type Snapshot = {
     avgResponseTime: number;
     pending: number;
     expiringSoon: number;
+    // Phase 1 — Response Time Visibility KPIs. Optional during rollout
+    // so an old client doesn't break against a server that's been
+    // reverted; runtime renders fall back to "—" when missing.
+    avgFirstQuoteMin?: number;
+    pctFirstQuoteUnder60?: number;
+    quotedCount?: number;
     // Server-side count of today's email-sourced opps. Optional during rollout.
     autoCapturedToday?: number;
     // Task #1003 — org-wide pending count over the last 7 days,
@@ -922,6 +934,43 @@ function QuoteRequestsInner(): JSX.Element {
             testId="kpi-won-today"
             onClick={() => { setStatus("won"); setAge("today"); }}
           />
+          {/* Phase 1 — Response Time Visibility KPIs (read-only,
+              derived from existing responseTimeHours). Rendered next
+              to "Past SLA" so the operator sees turnaround signal in
+              the same KPI strip. */}
+          <KpiTile
+            label="Avg quote time"
+            value={(() => {
+              const m = snapshotQuery.data?.kpis?.avgFirstQuoteMin;
+              const n = snapshotQuery.data?.kpis?.quotedCount;
+              if (m == null || !n) return "—";
+              return m < 60 ? `${Math.round(m)}m` : `${(m / 60).toFixed(1)}h`;
+            })()}
+            sub={
+              snapshotQuery.data?.kpis?.quotedCount
+                ? `${snapshotQuery.data.kpis.quotedCount} priced replies`
+                : "No priced replies"
+            }
+            isLoading={snapshotQuery.isLoading}
+            testId="kpi-avg-quote-time"
+          />
+          <KpiTile
+            label="% quoted ≤ 60 min"
+            value={(() => {
+              const p = snapshotQuery.data?.kpis?.pctFirstQuoteUnder60;
+              const n = snapshotQuery.data?.kpis?.quotedCount;
+              if (p == null || !n) return "—";
+              return `${Math.round(p)}%`;
+            })()}
+            tone={(() => {
+              const p = snapshotQuery.data?.kpis?.pctFirstQuoteUnder60 ?? 0;
+              const n = snapshotQuery.data?.kpis?.quotedCount ?? 0;
+              if (!n) return "default";
+              return p >= 70 ? "success" : p >= 40 ? "amber" : "danger";
+            })()}
+            isLoading={snapshotQuery.isLoading}
+            testId="kpi-pct-quoted-under-60"
+          />
           <KpiTile
             label="Auto-captured today"
             icon={<Sparkles className="h-3 w-3" />}
@@ -1217,6 +1266,73 @@ function QuoteRequestsInner(): JSX.Element {
   );
 }
 
+// ─── ResponseCell ─────────────────────────────────────────────────────────
+// Phase 1 — Response Time Visibility. Renders two compact badges per
+// row: "Reply in Xm" (derived live from email_messages, may be null)
+// and "Quoted in Xm" (from existing responseTimeHours column, may be
+// null). Bands are fixed: Reply ≤15m green / ≤60m amber / >60m red;
+// Quote ≤60m green / ≤240m amber / >240m red. Pure presentation —
+// no fetch, no mutation.
+
+function fmtMin(m: number): string {
+  if (m < 60) return `${m}m`;
+  const h = m / 60;
+  if (h < 24) return `${h.toFixed(h < 10 ? 1 : 0)}h`;
+  return `${Math.round(h / 24)}d`;
+}
+
+function ResponseCell({ quote }: { quote: Quote }): JSX.Element {
+  const reply = quote.firstReplyMinutes ?? null;
+  const quoted = quote.firstQuoteMinutes ?? null;
+  const replyTone =
+    reply == null ? "muted" :
+    reply <= 15 ? "ok" :
+    reply <= 60 ? "warn" : "bad";
+  const quoteTone =
+    quoted == null ? "muted" :
+    quoted <= 60 ? "ok" :
+    quoted <= 240 ? "warn" : "bad";
+  const cls = (t: string): string =>
+    t === "ok"   ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-300 border-emerald-500/30" :
+    t === "warn" ? "bg-amber-500/10 text-amber-600 dark:text-amber-300 border-amber-500/30" :
+    t === "bad"  ? "bg-red-500/10 text-red-600 dark:text-red-300 border-red-500/30" :
+                   "bg-muted/40 text-muted-foreground border-border";
+  return (
+    <div className="flex items-center gap-1">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={`inline-flex items-center px-1.5 h-4 text-[9px] font-medium rounded border ${cls(replyTone)}`}
+            data-testid={`badge-reply-${quote.id}`}
+          >
+            {reply == null ? "Reply —" : `Reply ${fmtMin(reply)}`}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {reply == null
+            ? "No outbound reply recorded on this thread yet."
+            : `First outbound reply on this thread, ${fmtMin(reply)} after the inbound. Target ≤15m.`}
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={`inline-flex items-center px-1.5 h-4 text-[9px] font-medium rounded border ${cls(quoteTone)}`}
+            data-testid={`badge-quote-${quote.id}`}
+          >
+            {quoted == null ? "Quote —" : `Quote ${fmtMin(quoted)}`}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          {quoted == null
+            ? "No priced reply recorded yet (responseTimeHours unset)."
+            : `Priced reply sent ${fmtMin(quoted)} after the request. Target ≤60m.`}
+        </TooltipContent>
+      </Tooltip>
+    </div>
+  );
+}
+
 // ─── KpiTile ──────────────────────────────────────────────────────────────
 
 function KpiTile({
@@ -1506,6 +1622,9 @@ function ListTable({
               <th className="py-2 px-3">Age</th>
               <SortableHeader label="Status" k="outcomeStatus" sortKey={sortKey as SortKey} sortDir={sortDir} onSort={onSort} />
               <SortableHeader label="Rep" k="repName" sortKey={sortKey as SortKey} sortDir={sortDir} onSort={onSort} />
+              {/* Phase 1 — Response Time Visibility column. Reply/Quote
+                  badges, derived read-only from existing data. */}
+              <th className="py-2 px-3" data-testid="header-response-time">Response</th>
               <th className="py-2 px-3">Last activity</th>
               <th className="py-2 px-3 text-right pr-4">Source</th>
             </tr>
@@ -1686,6 +1805,9 @@ function ListRow({
         <span className={`inline-flex items-center px-2 h-5 text-[10px] font-medium uppercase rounded border ${STATUS_TONE[q.outcomeStatus] ?? "bg-muted text-muted-foreground border-border"}`} data-testid={`status-${q.id}`}>
           {STATUS_LABELS[q.outcomeStatus] ?? q.outcomeStatus}
         </span>
+      </td>
+      <td className="px-3 whitespace-nowrap" data-testid={`cell-response-${q.id}`}>
+        <ResponseCell quote={q} />
       </td>
       <td className="px-3 whitespace-nowrap">
         <div className="flex items-center gap-1.5">
