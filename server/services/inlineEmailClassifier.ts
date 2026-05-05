@@ -348,6 +348,46 @@ async function classifyOne(message: EmailMessage, signal: AbortSignal): Promise<
           `Classifier uncertain (actor=${extraction.actorType ?? "unknown"}, ` +
           `quoteSignalConf=${signalConf.toFixed(2)}). Awaiting human routing decision.`;
       }
+      // Task #1054 review hardening — trusted-carrier override.
+      // If the email row was already linked to a known carrier (e.g. the
+      // sender resolver matched the From address to `carriers`), promote
+      // routing to `auto_carrier` regardless of the classifier's
+      // confidence bucket. Without this, an ambiguous-confidence carrier
+      // reply would fall into `needs_routing` and then `ingestQuoteFromEmail`
+      // would create a customer `quote_opportunities` row — exactly the
+      // pollution this task is meant to prevent.
+      if (message.linkedCarrierId && routingStatus !== "auto_carrier") {
+        routingStatus = "auto_carrier";
+        routingNote =
+          (routingNote ? routingNote + " " : "") +
+          `Promoted to auto_carrier: sender resolved to known carrier ${message.linkedCarrierId}.`;
+      }
+      // Task #1054 — Email→Exec sub-task 3: when the routing decision is
+      // `auto_carrier`, branch to the dedicated carrier-quote ingestion path
+      // (`carrier_quote_events`). This keeps carrier rate offers off the
+      // customer `quote_opportunities` table and out of the rep's customer
+      // queue. Idempotent on (orgId, sourceReference); the ingest function
+      // itself enforces the "must have a numeric rate" gate via
+      // `looksLikeCarrierQuote`, so non-pricing carrier traffic (truck-
+      // availability pings, bare lane mentions, etc.) is silently skipped
+      // and does NOT create a row.
+      if (routingStatus === "auto_carrier") {
+        try {
+          const { ingestCarrierQuoteFromEmail } = await import("./carrierQuoteIngestion");
+          await ingestCarrierQuoteFromEmail(message, {
+            carrierId: message.linkedCarrierId ?? null,
+          });
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          recordIntegrationEvent({
+            source: "graph",
+            outcome: "error",
+            errorMessage: `inline_carrier_quote_ingest:${message.id}: ${errMsg.slice(0, 200)}`,
+          });
+        }
+        return;
+      }
+
       // Re-implement the original block here, but pass routingStatus.
       try {
         const result = await ingestQuoteFromEmail(message, {

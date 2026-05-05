@@ -689,7 +689,7 @@ function deriveCustomerName(message: EmailMessage): ResolvedCustomer {
 }
 
 export interface IngestionResult {
-  status: "ingested" | "skipped_duplicate" | "skipped_unparseable" | "skipped_outbound";
+  status: "ingested" | "skipped_duplicate" | "skipped_unparseable" | "skipped_outbound" | "skipped_carrier_routed";
   quoteId?: string;
 }
 
@@ -792,6 +792,23 @@ export async function ingestQuoteFromEmail(
       `ingestQuoteFromEmail called on direction=${message.direction}; only inbound is eligible.`,
     );
     return { status: "skipped_outbound" };
+  }
+
+  // Task #1054 — defense-in-depth carrier guard. The inline classifier,
+  // backfill, and recovery scheduler all branch carrier-routed emails to
+  // `ingestCarrierQuoteFromEmail` BEFORE getting here, so this guard
+  // should normally be unreachable. It exists so a future caller that
+  // forgets to mirror the routing decision cannot silently re-introduce
+  // the customer-queue pollution this task fixed: if the message is
+  // already linked to a carrier OR the caller explicitly passed
+  // `routingStatus: "auto_carrier"`, we delegate to the carrier ingest
+  // and skip the customer `quote_opportunities` insert entirely.
+  if (opts?.routingStatus === "auto_carrier" || message.linkedCarrierId) {
+    const { ingestCarrierQuoteFromEmail } = await import("./carrierQuoteIngestion");
+    await ingestCarrierQuoteFromEmail(message, {
+      carrierId: message.linkedCarrierId ?? null,
+    });
+    return { status: "skipped_carrier_routed" };
   }
 
   const ref = message.providerMessageId ?? message.id;
@@ -1777,21 +1794,36 @@ export async function backfillQuotesFromEmails(
     scanned: 0, ingested: 0, duplicates: 0, unparseable: 0, outbound: 0, errors: 0,
   };
 
-  const rows = await db.select().from(emailMessages).where(and(
-    eq(emailMessages.orgId, orgId),
-    eq(emailMessages.direction, "inbound"),
-  ));
   const cutoff = sinceDays && sinceDays > 0
     ? new Date(Date.now() - sinceDays * 24 * 3600 * 1000)
     : null;
+  // Push the cutoff filter into SQL so backfill scans only the active
+  // window. Org mailboxes routinely hold tens of thousands of inbound
+  // rows; pulling them all into memory blew past test timeouts and
+  // wasted heap on the live ops path too.
+  const baseConds = [
+    eq(emailMessages.orgId, orgId),
+    eq(emailMessages.direction, "inbound"),
+  ];
+  if (cutoff) {
+    // Include rows where providerSentAt is NULL but createdAt still
+    // falls inside the backfill window — historical imports and some
+    // graph-sync paths leave providerSentAt unset, and dropping those
+    // pre-filter would silently miss eligible inbound mail.
+    baseConds.push(
+      sql`(${emailMessages.providerSentAt} >= ${cutoff} OR (${emailMessages.providerSentAt} IS NULL AND ${emailMessages.createdAt} >= ${cutoff}))`,
+    );
+  }
+  const rows = await db.select().from(emailMessages).where(and(...baseConds));
   const sorted = rows.sort((a, b) => {
     const aT = (a.providerSentAt ?? a.createdAt ?? new Date(0)).getTime();
     const bT = (b.providerSentAt ?? b.createdAt ?? new Date(0)).getTime();
     return aT - bT;
   });
 
-  // Filter to the active window first so the limit/concurrency math is on
-  // the actual workload, not the raw fetch.
+  // SQL already enforces `cutoff` when present; this defensive re-filter
+  // catches rows where providerSentAt is null but createdAt still falls
+  // inside the window.
   const work = sorted.filter((msg) => {
     if (!cutoff) return true;
     const ts = msg.providerSentAt ?? msg.createdAt ?? new Date(0);
@@ -1799,13 +1831,48 @@ export async function backfillQuotesFromEmails(
   });
   const capped = limit ? work.slice(0, limit) : work;
 
-  // Process in fixed-size parallel batches. Each ingestQuoteFromEmail call
-  // is independent (idempotency keyed on sourceReference) so out-of-order
+  // Task #1054 — carrier-quote routing in replay/backfill.
+  // The inline classifier already separates carrier vs customer for live
+  // mail (see `inlineEmailClassifier.ts` `auto_carrier` branch), but the
+  // historical backfill path bypasses the classifier and would otherwise
+  // feed carrier rate replies into `ingestQuoteFromEmail` — re-introducing
+  // exactly the customer-queue pollution the task fixed.
+  //
+  // Routing signal available on `email_messages` at backfill time is
+  // `linkedCarrierId`: when the inline classifier (or carrier-sender
+  // resolver) recognized the From address as a known carrier, the row
+  // is stamped with the carrier id. We use that as the carrier gate;
+  // `ingestCarrierQuoteFromEmail` then enforces the rate-signal gate
+  // (`amountCents !== null`) so non-pricing carrier traffic is silently
+  // skipped rather than persisted as a fake quote.
+  const { ingestCarrierQuoteFromEmail } = await import("./carrierQuoteIngestion");
+  const isCarrierMessage = (m: typeof capped[number]): boolean => {
+    return m.linkedCarrierId !== null && m.linkedCarrierId !== undefined;
+  };
+
+  // Process in fixed-size parallel batches. Each ingest call is
+  // independent (idempotency keyed on sourceReference) so out-of-order
   // completion is safe.
   for (let i = 0; i < capped.length; i += concurrency) {
     const batch = capped.slice(i, i + concurrency);
     const results = await Promise.allSettled(
-      batch.map((msg) => ingestQuoteFromEmail(msg, { useAiFallback })),
+      batch.map((msg) => {
+        if (isCarrierMessage(msg)) {
+          // Carrier-quote ingest returns its own status set; we count
+          // every non-error outcome under `outbound`/`duplicate`/etc. as
+          // appropriate for the customer summary, but the important
+          // contract here is "no `quote_opportunities` insert for this
+          // message". Map carrier-side statuses to backfill summary
+          // buckets so ops counters still add up to `scanned`.
+          return ingestCarrierQuoteFromEmail(msg).then((r) => {
+            if (r.status === "ingested") return { status: "ingested" as const };
+            if (r.status === "skipped_duplicate") return { status: "skipped_duplicate" as const };
+            if (r.status === "skipped_outbound") return { status: "skipped_outbound" as const };
+            return { status: "skipped_unparseable" as const };
+          });
+        }
+        return ingestQuoteFromEmail(msg, { useAiFallback });
+      }),
     );
     for (let j = 0; j < results.length; j++) {
       summary.scanned++;

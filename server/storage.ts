@@ -287,6 +287,9 @@ import {
   companyCollaborators,
   type CompanyCollaborator,
   type InsertCompanyCollaborator,
+  carrierQuoteEvents,
+  type CarrierQuoteEvent,
+  type InsertCarrierQuoteEvent,
   truckPostings,
   type TruckPosting,
   type InsertTruckPosting,
@@ -1709,6 +1712,11 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
   upsertUserFreightCockpitPrefs(data: InsertUserFreightCockpitPrefs): Promise<UserFreightCockpitPrefs>;
   getUserLaneInboxPrefs(userId: string): Promise<UserLaneInboxPrefs | undefined>;
   upsertUserLaneInboxPrefs(data: InsertUserLaneInboxPrefs): Promise<UserLaneInboxPrefs>;
+
+  // ── Carrier Quote Events (Task #1054) ──────────────────────────────────────
+  insertCarrierQuoteEvent(data: InsertCarrierQuoteEvent): Promise<CarrierQuoteEvent>;
+  getCarrierQuoteEventsByLane(orgId: string, laneKey: string, limit?: number): Promise<CarrierQuoteEvent[]>;
+  getCarrierQuoteEventsByCarrier(orgId: string, carrierId: string, limit?: number): Promise<CarrierQuoteEvent[]>;
 
   // ── Capacity Matches (Task #844) ───────────────────────────────────────────
   insertTruckPostings(rows: InsertTruckPosting[]): Promise<TruckPosting[]>;
@@ -11306,6 +11314,40 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return row;
+  }
+
+  // ── Carrier Quote Events (Task #1054) ────────────────────────────────────
+  async insertCarrierQuoteEvent(data: InsertCarrierQuoteEvent): Promise<CarrierQuoteEvent> {
+    const [row] = await db.insert(carrierQuoteEvents).values(data).returning();
+    return row;
+  }
+
+  async getCarrierQuoteEventsByLane(
+    orgId: string,
+    laneKey: string,
+    limit = 50,
+  ): Promise<CarrierQuoteEvent[]> {
+    return db.select().from(carrierQuoteEvents)
+      .where(and(
+        eq(carrierQuoteEvents.orgId, orgId),
+        eq(carrierQuoteEvents.laneKey, laneKey),
+      ))
+      .orderBy(desc(carrierQuoteEvents.extractedAt))
+      .limit(limit);
+  }
+
+  async getCarrierQuoteEventsByCarrier(
+    orgId: string,
+    carrierId: string,
+    limit = 50,
+  ): Promise<CarrierQuoteEvent[]> {
+    return db.select().from(carrierQuoteEvents)
+      .where(and(
+        eq(carrierQuoteEvents.orgId, orgId),
+        eq(carrierQuoteEvents.carrierId, carrierId),
+      ))
+      .orderBy(desc(carrierQuoteEvents.extractedAt))
+      .limit(limit);
   }
 
   // ── Capacity Matches (Task #844) ─────────────────────────────────────────

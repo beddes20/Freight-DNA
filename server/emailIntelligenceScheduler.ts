@@ -196,20 +196,53 @@ export async function runEmailIntelligenceBatch(
             routingNote = `Recovery sweep: classifier uncertain (actor=${result.actorType ?? "unknown"}, conf=${signalConf.toFixed(2)}). Awaiting human routing.`;
           }
           if (senderRule?.decision !== "dismiss") {
-            try {
-              await ingestQuoteFromEmail(msg, {
-                extractedData: quoteSignal?.extractedData ?? null,
-                routingStatus,
-                routingNote,
-              });
-            } catch (err) {
-              const errMsg = err instanceof Error ? err.message : String(err);
-              console.error(`[emailIntelligenceScheduler] quote ingest failed for ${msg.id}:`, err);
-              recordIntegrationEvent({
-                source: "graph",
-                outcome: "error",
-                errorMessage: `quote_ingest:${msg.id}: ${errMsg.slice(0, 200)}`,
-              });
+            // Task #1054 — trusted-carrier override: a linked carrier on
+            // the email row promotes routing to carrier regardless of
+            // signal confidence (mirrors inlineEmailClassifier).
+            if (msg.linkedCarrierId && routingStatus !== "auto_carrier") {
+              routingStatus = "auto_carrier";
+              routingNote =
+                (routingNote ? routingNote + " " : "") +
+                `Promoted to auto_carrier: sender resolved to known carrier ${msg.linkedCarrierId}.`;
+            }
+            // Task #1054 — recovery/scheduler path mirrors the inline
+            // classifier and backfill: when routing is `auto_carrier`,
+            // write to `carrier_quote_events` and SKIP
+            // `ingestQuoteFromEmail` entirely so no `quote_opportunity`
+            // row is created for carrier rate replies.
+            if (routingStatus === "auto_carrier") {
+              try {
+                const { ingestCarrierQuoteFromEmail } = await import(
+                  "./services/carrierQuoteIngestion"
+                );
+                await ingestCarrierQuoteFromEmail(msg, {
+                  carrierId: msg.linkedCarrierId ?? null,
+                });
+              } catch (err) {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                console.error(`[emailIntelligenceScheduler] carrier quote ingest failed for ${msg.id}:`, err);
+                recordIntegrationEvent({
+                  source: "graph",
+                  outcome: "error",
+                  errorMessage: `carrier_quote_ingest:${msg.id}: ${errMsg.slice(0, 200)}`,
+                });
+              }
+            } else {
+              try {
+                await ingestQuoteFromEmail(msg, {
+                  extractedData: quoteSignal?.extractedData ?? null,
+                  routingStatus,
+                  routingNote,
+                });
+              } catch (err) {
+                const errMsg = err instanceof Error ? err.message : String(err);
+                console.error(`[emailIntelligenceScheduler] quote ingest failed for ${msg.id}:`, err);
+                recordIntegrationEvent({
+                  source: "graph",
+                  outcome: "error",
+                  errorMessage: `quote_ingest:${msg.id}: ${errMsg.slice(0, 200)}`,
+                });
+              }
             }
           }
         }

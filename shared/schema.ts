@@ -4572,6 +4572,58 @@ export const insertTruckLoadMatchSchema = createInsertSchema(truckLoadMatches)
 export type InsertTruckLoadMatch = z.infer<typeof insertTruckLoadMatchSchema>;
 export type TruckLoadMatch = typeof truckLoadMatches.$inferSelect;
 
+// ── Task #1054 — Email→Exec sub-task 3: Carrier Quote Events ────────────────
+//
+// Captures structured carrier rate offers parsed out of inbound carrier
+// emails (e.g. "$1850 all-in ATL→DAL Tuesday"). Lives in its own table so
+// the customer-facing `quote_opportunities` pipeline isn't polluted with
+// carrier-side rate replies. Idempotent on (orgId, sourceReference) — a
+// replayed Graph webhook for the same providerMessageId is a no-op.
+export const CARRIER_QUOTE_EXTRACTION_SOURCES = ["regex", "ai", "hybrid"] as const;
+export type CarrierQuoteExtractionSource = typeof CARRIER_QUOTE_EXTRACTION_SOURCES[number];
+
+export const carrierQuoteEvents = pgTable("carrier_quote_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  carrierId: varchar("carrier_id").references(() => carriers.id, { onDelete: "set null" }),
+  contactId: varchar("contact_id").references(() => carrierContacts.id, { onDelete: "set null" }),
+  emailMessageId: varchar("email_message_id").references(() => emailMessages.id, { onDelete: "set null" }),
+  // Canonical lane key in "OCITY,OST->DCITY,DST" form (uppercased state codes,
+  // title-case city tokens). Cheap to index for "what did carriers quote on
+  // this lane lately?" reads.
+  laneKey: text("lane_key"),
+  originCity: text("origin_city"),
+  originState: text("origin_state"),
+  destCity: text("dest_city"),
+  destState: text("dest_state"),
+  equipment: text("equipment"),
+  // Whole-cents amount so we never lose precision to JS floats. The sender's
+  // "all-in" / "flat" qualifier is captured in `qualifier`.
+  amountCents: integer("amount_cents"),
+  currency: text("currency").notNull().default("USD"),
+  qualifier: text("qualifier"), // e.g. "all_in", "flat", "linehaul", null
+  pickupDate: date("pickup_date"),
+  // Provider-level message id (preferred) or the internal email_messages id
+  // when no provider id is available. Combined with orgId for idempotency.
+  sourceReference: text("source_reference").notNull(),
+  extractionSource: text("extraction_source").notNull().default("regex"),
+  rawSnippet: text("raw_snippet"),
+  extractedAt: timestamp("extracted_at").defaultNow().notNull(),
+}, (t) => ({
+  orgRefUq: uniqueIndex("carrier_quote_events_org_ref_uq").on(t.orgId, t.sourceReference),
+  orgLaneIdx: index("carrier_quote_events_org_lane_idx").on(t.orgId, t.laneKey),
+  orgCarrierIdx: index("carrier_quote_events_org_carrier_idx").on(t.orgId, t.carrierId),
+  orgExtractedIdx: index("carrier_quote_events_org_extracted_idx").on(t.orgId, t.extractedAt),
+}));
+
+export const insertCarrierQuoteEventSchema = createInsertSchema(carrierQuoteEvents)
+  .omit({ id: true, extractedAt: true })
+  .extend({
+    extractionSource: z.enum(CARRIER_QUOTE_EXTRACTION_SOURCES).optional(),
+  });
+export type InsertCarrierQuoteEvent = z.infer<typeof insertCarrierQuoteEventSchema>;
+export type CarrierQuoteEvent = typeof carrierQuoteEvents.$inferSelect;
+
 /**
  * freight_outreach_templates — admin-editable email templates per org for the
  * Phase 4 outreach engine. Two `kind`s are supported (one row each per org):

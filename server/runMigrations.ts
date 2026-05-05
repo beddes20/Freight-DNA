@@ -5731,6 +5731,47 @@ export async function runMigrations() {
     console.error("[migrations] Task #844 capacity-matches table guard error:", err);
   }
 
+  // ── Task #1054 — Email→Exec sub-task 3: carrier_quote_events ──────────────
+  // Idempotent runtime guard (mirrors `shared/schema.ts` definition). Captures
+  // structured carrier rate offers parsed out of inbound carrier emails so
+  // they don't pollute the customer `quote_opportunities` pipeline.
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS carrier_quote_events (
+        id varchar PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id varchar NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+        carrier_id varchar REFERENCES carriers(id) ON DELETE SET NULL,
+        contact_id varchar REFERENCES carrier_contacts(id) ON DELETE SET NULL,
+        email_message_id varchar REFERENCES email_messages(id) ON DELETE SET NULL,
+        lane_key text,
+        origin_city text,
+        origin_state text,
+        dest_city text,
+        dest_state text,
+        equipment text,
+        amount_cents integer,
+        currency text NOT NULL DEFAULT 'USD',
+        qualifier text,
+        pickup_date date,
+        source_reference text NOT NULL,
+        extraction_source text NOT NULL DEFAULT 'regex',
+        raw_snippet text,
+        extracted_at timestamp NOT NULL DEFAULT now()
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS carrier_quote_events_org_ref_uq
+        ON carrier_quote_events (org_id, source_reference);
+      CREATE INDEX IF NOT EXISTS carrier_quote_events_org_lane_idx
+        ON carrier_quote_events (org_id, lane_key);
+      CREATE INDEX IF NOT EXISTS carrier_quote_events_org_carrier_idx
+        ON carrier_quote_events (org_id, carrier_id);
+      CREATE INDEX IF NOT EXISTS carrier_quote_events_org_extracted_idx
+        ON carrier_quote_events (org_id, extracted_at);
+    `);
+    console.log("[migrations] Task #1054 carrier_quote_events ensured");
+  } catch (err) {
+    console.error("[migrations] Task #1054 carrier_quote_events table guard error:", err);
+  }
+
   // ──────────────────────────────────────────────────────────────────────────
   // Phase A2 — one-shot strip of obvious-fake customer companies and the
   // freight_opportunities they spawned. Idempotent by design: every pass only

@@ -6438,6 +6438,13 @@ async function _runManualLeakCreate(
       // Defensive — we already filtered above, but the upstream contract
       // surfaces this status, so handle it explicitly rather than fall through.
       return { status: "wrong_direction" };
+    case "skipped_carrier_routed":
+      // Task #1054 — manual leak create on a carrier-linked email is a
+      // misroute by definition (the leak queue is for customer-side
+      // capture). The carrier ingest already wrote to
+      // `carrier_quote_events`; surface a distinct outcome so the
+      // operator UI doesn't pretend a customer quote was created.
+      return { status: "unparseable", reason: "Email is linked to a carrier; routed to carrier_quote_events instead." };
   }
 }
 
