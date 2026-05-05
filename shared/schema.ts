@@ -42,6 +42,14 @@ export const companies = pgTable("companies", {
   spotProcess: text("spot_process"),
   dlEmail: varchar("dl_email"),
   salesPersonId: varchar("sales_person_id"),
+  // Task #1011 — primary "owner rep" for the account. Drives the
+  // 14-day-recovery + email-ingestion fallback rep precedence
+  // (contact → shared distribution → domain → owner rep → needs_routing).
+  // Distinct from `salesPersonId` (sales-org book of business) and
+  // `assignedTo` (account manager). May reference any users.id (no FK
+  // because users.id is a varchar with no FK either, matching the
+  // existing nullable text columns above).
+  ownerRepId: varchar("owner_rep_id"),
   shippingModes: text("shipping_modes").array(),
   estimatedFreightSpend: decimal("estimated_freight_spend", { precision: 14, scale: 2 }),
   accountSummary: text("account_summary"),
@@ -5915,6 +5923,57 @@ export const insertSenderRoutingRuleSchema = createInsertSchema(senderRoutingRul
   });
 export type InsertSenderRoutingRule = z.infer<typeof insertSenderRoutingRuleSchema>;
 export type SenderRoutingRule = typeof senderRoutingRules.$inferSelect;
+
+// Task #1011 — explicit per-customer email identities used by the
+// 14-day quote-recovery + inline email-ingestion paths to map an
+// inbound sender (or sender domain) to a CRM company. Three kinds:
+//   • domain              — `@acmelogistics.com` matches every sender
+//                            on that domain (used for accounts with
+//                            their own corporate domain).
+//   • shared_distribution — a single shared/distribution mailbox like
+//                            `traffic@acmelogistics.com` that multiple
+//                            people on the customer's side use.
+//   • contact             — a specific contact email; can optionally be
+//                            linked back to a `contacts.id` row.
+//
+// Lookup precedence in `resolveCustomerIdentityForEmail`:
+//   exact contact email → shared_distribution email → domain
+// On a hit, the matched company's `ownerRepId` is the rep fallback
+// when no inbox-recipient match exists.
+export const CUSTOMER_EMAIL_IDENTITY_KINDS = [
+  "domain",
+  "shared_distribution",
+  "contact",
+] as const;
+export type CustomerEmailIdentityKind = typeof CUSTOMER_EMAIL_IDENTITY_KINDS[number];
+
+export const customerEmailIdentities = pgTable("customer_email_identities", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  organizationId: varchar("organization_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+  companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
+  kind: text("kind").notNull(), // CustomerEmailIdentityKind
+  // Lower-cased domain (no `@`) for kind=domain; lower-cased email
+  // address for kind=shared_distribution / contact.
+  value: text("value").notNull(),
+  label: text("label"),
+  contactId: varchar("contact_id").references(() => contacts.id, { onDelete: "set null" }),
+  active: boolean("active").notNull().default(true),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => ({
+  uq: uniqueIndex("customer_email_identities_uq").on(t.organizationId, t.kind, t.value),
+  orgIdx: index("customer_email_identities_org_idx").on(t.organizationId),
+  companyIdx: index("customer_email_identities_company_idx").on(t.companyId),
+}));
+export const insertCustomerEmailIdentitySchema = createInsertSchema(customerEmailIdentities)
+  .omit({ id: true, createdAt: true })
+  .extend({
+    kind: z.enum(CUSTOMER_EMAIL_IDENTITY_KINDS),
+    value: z.string().min(1).max(254),
+    label: z.string().max(120).optional().nullable(),
+  });
+export type InsertCustomerEmailIdentity = z.infer<typeof insertCustomerEmailIdentitySchema>;
+export type CustomerEmailIdentity = typeof customerEmailIdentities.$inferSelect;
+
 export const insertQuoteOpportunitySchema = createInsertSchema(quoteOpportunities).omit({ id: true, createdAt: true });
 export type InsertQuoteOpportunity = z.infer<typeof insertQuoteOpportunitySchema>;
 export type QuoteOpportunity = typeof quoteOpportunities.$inferSelect;

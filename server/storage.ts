@@ -499,6 +499,19 @@ export interface IStorage {
   deleteCompany(id: string, organizationId: string): Promise<boolean>;
   archiveCompany(id: string, organizationId: string): Promise<Company | undefined>;
   unarchiveCompany(id: string, organizationId: string): Promise<Company | undefined>;
+  // Task #1011 — customer email identities (domain / shared distribution / contact)
+  listCustomerEmailIdentities(companyId: string, organizationId: string): Promise<import('@shared/schema').CustomerEmailIdentity[]>;
+  listCustomerEmailIdentitiesForOrg(organizationId: string): Promise<import('@shared/schema').CustomerEmailIdentity[]>;
+  createCustomerEmailIdentity(input: import('@shared/schema').InsertCustomerEmailIdentity): Promise<import('@shared/schema').CustomerEmailIdentity>;
+  deleteCustomerEmailIdentity(id: string, organizationId: string): Promise<boolean>;
+  resolveCustomerIdentityForEmail(organizationId: string, fromEmail: string): Promise<{
+    companyId: string;
+    identityId: string;
+    kind: import('@shared/schema').CustomerEmailIdentityKind;
+    value: string;
+    contactId: string | null;
+    ownerRepId: string | null;
+  } | null>;
   // Account-level collaborators (manual visibility sharing)
   listCollaboratorsForCompany(companyId: string, organizationId: string): Promise<Array<CompanyCollaborator & { userName: string; userRole: string }>>;
   addCompanyCollaborator(input: InsertCompanyCollaborator): Promise<CompanyCollaborator>;
@@ -2083,6 +2096,104 @@ export class DatabaseStorage implements IStorage {
       .returning();
     cacheInvalidatePrefix("companies:");
     return updated;
+  }
+
+  // ============= Customer Email Identities (Task #1011) =============
+
+  async listCustomerEmailIdentities(companyId: string, organizationId: string): Promise<import('@shared/schema').CustomerEmailIdentity[]> {
+    const { customerEmailIdentities } = await import("@shared/schema");
+    return db.select().from(customerEmailIdentities).where(and(
+      eq(customerEmailIdentities.organizationId, organizationId),
+      eq(customerEmailIdentities.companyId, companyId),
+    ));
+  }
+
+  async listCustomerEmailIdentitiesForOrg(organizationId: string): Promise<import('@shared/schema').CustomerEmailIdentity[]> {
+    const { customerEmailIdentities } = await import("@shared/schema");
+    return db.select().from(customerEmailIdentities).where(eq(customerEmailIdentities.organizationId, organizationId));
+  }
+
+  async createCustomerEmailIdentity(input: import('@shared/schema').InsertCustomerEmailIdentity): Promise<import('@shared/schema').CustomerEmailIdentity> {
+    const { customerEmailIdentities } = await import("@shared/schema");
+    const value = input.value.trim().toLowerCase();
+    const normalized = { ...input, value, label: input.label ?? null, contactId: input.contactId ?? null };
+    const [row] = await db.insert(customerEmailIdentities).values(normalized)
+      .onConflictDoUpdate({
+        target: [customerEmailIdentities.organizationId, customerEmailIdentities.kind, customerEmailIdentities.value],
+        set: {
+          companyId: normalized.companyId,
+          label: normalized.label,
+          contactId: normalized.contactId,
+          active: normalized.active ?? true,
+        },
+      })
+      .returning();
+    return row;
+  }
+
+  async deleteCustomerEmailIdentity(id: string, organizationId: string): Promise<boolean> {
+    const { customerEmailIdentities } = await import("@shared/schema");
+    const result = await db.delete(customerEmailIdentities).where(and(
+      eq(customerEmailIdentities.id, id),
+      eq(customerEmailIdentities.organizationId, organizationId),
+    )).returning();
+    return result.length > 0;
+  }
+
+  /**
+   * Lookup precedence (Task #1011):
+   *   1. exact contact email     (kind=contact, value=fromEmail.lower)
+   *   2. shared distribution     (kind=shared_distribution, value=fromEmail.lower)
+   *   3. domain                  (kind=domain, value=domain)
+   * Returns the matched identity + the company's ownerRepId (for the
+   * downstream rep fallback) or null if no identity matches.
+   */
+  async resolveCustomerIdentityForEmail(organizationId: string, fromEmail: string): Promise<{
+    companyId: string;
+    identityId: string;
+    kind: import('@shared/schema').CustomerEmailIdentityKind;
+    value: string;
+    contactId: string | null;
+    ownerRepId: string | null;
+  } | null> {
+    const { customerEmailIdentities } = await import("@shared/schema");
+    const lower = (fromEmail ?? "").trim().toLowerCase();
+    if (!lower || !lower.includes("@")) return null;
+    const domain = lower.split("@")[1] ?? "";
+    if (!domain) return null;
+
+    const candidates = await db
+      .select({
+        id: customerEmailIdentities.id,
+        companyId: customerEmailIdentities.companyId,
+        kind: customerEmailIdentities.kind,
+        value: customerEmailIdentities.value,
+        contactId: customerEmailIdentities.contactId,
+        ownerRepId: companies.ownerRepId,
+      })
+      .from(customerEmailIdentities)
+      .innerJoin(companies, eq(companies.id, customerEmailIdentities.companyId))
+      .where(and(
+        eq(customerEmailIdentities.organizationId, organizationId),
+        eq(customerEmailIdentities.active, true),
+        or(
+          and(eq(customerEmailIdentities.kind, "contact"), eq(customerEmailIdentities.value, lower)),
+          and(eq(customerEmailIdentities.kind, "shared_distribution"), eq(customerEmailIdentities.value, lower)),
+          and(eq(customerEmailIdentities.kind, "domain"), eq(customerEmailIdentities.value, domain)),
+        ),
+      ));
+    if (candidates.length === 0) return null;
+    const order = { contact: 0, shared_distribution: 1, domain: 2 } as const;
+    candidates.sort((a, b) => (order[a.kind as keyof typeof order] ?? 9) - (order[b.kind as keyof typeof order] ?? 9));
+    const winner = candidates[0];
+    return {
+      companyId: winner.companyId,
+      identityId: winner.id,
+      kind: winner.kind as import('@shared/schema').CustomerEmailIdentityKind,
+      value: winner.value,
+      contactId: winner.contactId ?? null,
+      ownerRepId: winner.ownerRepId ?? null,
+    };
   }
 
   // ============= Company Collaborators (manual visibility sharing) =============

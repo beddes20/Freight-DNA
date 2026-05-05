@@ -97,6 +97,12 @@ export type EnrichedQuote = QuoteOpportunity & {
   // The UI badges these against fixed SLA bands (≤15m / ≤60m).
   firstReplyMinutes: number | null;
   firstQuoteMinutes: number | null;
+  // Task #1011 — owner-rep fallback. Populated when the row's
+  // `repName` is empty AND the customer maps to a CRM company whose
+  // `ownerRepId` resolves to a real user. The Quote Requests Rep cell
+  // renders this as "<Owner Name> (owner)" so account managers see who
+  // would catch the email if the inbox-recipient routing had fired.
+  ownerRepName?: string | null;
 };
 
 export type AlertSeverity = "high" | "medium" | "low";
@@ -981,6 +987,13 @@ function enrich(
      * portlet stops showing sluggified strings like "Mohawkind".
      */
     canonicalCustomerNames?: Map<string, string>;
+    /**
+     * Task #1011 — owner-rep display name keyed by `quote_customers.id`.
+     * Surfaced on `EnrichedQuote.ownerRepName` so the Quote Requests
+     * Rep cell can render "<Name> (owner)" when the row has no
+     * resolved rep but the customer's CRM company has an `ownerRepId`.
+     */
+    ownerRepNameByCustomerId?: Map<string, string>;
   } = {},
 ): EnrichedQuote[] {
   const now = opts.now ?? Date.now();
@@ -1011,6 +1024,13 @@ function enrich(
     }
     const stored = customerMap.get(r.customerId)?.name;
     const customerName = canonicalCust?.get(r.customerId) ?? stored ?? "—";
+    // Task #1011 — only surface ownerRepName as a fallback (when the
+    // row truly has no resolved rep). Avoid overriding a real rep
+    // attribution; the UI then renders "<Name> (owner)" only for
+    // empty rep cells.
+    const ownerRepName = repName === "—"
+      ? (opts.ownerRepNameByCustomerId?.get(r.customerId) ?? null)
+      : null;
     return {
       ...r,
       customerName,
@@ -1028,6 +1048,7 @@ function enrich(
       firstQuoteMinutes: r.responseTimeHours != null && num(r.responseTimeHours) > 0
         ? Math.round(num(r.responseTimeHours) * 60)
         : null,
+      ownerRepName,
     };
   });
 }
@@ -1076,8 +1097,12 @@ async function loadContext(orgId: string) {
     // sluggified quote_customers display names like "Mohawkind" to the
     // canonical CRM name "Mohawk Industries". Light query — companies
     // tables in this app stay in the low hundreds per org.
-    db.select({ id: companies.id, name: companies.name }).from(companies).where(eq(companies.organizationId, orgId)),
+    db.select({ id: companies.id, name: companies.name, ownerRepId: companies.ownerRepId }).from(companies).where(eq(companies.organizationId, orgId)),
   ]);
+  // Task #1011 — preload user display names so the owner-rep fallback
+  // can render "<Name> (owner)" without per-row lookups.
+  const orgUsers = await db.select({ id: users.id, name: users.name }).from(users).where(eq(users.organizationId, orgId));
+  const userNameById = new Map<string, string>(orgUsers.map(u => [u.id, u.name]));
   // `allReps` powers `repMap` so individual quote rows can still resolve a
   // rep's display name even when that rep is hidden from the dropdowns.
   // `reps` is the public-facing list returned to the client (snapshot.reps)
@@ -1102,6 +1127,22 @@ async function loadContext(orgId: string) {
   // once per loadContext call and shared across all enrich() callers in
   // the request.
   const canonicalCustomerNames = buildCanonicalCustomerNameMap(customers, orgCompanies);
+  // Task #1011 — customerId → owner-rep display name. Reuses the
+  // canonical-name map to bridge `quote_customers` to the CRM
+  // `companies` row, then resolves `ownerRepId` to the user name via
+  // `userNameById`. Empty when no chain resolves.
+  const ownerRepNameByCustomerId = new Map<string, string>();
+  const companyByName = new Map<string, { ownerRepId: string | null }>();
+  for (const co of orgCompanies) {
+    if (co.name) companyByName.set(co.name, { ownerRepId: co.ownerRepId ?? null });
+  }
+  for (const cust of customers) {
+    const canonical = canonicalCustomerNames.get(cust.id) ?? cust.name;
+    const co = companyByName.get(canonical);
+    if (!co?.ownerRepId) continue;
+    const display = userNameById.get(co.ownerRepId);
+    if (display) ownerRepNameByCustomerId.set(cust.id, display);
+  }
   return {
     customers,
     // Public rep list (snapshot.reps consumes this directly).
@@ -1119,6 +1160,7 @@ async function loadContext(orgId: string) {
     // ranking. The underlying quote rows are unaffected.
     customerFacingRepIds,
     canonicalCustomerNames,
+    ownerRepNameByCustomerId,
   };
 }
 
@@ -1153,6 +1195,7 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
     repDisplayNames: ctx.repDisplayNames,
     repByOpportunityId,
     canonicalCustomerNames: ctx.canonicalCustomerNames,
+    ownerRepNameByCustomerId: ctx.ownerRepNameByCustomerId,
   });
 
   const dir = sortDir === "asc" ? 1 : -1;
@@ -1346,6 +1389,7 @@ export async function getActionQueue(
     repDisplayNames: ctx.repDisplayNames,
     repByOpportunityId,
     canonicalCustomerNames: ctx.canonicalCustomerNames,
+    ownerRepNameByCustomerId: ctx.ownerRepNameByCustomerId,
   });
 
   const slaBreaching = enriched
@@ -3638,6 +3682,7 @@ export async function exportCsv(orgId: string, filters: QuoteFilters): Promise<s
     repDisplayNames: ctx.repDisplayNames,
     repByOpportunityId,
     canonicalCustomerNames: ctx.canonicalCustomerNames,
+    ownerRepNameByCustomerId: ctx.ownerRepNameByCustomerId,
   });
   enriched.sort((a, b) => b.requestDate.getTime() - a.requestDate.getTime());
   return quotesToCsv(enriched);
@@ -4377,6 +4422,7 @@ export async function searchSpotQuote(orgId: string, input: SpotSearchInput): Pr
     funnelEligibleRepIds: ctx.customerFacingRepIds,
     repDisplayNames: ctx.repDisplayNames,
     canonicalCustomerNames: ctx.canonicalCustomerNames,
+    ownerRepNameByCustomerId: ctx.ownerRepNameByCustomerId,
   };
   const exactMatches = enrich(exactScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, enrichOpts);
   const similarMatches = enrich(similarScoped.slice(0, 25), ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, enrichOpts);

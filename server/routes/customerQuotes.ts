@@ -50,7 +50,7 @@ import {
 } from "../services/freightCaptureRepAudit";
 import { getStaleQuoteFollowUps, getStaleQuoteFollowUpCount, clearStaleFollowUpCache } from "../services/staleQuoteFollowup";
 import { publish as publishLiveSync } from "../services/liveSync";
-import { db } from "../storage";
+import { db, storage } from "../storage";
 import { quoteOpportunities } from "@shared/schema";
 import { and as andSql, eq as eqSql, inArray as inArraySql, sql as sqlExpr } from "drizzle-orm";
 
@@ -408,16 +408,53 @@ export function buildForceReprocessBody(
 // and `fallback`. Persisting `lane_pattern` and `last_toucher` is
 // follow-up #980; the type stays open so wiring those rules later is
 // a value-only change.
-export type AssignmentRule = "account_owner" | "lane_pattern" | "last_toucher" | "fallback";
+// Task #1011 extends the taxonomy with explicit identity-precedence
+// reasons emitted by `customer_email_identities` matches:
+//   • customer_contact      — sender's exact email is on a CRM contact identity
+//   • shared_distribution   — sender matches a shared/distribution mailbox identity
+//   • customer_domain       — sender domain matches a registered customer domain
+//   • account_owner_fallback — no inbox-recipient match; account owner caught it
+export type AssignmentRule =
+  | "account_owner"
+  | "lane_pattern"
+  | "last_toucher"
+  | "fallback"
+  | "customer_contact"
+  | "shared_distribution"
+  | "customer_domain"
+  | "account_owner_fallback";
 
-export function buildAttributionResponse(row: AttributionRow | Record<string, string | null>) {
+export function buildAttributionResponse(
+  row: AttributionRow | Record<string, string | null>,
+  // Task #1011 — optional identity-precedence hit from
+  // `resolveCustomerIdentityForEmail(sender_email)`. When present the
+  // drawer surfaces the explicit identity that won routing
+  // (customer_contact / shared_distribution / customer_domain) and,
+  // for unrouted-recipient rows, account_owner_fallback.
+  identity?: {
+    kind: "contact" | "shared_distribution" | "domain";
+    value: string;
+    ownerRepId: string | null;
+  } | null,
+) {
   // Rule inference. `findOrCreateRep(toEmail)` finds the rep that owns
   // the customer-facing inbox the email was sent to, which is the
   // closest match to `account_owner` in the canonical taxonomy. If
   // the quote was created without an email source (e.g. spot intake),
   // no automated rule fired — surface `fallback` so the drawer can
-  // render an honest "manual entry" explanation.
-  const ruleName: AssignmentRule = row.message_id ? "account_owner" : "fallback";
+  // render an honest "manual entry" explanation. Task #1011 — when an
+  // identity matched at ingestion time, prefer the identity-specific
+  // rule name; if no inbox-recipient match fired but the rep is the
+  // company's owner, surface `account_owner_fallback`.
+  let ruleName: AssignmentRule = row.message_id ? "account_owner" : "fallback";
+  if (identity) {
+    if (identity.kind === "contact") ruleName = "customer_contact";
+    else if (identity.kind === "shared_distribution") ruleName = "shared_distribution";
+    else if (identity.kind === "domain") ruleName = "customer_domain";
+    if (row.message_id && identity.ownerRepId && row.rep_id === identity.ownerRepId && !row.recipient_email) {
+      ruleName = "account_owner_fallback";
+    }
+  }
   // `decidedAt` is the assignment-resolution timestamp the code review
   // asked for. We don't yet persist a per-rule audit row (see follow-up
   // #980), so the closest honest proxy is the inbound message's
@@ -1607,7 +1644,16 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       if (!quoteId) return res.status(400).json({ error: "id required" });
       const row = await fetchAttributionRow(quoteId, user.organizationId);
       if (!row) return res.status(404).json({ error: "Not found" });
-      res.json(buildAttributionResponse(row));
+      // Task #1011 — re-resolve the customer-email-identity from the
+      // sender so the drawer can name the explicit identity rule that
+      // won routing (contact / shared / domain) instead of the
+      // generic "inbox recipient" label.
+      let identity: { kind: "contact" | "shared_distribution" | "domain"; value: string; ownerRepId: string | null } | null = null;
+      if (row.sender_email) {
+        const hit = await storage.resolveCustomerIdentityForEmail(user.organizationId, row.sender_email);
+        if (hit) identity = { kind: hit.kind, value: hit.value, ownerRepId: hit.ownerRepId };
+      }
+      res.json(buildAttributionResponse(row, identity));
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] attribution error:", err);

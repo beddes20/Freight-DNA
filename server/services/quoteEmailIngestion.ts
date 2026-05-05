@@ -23,6 +23,7 @@ import { db, storage } from "../storage";
 import {
   quoteOpportunities, quoteEvents, quoteCustomers, quoteReps,
   quoteOutcomeReasons, emailMessages, users, senderRoutingRules,
+  companies,
   type EmailMessage, type QuoteOutcomeStatus,
   type QuotePipelineDropReason,
   type SenderRoutingRule,
@@ -568,6 +569,49 @@ export async function findOrCreateCustomer(orgId: string, name: string, fromEmai
   return row.id;
 }
 
+/**
+ * Task #1011 — find-or-create a `quote_reps` row for an existing
+ * `users.id` (the owner-rep fallback path). Mirrors the email-based
+ * `findOrCreateRep` but starts from a verified user instead of a
+ * sender address. Skips non-customer-facing roles to keep the rep
+ * universe consistent with `isCustomerFacingQuoteRep`.
+ */
+export async function findOrCreateRepByUserId(orgId: string, userId: string): Promise<string | null> {
+  if (!userId) return null;
+  const [linkedUser] = await db.select({ id: users.id, role: users.role, name: users.name, username: users.username }).from(users)
+    .where(and(eq(users.id, userId), eq(users.organizationId, orgId)))
+    .limit(1);
+  if (!linkedUser) return null;
+  if (!isCustomerFacingQuoteRep(linkedUser.role)) return null;
+  const existing = await db.select().from(quoteReps).where(and(
+    eq(quoteReps.organizationId, orgId),
+    eq(quoteReps.userId, linkedUser.id),
+  )).limit(1);
+  if (existing.length > 0) return existing[0].id;
+  // Fall back to email match (legacy quote_reps rows that haven't been
+  // back-linked yet) so we don't end up with two rows for the same
+  // person.
+  if (linkedUser.username) {
+    const byEmail = await db.select().from(quoteReps).where(and(
+      eq(quoteReps.organizationId, orgId),
+      eq(quoteReps.email, linkedUser.username),
+    )).limit(1);
+    if (byEmail.length > 0) {
+      if (!byEmail[0].userId) {
+        await db.update(quoteReps).set({ userId: linkedUser.id }).where(eq(quoteReps.id, byEmail[0].id));
+      }
+      return byEmail[0].id;
+    }
+  }
+  const [row] = await db.insert(quoteReps).values({
+    organizationId: orgId,
+    name: linkedUser.name ?? (linkedUser.username ?? "Rep"),
+    email: linkedUser.username ?? "",
+    userId: linkedUser.id,
+  }).returning();
+  return row.id;
+}
+
 // Exported alongside `findOrCreateCustomer` for the Task #847 closure
 // service so newly-created closure opps share the same rep-resolution
 // behaviour (user-link self-heal, role gating) as the canonical path.
@@ -798,6 +842,21 @@ export async function ingestQuoteFromEmail(
     return { status: "skipped_unparseable" };
   }
 
+  // Task #1011 — explicit customer-email-identity precedence runs FIRST.
+  // (1) exact contact email → (2) shared distribution → (3) domain.
+  // On a hit, the matched company's `ownerRepId` becomes the rep
+  // fallback when the inbox-recipient (toEmail) doesn't resolve to one.
+  let identityHit: Awaited<ReturnType<typeof storage.resolveCustomerIdentityForEmail>> = null;
+  let identityCompanyName: string | null = null;
+  if (message.fromEmail) {
+    identityHit = await storage.resolveCustomerIdentityForEmail(message.orgId, message.fromEmail).catch(() => null);
+    if (identityHit) {
+      const [crmCompany] = await db.select({ name: companies.name }).from(companies)
+        .where(eq(companies.id, identityHit.companyId)).limit(1);
+      identityCompanyName = crmCompany?.name ?? null;
+    }
+  }
+
   // Customer Quotes #3 — sender-domain learning. Check the learned
   // mappings table BEFORE the heuristic resolver. If a rep previously
   // moved a quote out of Unknown into a real customer, every subsequent
@@ -816,6 +875,12 @@ export async function ingestQuoteFromEmail(
     | null = null;
   if (opts?.customerName) {
     customerName = opts.customerName;
+    customerId = await findOrCreateCustomer(message.orgId, customerName, message.fromEmail ?? null);
+  } else if (identityHit && identityCompanyName) {
+    // Task #1011 — explicit identity wins over heuristics. Use the CRM
+    // company name so the canonical-name map keeps the row's display
+    // tied to the matched account.
+    customerName = identityCompanyName;
     customerId = await findOrCreateCustomer(message.orgId, customerName, message.fromEmail ?? null);
   } else {
     const learned = await lookupMapping(message.orgId, message.fromEmail ?? null);
@@ -877,10 +942,24 @@ export async function ingestQuoteFromEmail(
       customerId = await findOrCreateCustomer(message.orgId, customerName, message.fromEmail ?? null);
     }
   }
-  const repId = await findOrCreateRep(
+  let repId = await findOrCreateRep(
     message.orgId,
     (message.toEmail ?? "").split(/[,;]/)[0]?.trim().toLowerCase() ?? "",
   );
+  // Task #1011 — owner-rep fallback. When the inbox-recipient lookup
+  // didn't yield a customer-facing rep AND the sender resolved to a
+  // CRM company via customer_email_identities, fall back to that
+  // company's `ownerRepId` so the row is attributed to the account
+  // owner instead of landing as Unassigned.
+  let repAttribution: "inbox_recipient" | "account_owner_fallback" | "none" =
+    repId ? "inbox_recipient" : "none";
+  if (!repId && identityHit?.ownerRepId) {
+    const ownerRepRowId = await findOrCreateRepByUserId(message.orgId, identityHit.ownerRepId);
+    if (ownerRepRowId) {
+      repId = ownerRepRowId;
+      repAttribution = "account_owner_fallback";
+    }
+  }
 
   const requestDate = message.providerSentAt ?? message.createdAt ?? new Date();
   const validThrough = new Date(requestDate.getTime() + 7 * 24 * 3600 * 1000);
@@ -935,6 +1014,15 @@ export async function ingestQuoteFromEmail(
       subject: message.subject,
       pickupDate: parsed.pickupDate ? parsed.pickupDate.toISOString() : null,
       learnedMappingId: learnedMappingId ?? undefined,
+      // Task #1011 — capture how the rep + customer were attributed
+      // so the "Why this rep?" attribution drawer can render the
+      // identity-precedence chain ("matched contact email →
+      // shared distribution → domain → owner-rep fallback").
+      identityKind: identityHit?.kind ?? null,
+      identityValue: identityHit?.value ?? null,
+      identityCompanyId: identityHit?.companyId ?? null,
+      ownerRepId: identityHit?.ownerRepId ?? null,
+      repAttribution,
     },
   });
 

@@ -1814,7 +1814,18 @@ function ListRow({
           <Avatar className="h-5 w-5 border border-border">
             <AvatarFallback className="text-[9px]">{initials(q.repName)}</AvatarFallback>
           </Avatar>
-          <span className="text-xs">{q.repName ?? "Unassigned"}</span>
+          {/* Task #1011 — when no rep was resolved but the customer's
+              CRM company has an `ownerRepId`, render the owner's name
+              with an "(owner)" suffix instead of "Unassigned". The
+              underlying repId stays null so attribution + funnel
+              accounting are unaffected. */}
+          <span className="text-xs">
+            {q.repName && q.repName !== "—"
+              ? q.repName
+              : (q as any).ownerRepName
+                ? <>{(q as any).ownerRepName} <span className="text-muted-foreground">(owner)</span></>
+                : ""}
+          </span>
           {/* Task #969 — "Why this rep?" attribution drawer trigger.
               Stop propagation so clicking the link doesn't bubble up to
               the row's onClick (which selects the quote and opens the

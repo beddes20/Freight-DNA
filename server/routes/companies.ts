@@ -13,7 +13,10 @@ import {
   type OnboardingMilestones,
   emailSignals,
   emailMessages,
+  insertCustomerEmailIdentitySchema,
+  CUSTOMER_EMAIL_IDENTITY_KINDS,
 } from "@shared/schema";
+import { z } from "zod";
 
 export function registerCompanyRoutes(app: Express): void {
   // ── List companies ─────────────────────────────────────────────────────────
@@ -330,6 +333,128 @@ export function registerCompanyRoutes(app: Express): void {
       res.json(company);
     } catch (error) {
       res.status(500).json({ error: "Failed to reassign company" });
+    }
+  });
+
+  // ── Owner rep (Task #1011) ─────────────────────────────────────────────────
+  // Editable on the customer profile UI. The owner rep is the user who
+  // catches inbound email when the inbox-recipient routing falls
+  // through (no `findOrCreateRep(toEmail)` match). Persisted on the
+  // company row as `ownerRepId`. Restricted to admins, NAMs, directors
+  // and sales_directors so individual reps can't reassign account
+  // ownership unilaterally.
+  app.patch("/api/companies/:id/owner", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (
+        currentUser.role !== "admin" &&
+        currentUser.role !== "director" &&
+        currentUser.role !== "national_account_manager" &&
+        currentUser.role !== "sales_director"
+      ) {
+        return res.status(403).json({ error: "Only admins, directors and NAMs can change account owner" });
+      }
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { ownerRepId } = req.body as { ownerRepId?: string | null };
+      if (ownerRepId) {
+        const target = await storage.getUser(ownerRepId);
+        if (!target || target.organizationId !== currentUser.organizationId) {
+          return res.status(400).json({ error: "User not found in organization" });
+        }
+      }
+      const company = await storage.updateCompany(pStr(req.params.id), currentUser.organizationId, {
+        ownerRepId: ownerRepId || null,
+      });
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      console.error("Error updating owner rep:", error);
+      res.status(500).json({ error: "Failed to update owner rep" });
+    }
+  });
+
+  // ── Customer email identities (Task #1011) ─────────────────────────────────
+  // Editable list of explicit email→customer hints that drive ingestion
+  // routing precedence (contact → shared_distribution → domain).
+  app.get("/api/companies/:id/email-identities", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = pStr(req.params.id);
+      if (!(await canAccessCompany(currentUser, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const rows = await storage.listCustomerEmailIdentities(companyId, currentUser.organizationId);
+      res.json(rows);
+    } catch (error) {
+      console.error("Error fetching email identities:", error);
+      res.status(500).json({ error: "Failed to fetch email identities" });
+    }
+  });
+
+  app.post("/api/companies/:id/email-identities", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = pStr(req.params.id);
+      if (!(await canAccessCompany(currentUser, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const body = z.object({
+        kind: z.enum(CUSTOMER_EMAIL_IDENTITY_KINDS),
+        value: z.string().min(1).max(254),
+        label: z.string().max(120).optional().nullable(),
+        contactId: z.string().optional().nullable(),
+      }).safeParse(req.body);
+      if (!body.success) return res.status(400).json({ error: body.error.message });
+      // Validate value shape per kind. `domain` is bare host; the
+      // others are full email addresses. Normalisation to lower-case
+      // happens inside `createCustomerEmailIdentity`.
+      const value = body.data.value.trim().toLowerCase();
+      if (body.data.kind === "domain") {
+        if (value.includes("@") || !value.includes(".")) {
+          return res.status(400).json({ error: "Domain must be a bare host (e.g. acme.com)" });
+        }
+      } else {
+        if (!value.includes("@") || !value.includes(".")) {
+          return res.status(400).json({ error: "Value must be a valid email address" });
+        }
+      }
+      const parsed = insertCustomerEmailIdentitySchema.safeParse({
+        organizationId: currentUser.organizationId,
+        companyId,
+        kind: body.data.kind,
+        value,
+        label: body.data.label ?? null,
+        contactId: body.data.contactId ?? null,
+        active: true,
+      });
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+      const created = await storage.createCustomerEmailIdentity(parsed.data);
+      res.status(201).json(created);
+    } catch (error) {
+      console.error("Error creating email identity:", error);
+      res.status(500).json({ error: "Failed to create email identity" });
+    }
+  });
+
+  app.delete("/api/companies/:id/email-identities/:identityId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = pStr(req.params.id);
+      if (!(await canAccessCompany(currentUser, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const ok = await storage.deleteCustomerEmailIdentity(pStr(req.params.identityId), currentUser.organizationId);
+      if (!ok) return res.status(404).json({ error: "Identity not found" });
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting email identity:", error);
+      res.status(500).json({ error: "Failed to delete email identity" });
     }
   });
 
