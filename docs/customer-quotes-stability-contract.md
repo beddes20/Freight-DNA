@@ -8,6 +8,25 @@
 > matching guardrails in `tests/code-quality-guardrails.test.ts` (Section
 > 1100).
 >
+> **Mandatory declaration rule (in effect through end of this week).**
+> Every task that touches Customer Quotes — frontend, backend, schema,
+> tests, or anything under `server/services/customerQuotes.ts`,
+> `server/routes/customerQuotes.ts`, `client/src/pages/quote-requests.tsx`,
+> or `client/src/pages/customer-quotes.tsx` — **must** include one of the
+> following lines in its task description / PR body, verbatim:
+>
+> - `Customer Quotes contracts touched: NONE`
+> - `Customer Quotes contracts touched: CQ-X[, CQ-Y, …]`  (list every
+>   contract whose Source-of-truth files or Must / Must NOT rules change)
+>
+> Reviewers must reject diffs that touch the files listed under any
+> contract's **Source of truth** without naming the matching CQ-N in the
+> task. A task that declares `NONE` and then modifies a frozen file
+> requires either reverting the change or amending the task to list the
+> contract before merge. Tasks that declare `CQ-N` must update both this
+> document and Section 1100 of `tests/code-quality-guardrails.test.ts` in
+> the same commit.
+>
 > **Scope rule.** This contract only covers the **read / display / filter**
 > layer for Customer Quotes and Account Ownership. It deliberately does **not**
 > reopen the email-ingestion plumbing, the classifier, `routing_status`
@@ -292,10 +311,14 @@ While stabilization is in flight:
   - `client/src/pages/quote-requests.tsx` empty-state branches.
   - `client/src/pages/customer-quotes.tsx` (if/when it exists) data loaders.
 
-- **New tasks must declare**: "Touches Customer Quotes contract: NONE / CQ-X".
-  If "NONE", reviewers should reject any diff under the frozen files above.
-  If "CQ-X", the diff must update this document and Section 1100 in the same
-  commit.
+- **New tasks must declare** (verbatim, see top-of-doc rule):
+  `Customer Quotes contracts touched: NONE`
+  or
+  `Customer Quotes contracts touched: CQ-X[, CQ-Y, …]`.
+  Tasks that omit the declaration are not ready for review. `NONE` means
+  reviewers should reject any diff under the frozen files above.
+  `CQ-X` means the diff must update this document and Section 1100 in
+  the same commit.
 
 - **Cleanup work is split out**, not bundled with product work. If you want
   to remove `quote_customers.owner_rep_id` permanently, that is its own
