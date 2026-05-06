@@ -17,11 +17,21 @@ export function registerGoalRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      // Load org users early — needed both for goal enrichment AND for
+      // org-scoping admin/director visibility (they see all goals in their org).
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      const orgUserIds = new Set(allUsers.map(u => u.id));
+
       let goalsList;
-      if (user.role === "admin") {
-        goalsList = await storage.getGoals({});
-      } else if (user.role === "director" || user.role === "sales" || user.role === "sales_director") {
-        goalsList = await storage.getGoals({ namId: user.id });
+      if (user.role === "admin" || user.role === "director" || user.role === "sales_director") {
+        // Admins, directors, and sales directors see every goal in their org
+        // (any user in the org as either the namId or the amId).
+        const all = await storage.getGoals({});
+        goalsList = all.filter(g =>
+          (g.namId ? orgUserIds.has(g.namId) : false) ||
+          (g.amId ? orgUserIds.has(g.amId) : false),
+        );
       } else if (user.role === "national_account_manager") {
         const setGoals = await storage.getGoals({ namId: user.id });
         const assignedGoals = await storage.getGoals({ amId: user.id });
@@ -34,11 +44,11 @@ export function registerGoalRoutes(app: Express): void {
         const seen = new Set<string>();
         goalsList = [...ownGoals, ...setGoals].filter(g => { if (seen.has(g.id)) return false; seen.add(g.id); return true; });
       } else {
+        // sales reps + everyone else: own goals only
         goalsList = await storage.getGoals({ amId: user.id });
       }
 
       // Enrich goals with auto-computed values so dashboard alerts use accurate data
-      const allUsers = await storage.getUsers(req.session.organizationId!);
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
 
