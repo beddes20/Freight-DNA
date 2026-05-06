@@ -98,6 +98,7 @@ import MyPodsPage from "@/pages/my-pods";
 import AdminFreightOutreachTemplatesPage from "@/pages/admin-freight-outreach-templates";
 import AdminCarrierIntelligencePage from "@/pages/admin-carrier-intelligence";
 import AdminCarrierIntelligenceScoringPage from "@/pages/admin-carrier-intelligence-scoring";
+import AdminHeroSlicePage from "@/pages/admin-hero-slice";
 import ProfilePage from "@/pages/profile";
 import AiAgentPortal from "@/pages/ai-agent";
 import AvailableFreightPage from "@/pages/available-freight";
@@ -235,6 +236,7 @@ function Router() {
       <Route path="/admin/freight-outreach-templates" component={AdminFreightOutreachTemplatesPage} />
       <Route path="/admin/carrier-intelligence" component={AdminCarrierIntelligencePage} />
       <Route path="/admin/carrier-intelligence/scoring" component={AdminCarrierIntelligenceScoringPage} />
+      <Route path="/admin/hero-slice" component={AdminHeroSlicePage} />
       <Route path="/admin/carrier-intelligence/imports" component={AdminCarrierIntelligencePage} />
       <Route path="/admin/carrier-intelligence/settings" component={CarrierIntelligenceSettingsPage} />
       <Route path="/carrier-intelligence/scorecard" component={CarrierIntelligenceScorecardPage} />

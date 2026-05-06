@@ -209,6 +209,7 @@ export const adminItems: NavItem[] = [
   { title: "PTO Passoff",         url: "/pto-passoff",                       icon: Plane,      description: "PTO coverage handoffs.", roles: ADMIN_GROUP_ROLES },
   { title: "Touchpoint History",  url: "/touchpoint-history",                icon: Phone,      description: "Review tool — every touchpoint logged across the org.", roles: ADMIN_GROUP_ROLES },
   { title: "Sidebar Tooltips",    url: "/admin/sidebar-tooltips",            icon: HelpCircle, description: "Edit per-item sidebar tooltip overrides.", roles: ["admin"] },
+  { title: "Hero Slice",          url: "/admin/hero-slice",                  icon: Truck,      description: "Configure customer/lane slices where won quotes auto-create freight delegated to a logistics manager.", roles: ["admin"] },
   { title: "Feedback Inbox",      url: "/feedback-inbox",                    icon: Inbox,      description: "User feedback and app suggestions.", roles: ["admin", "director"] },
   { title: "Notifications",       url: "/notifications",                     icon: Inbox,      description: "Full notification history.", roles: ADMIN_GROUP_ROLES },
 ];
