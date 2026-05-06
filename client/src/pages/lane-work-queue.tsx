@@ -318,11 +318,7 @@ interface TeamMember {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// Task #1085 — canonical recurring-lane rule (mirrors LWQ_MOVES_THRESHOLD on
-// the server). Use `movesLast30Days` from the row, NOT the derived
-// `avgLoadsPerWeek`, so the chip + count + filter agree with the queue's
-// own ≥6/30d eligibility rule (see Task #1051).
-const MIN_MOVES_30D = 6;
+const HIGH_FREQ_THRESHOLD = 2; // loads/week — main procurement priority
 
 function laneLabel(item: { origin: string; originState?: string | null; destination: string; destinationState?: string | null }) {
   return formatLaneDisplay(item.origin, item.originState ?? null, item.destination, item.destinationState ?? null);
@@ -990,7 +986,7 @@ function LaneRow({
   const contacted = item.carriersContactedCount ?? 0;
   const progressPct = Math.min(100, (contacted / completionThreshold) * 100);
   const loadsNum = avgLoadsNum(item.avgLoadsPerWeek);
-  const isHighFreq = item.isHighFrequency ?? ((item.movesLast30Days ?? 0) >= MIN_MOVES_30D);
+  const isHighFreq = item.isHighFrequency ?? (loadsNum >= HIGH_FREQ_THRESHOLD);
 
   return (
     <div
@@ -1558,7 +1554,7 @@ function CustomerGroup({
   }, [defaultExpanded]);
 
   const totalLoads = items.reduce((sum, i) => sum + avgLoadsNum(i.avgLoadsPerWeek), 0);
-  const recurring30dCount = items.filter(i => (i.movesLast30Days ?? 0) >= MIN_MOVES_30D).length;
+  const highFreqCount = items.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length;
   const hasCrmMatch = items.some(i => i.companyId);
 
   return (
@@ -1578,10 +1574,10 @@ function CustomerGroup({
           {hasCrmMatch && (
             <Badge variant="outline" className="text-[9px] py-0 px-1 border-blue-500/30 text-blue-400 bg-blue-500/10">CRM</Badge>
           )}
-          {recurring30dCount > 0 && (
+          {highFreqCount > 0 && (
             <Badge variant="outline" className="text-[10px] py-0 px-1.5 border-amber-500/50 text-amber-400 bg-amber-500/10 gap-0.5">
               <Zap className="w-2.5 h-2.5" />
-              {recurring30dCount} 6× / 30d
+              {highFreqCount} high-freq
             </Badge>
           )}
           <span className="text-[11px] text-muted-foreground">
@@ -1640,7 +1636,7 @@ function BucketSection({
   onOpenCockpit,
   bucket,
   teamMembers,
-  recurring30dOnly,
+  highFreqOnly,
   selectedLaneIds,
   onToggleSelect,
   votriByLane,
@@ -1657,7 +1653,7 @@ function BucketSection({
   onOpenCockpit?: (item: LaneItem) => void;
   bucket: keyof WorkQueue;
   teamMembers: TeamMember[];
-  recurring30dOnly: boolean;
+  highFreqOnly: boolean;
   selectedLaneIds?: Set<string>;
   onToggleSelect?: (laneId: string) => void;
   votriByLane?: Map<string, LaneVotriData>;
@@ -1681,10 +1677,10 @@ function BucketSection({
     // (see `sortedUnassigned`) survives this re-sort.
     // Task #1028 (LWQ C) — when the server-side ranking is authoritative
     // (Strategic / Outreach modes), keep the items in the order the
-    // server returned them and only apply the recurring-30d filter.
+    // server returned them and only apply the highFreq filter.
     const ordered = preserveServerOrder ? items : sortItems(items, votriByLane);
-    return recurring30dOnly ? ordered.filter(i => (i.movesLast30Days ?? 0) >= MIN_MOVES_30D) : ordered;
-  }, [items, recurring30dOnly, votriByLane, preserveServerOrder]);
+    return highFreqOnly ? ordered.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD) : ordered;
+  }, [items, highFreqOnly, votriByLane, preserveServerOrder]);
 
   const hiddenCount = items.length - visibleItems.length;
 
@@ -1724,8 +1720,8 @@ function BucketSection({
               <h2 className="text-sm font-semibold text-foreground">{title}</h2>
               <Badge variant="secondary" className="text-[10px] h-5 px-1.5">{customerCount} customers</Badge>
               <Badge variant="outline" className="text-[10px] h-5 px-1.5 text-muted-foreground">{visibleItems.length} lanes</Badge>
-              {recurring30dOnly && hiddenCount > 0 && (
-                <span className="text-[10px] text-muted-foreground/50">(+{hiddenCount} below 6× / 30d hidden)</span>
+              {highFreqOnly && hiddenCount > 0 && (
+                <span className="text-[10px] text-muted-foreground/50">(+{hiddenCount} below 2/wk hidden)</span>
               )}
             </div>
             <p className="text-[11px] text-muted-foreground">{description}</p>
@@ -1751,8 +1747,8 @@ function BucketSection({
         <div className="flex flex-col gap-2">
           {visibleItems.length === 0 ? (
             <p className="text-xs text-muted-foreground italic py-2 pl-10">
-              {recurring30dOnly && items.length > 0
-                ? "No 6× / 30d lanes in this bucket."
+              {highFreqOnly && items.length > 0
+                ? "No 2+/week lanes in this bucket."
                 : "No lanes in this bucket."}
             </p>
           ) : flatList ? (
@@ -2301,7 +2297,7 @@ function defaultLwqModeForRole(_role: string | undefined): LwqMode {
 // `deserializeFiltersFromUrl` helper (same code path AF + Available Loads
 // use). `customer`, `highFreq`, and `manual` stay LWQ-private query keys.
 function readUrlFilters(): {
-  recurring30dOnly: boolean;
+  highFreqOnly: boolean;
   manualOnly: boolean;
   customerFilter: string;
   owner: OwnerFilterValue;
@@ -2309,7 +2305,7 @@ function readUrlFilters(): {
 } {
   if (typeof window === "undefined") {
     return {
-      recurring30dOnly: false,
+      highFreqOnly: false,
       manualOnly: false,
       customerFilter: "__all__",
       owner: "all",
@@ -2319,9 +2315,7 @@ function readUrlFilters(): {
   const params = new URLSearchParams(window.location.search);
   const shared = deserializeFiltersFromUrl(params);
   return {
-    // Task #1085 — canonical key is `recurring30d`; read legacy `highFreq=1`
-    // for one release so existing bookmarks survive.
-    recurring30dOnly: params.get("recurring30d") === "1" || params.get("highFreq") === "1",
+    highFreqOnly: params.get("highFreq") === "1",
     manualOnly: params.get("manual") === "1",
     customerFilter: params.get("customer") || "__all__",
     owner: shared.owner ?? "all",
@@ -2363,7 +2357,7 @@ export default function LaneWorkQueuePage() {
   // Lazy initializers seed from URL once so a refresh / shared link replays
   // the same filtered view the rep was looking at. URL is updated below as
   // filters change so the back-button gives a sensible history of states.
-  const [recurring30dOnly, setRecurring30dOnly] = useState(() => readUrlFilters().recurring30dOnly);
+  const [highFreqOnly, setHighFreqOnly] = useState(() => readUrlFilters().highFreqOnly);
   const [manualOnly, setManualOnly] = useState(() => readUrlFilters().manualOnly);
   const [customerFilter, setCustomerFilter] = useState<string>(() => readUrlFilters().customerFilter);
   // Workflow OS — Task #917. Owner + pickup-scope are the two canonical
@@ -2427,14 +2421,11 @@ export default function LaneWorkQueuePage() {
     const incoming = new URLSearchParams(window.location.search);
     incoming.forEach((v, k) => {
       if (k === "owner" || k === "pickupScope") return;
-      if (k === "highFreq" || k === "recurring30d" || k === "manual" || k === "customer") return;
+      if (k === "highFreq" || k === "manual" || k === "customer") return;
       if (k === "mode") return;
       if (!params.has(k)) params.set(k, v);
     });
-    // Task #1085 — write the canonical key only and strip the legacy one
-    // so the URL converges after one round-trip.
-    if (recurring30dOnly) params.set("recurring30d", "1"); else params.delete("recurring30d");
-    params.delete("highFreq");
+    if (highFreqOnly) params.set("highFreq", "1"); else params.delete("highFreq");
     if (manualOnly) params.set("manual", "1"); else params.delete("manual");
     if (customerFilter && customerFilter !== "__all__") params.set("customer", customerFilter);
     else params.delete("customer");
@@ -2451,20 +2442,20 @@ export default function LaneWorkQueuePage() {
     if (newUrl !== `${window.location.pathname}${window.location.search}${window.location.hash}`) {
       window.history.replaceState(null, "", newUrl);
     }
-  }, [recurring30dOnly, manualOnly, customerFilter, ownerFilter, pickupScope, mode, user?.role]);
+  }, [highFreqOnly, manualOnly, customerFilter, ownerFilter, pickupScope, mode, user?.role]);
 
   // Active filter count drives whether the "Clear all" affordance shows.
   // Owner + pickupScope only count as "active" when set away from their
   // canonical defaults.
   const activeFilterCount =
-    (recurring30dOnly ? 1 : 0) +
+    (highFreqOnly ? 1 : 0) +
     (manualOnly ? 1 : 0) +
     (customerFilter !== "__all__" ? 1 : 0) +
     (ownerFilter !== "all" ? 1 : 0) +
     (pickupScope !== DEFAULT_PICKUP_SCOPE ? 1 : 0);
 
   const clearAllFilters = () => {
-    setRecurring30dOnly(false);
+    setHighFreqOnly(false);
     setManualOnly(false);
     setCustomerFilter("__all__");
     setOwnerFilter("all");
@@ -2845,8 +2836,8 @@ export default function LaneWorkQueuePage() {
     if (customerFilter !== "__all__") {
       out = out.filter(i => i.companyName === customerFilter);
     }
-    if (recurring30dOnly) {
-      out = out.filter(i => (i.movesLast30Days ?? 0) >= MIN_MOVES_30D);
+    if (highFreqOnly) {
+      out = out.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD);
     }
     if (manualOnly) {
       out = out.filter(i => i.isManual);
@@ -2863,16 +2854,16 @@ export default function LaneWorkQueuePage() {
       assignedUntouched: filterBucket(queue.assignedUntouched ?? []),
       inProgress: filterBucket(queue.inProgress ?? []),
     };
-  }, [queue, customerFilter, recurring30dOnly, manualOnly]);
+  }, [queue, customerFilter, highFreqOnly, manualOnly]);
 
   // Count high-frequency lanes across all buckets for the filter chip label
-  const recurring30dCount = useMemo(() => {
+  const highFreqCount = useMemo(() => {
     if (!queue?.unassigned) return 0;
     return (
-      queue.unassigned.filter(i => (i.movesLast30Days ?? 0) >= MIN_MOVES_30D).length +
-      (queue.noContactable ?? []).filter(i => (i.movesLast30Days ?? 0) >= MIN_MOVES_30D).length +
-      (queue.assignedUntouched ?? []).filter(i => (i.movesLast30Days ?? 0) >= MIN_MOVES_30D).length +
-      (queue.inProgress ?? []).filter(i => (i.movesLast30Days ?? 0) >= MIN_MOVES_30D).length
+      queue.unassigned.filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
+      (queue.noContactable ?? []).filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
+      (queue.assignedUntouched ?? []).filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length +
+      (queue.inProgress ?? []).filter(i => avgLoadsNum(i.avgLoadsPerWeek) >= HIGH_FREQ_THRESHOLD).length
     );
   }, [queue]);
 
@@ -3024,8 +3015,8 @@ export default function LaneWorkQueuePage() {
     const hiddenByCustomer = customerFilter !== "__all__"
       ? all.filter(i => i.companyName !== customerFilter).length
       : 0;
-    const hiddenByHighFreq = recurring30dOnly
-      ? all.filter(i => (i.movesLast30Days ?? 0) < MIN_MOVES_30D).length
+    const hiddenByHighFreq = highFreqOnly
+      ? all.filter(i => avgLoadsNum(i.avgLoadsPerWeek) < HIGH_FREQ_THRESHOLD).length
       : 0;
     const hiddenByManual = manualOnly
       ? all.filter(i => !i.isManual).length
@@ -3035,11 +3026,11 @@ export default function LaneWorkQueuePage() {
       visible,
       buckets: [
         { id: "customer-filter", label: `Customer filter (${customerFilter === "__all__" ? "none" : customerFilter})`, count: hiddenByCustomer },
-        { id: "recurring-30d-filter", label: "Recurring filter (≥6 / 30d)", count: hiddenByHighFreq },
+        { id: "high-freq-filter", label: "High-frequency filter (≥2/wk)", count: hiddenByHighFreq },
         { id: "manual-only-filter", label: "Manual-lanes-only filter", count: hiddenByManual },
       ],
     };
-  }, [queue, flatLaneOrder, customerFilter, recurring30dOnly, manualOnly, mode]);
+  }, [queue, flatLaneOrder, customerFilter, highFreqOnly, manualOnly, mode]);
 
   // Task #871 — open the cockpit overlay for a given LaneItem.
   const openCockpitForLane = (it: LaneItem) => {
@@ -3389,16 +3380,16 @@ export default function LaneWorkQueuePage() {
             <Sparkles className="w-3.5 h-3.5" />
             My lanes today
           </Button>
-          {/* Task #1085 — Recurring lane filter (≥6 moved loads in last 30d) */}
+          {/* 2+/week filter toggle */}
           <Button
-            variant={recurring30dOnly ? "default" : "outline"}
+            variant={highFreqOnly ? "default" : "outline"}
             size="sm"
-            className={`h-8 text-xs gap-1.5 ${recurring30dOnly ? "bg-amber-500 hover:bg-amber-600 text-white border-transparent" : ""}`}
-            onClick={() => setRecurring30dOnly(v => !v)}
+            className={`h-8 text-xs gap-1.5 ${highFreqOnly ? "bg-amber-500 hover:bg-amber-600 text-white border-transparent" : ""}`}
+            onClick={() => setHighFreqOnly(v => !v)}
             data-testid="btn-filter-high-freq"
           >
             <Zap className="w-3.5 h-3.5" />
-            6× / 30d{recurring30dCount > 0 && ` (${recurring30dCount})`}
+            2+/week{highFreqCount > 0 && ` (${highFreqCount})`}
           </Button>
           {/* Manual lanes filter toggle */}
           <Button
@@ -3477,15 +3468,15 @@ export default function LaneWorkQueuePage() {
                 data-testid="active-filter-chips"
               >
                 <span className="text-xs text-muted-foreground mr-1">Filters:</span>
-                {recurring30dOnly && (
+                {highFreqOnly && (
                   <button
-                    onClick={() => setRecurring30dOnly(false)}
+                    onClick={() => setHighFreqOnly(false)}
                     className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs hover:bg-amber-500/25 transition-colors"
-                    data-testid="chip-filter-recurring-30d"
-                    title="Remove 6× / 30d filter"
+                    data-testid="chip-filter-high-freq"
+                    title="Remove 2+/week filter"
                   >
                     <Zap className="w-3 h-3" />
-                    <span>6× / 30d</span>
+                    <span>2+/week</span>
                     <X className="w-3 h-3" />
                   </button>
                 )}
@@ -3557,21 +3548,21 @@ export default function LaneWorkQueuePage() {
                     <p className="text-[10px] text-amber-400/70">In Progress</p>
                   </div>
                 )}
-                {/* Task #1085 — Recurring (≥6 / 30d) summary chip */}
-                {recurring30dCount > 0 && (
+                {/* High-frequency summary chip */}
+                {highFreqCount > 0 && (
                   <button
                     className={`flex items-center gap-1.5 border rounded-lg px-3 py-2 text-center min-w-[80px] transition-colors ${
-                      recurring30dOnly
+                      highFreqOnly
                         ? "bg-amber-500/20 border-amber-500/40"
                         : "bg-amber-500/10 border-amber-500/20 hover:border-amber-500/40"
                     }`}
-                    onClick={() => setRecurring30dOnly(v => !v)}
+                    onClick={() => setHighFreqOnly(v => !v)}
                     data-testid="btn-highfreq-chip"
                   >
                     <Zap className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                     <div>
-                      <p className="text-lg font-bold text-amber-400 leading-none">{recurring30dCount}</p>
-                      <p className="text-[10px] text-amber-400/70">6× / 30d</p>
+                      <p className="text-lg font-bold text-amber-400 leading-none">{highFreqCount}</p>
+                      <p className="text-[10px] text-amber-400/70">2+/wk</p>
                     </div>
                   </button>
                 )}
@@ -3616,7 +3607,7 @@ export default function LaneWorkQueuePage() {
                 onOpenCockpit={openCockpitForLane}
                 bucket="assignedUntouched"
                 teamMembers={teamMembers}
-                recurring30dOnly={recurring30dOnly}
+                highFreqOnly={highFreqOnly}
                 selectedLaneIds={selectedLaneIds}
                 onToggleSelect={handleToggleSelect}
                 votriByLane={votriByLane}
@@ -3635,7 +3626,7 @@ export default function LaneWorkQueuePage() {
                 onOpenCockpit={openCockpitForLane}
                 bucket="inProgress"
                 teamMembers={teamMembers}
-                recurring30dOnly={recurring30dOnly}
+                highFreqOnly={highFreqOnly}
                 selectedLaneIds={selectedLaneIds}
                 onToggleSelect={handleToggleSelect}
                 votriByLane={votriByLane}
@@ -3654,7 +3645,7 @@ export default function LaneWorkQueuePage() {
                 onOpenCockpit={openCockpitForLane}
                 bucket="inProgress"
                 teamMembers={teamMembers}
-                recurring30dOnly={recurring30dOnly}
+                highFreqOnly={highFreqOnly}
                 selectedLaneIds={selectedLaneIds}
                 onToggleSelect={handleToggleSelect}
                 votriByLane={votriByLane}
@@ -3666,8 +3657,8 @@ export default function LaneWorkQueuePage() {
               <BucketSection
                 title="Unassigned"
                 description={
-                  recurring30dOnly
-                    ? "Showing lanes with ≥6 moves in the last 30d — highest procurement priority."
+                  highFreqOnly
+                    ? "Showing 2+/wk lanes only — highest procurement priority."
                     : "These lanes have no owner — assign one to get outreach started. Sorted highest frequency first."
                 }
                 icon={UserX}
@@ -3678,7 +3669,7 @@ export default function LaneWorkQueuePage() {
                 onOpenCockpit={openCockpitForLane}
                 bucket="unassigned"
                 teamMembers={teamMembers}
-                recurring30dOnly={recurring30dOnly}
+                highFreqOnly={highFreqOnly}
                 selectedLaneIds={selectedLaneIds}
                 onToggleSelect={handleToggleSelect}
                 votriByLane={votriByLane}
@@ -3696,7 +3687,7 @@ export default function LaneWorkQueuePage() {
                 onOpenCockpit={openCockpitForLane}
                 bucket="noContactable"
                 teamMembers={teamMembers}
-                recurring30dOnly={recurring30dOnly}
+                highFreqOnly={highFreqOnly}
                 selectedLaneIds={selectedLaneIds}
                 onToggleSelect={handleToggleSelect}
                 votriByLane={votriByLane}

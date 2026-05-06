@@ -48,9 +48,3 @@ id = "qWL5PJaXioifHvUtbT63Y"
 uri = "file://screenshots/freshness-strip-normal.jpg"
 type = "image"
 title = "Freshness strip — STEADY state (gap < 20, hint hidden)"
-
-[[outputs]]
-id = "jrf_PLBlYnvvv4f_zXnZ1"
-uri = "file://docs/platform-overview.md"
-type = "text"
-title = "FreightDNA — Platform Overview"

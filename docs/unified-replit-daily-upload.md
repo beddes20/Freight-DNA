@@ -111,30 +111,6 @@ The legacy AF-importer-specific health surface
 admin import audit page only — rep-facing surfaces must use the unified
 pill.
 
-## LWQ UI is locked to the same rule (Task #1085)
-
-The Lane Work Queue page (`client/src/pages/lane-work-queue.tsx`) reads
-the same `movesLast30Days` field on each row instead of the derived
-`avgLoadsPerWeek`. Specifically:
-
-- Toolbar filter button reads **"6× / 30d (N)"** (testid
-  `btn-filter-high-freq` is intentionally kept stable).
-- Active-filter pill: testid `chip-filter-recurring-30d`, label
-  "6× / 30d", title "Remove 6× / 30d filter".
-- Empty-state copy: "No 6× / 30d lanes in this bucket."
-- Summary stat card and per-customer group badge both read
-  "6× / 30d".
-- URL query param: canonical `recurring30d=1`, with one-release
-  back-compat read of the legacy `highFreq=1` so existing bookmarks
-  survive.
-- Page-local constant `MIN_MOVES_30D = 6` mirrors the server-side
-  `LWQ_MOVES_THRESHOLD`. The legacy `HIGH_FREQ_THRESHOLD = 2` is gone.
-
-Behavior is locked by Section 1085 of
-`tests/code-quality-guardrails.test.ts`. A read-only diagnostic at
-`scripts/diagnose-lwq-recurring-rule.ts` prints specimen lanes with the
-old (≥2/wk) vs new (≥6/30d) classification side-by-side.
-
 ## Out of scope (kept stable on purpose)
 
 - The LWQ scoring weights (`LANE_CONFIG.scoring`) are unchanged.
