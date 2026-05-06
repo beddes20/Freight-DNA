@@ -1,0 +1,125 @@
+We are currently piloting these 4 tabs with a small user group:
+
+Conversations
+
+Customer Quotes
+
+Available Freight
+
+Lane Work Queue
+
+The goal is not to add more features right now.
+The goal is to identify the highest-impact friction points, trust gaps, and rollout blockers in the existing hero loop:
+
+Customer email → Quote captured → Quote won → Opportunity/load visible to the LM in Available Freight + Lane Work Queue
+
+What I want you to do
+1. Perform a pilot-readiness audit of the current 4-tab experience
+
+For each tab, identify:
+
+what a rep/LM is expected to understand immediately,
+
+where the UI currently creates hesitation or confusion,
+
+and what parts of the workflow still feel like “you have to know the trick.”
+
+Focus on:
+
+navigation clarity,
+
+state clarity,
+
+cross-tab continuity,
+
+and whether the system explains itself well enough for a pilot user.
+
+2. Identify the top friction points
+
+I want a prioritized list of the highest-value fixes discovered during the pilot, using these categories:
+
+Rollout blocker — confusing/broken enough to harm adoption or trust
+
+High-friction — causes hesitation, hunting, or repeated questions
+
+Polish — worth improving, but not a pilot blocker
+
+For each issue, include:
+
+where it occurs,
+
+what the user expected,
+
+what actually happens,
+
+why that gap matters,
+
+and the smallest safe fix.
+
+3. Recommend only the next 3–5 changes
+
+Do not give me a giant backlog.
+I want the next 3–5 highest-leverage changes only, across these 4 tabs, based on:
+
+pilot usability,
+
+trust,
+
+rollout readiness,
+
+and end-to-end workflow clarity.
+
+Prioritize changes that:
+
+reduce user confusion,
+
+improve followability of the hero loop,
+
+and make the platform easier to trust without adding new system complexity.
+
+4. Create a rollout support artifact
+
+Add a short section to docs/hero-loop-email-to-load.md or a new docs/pilot-rollout-notes.md that includes:
+
+what reps should expect in each tab,
+
+what LMs should expect in each tab,
+
+known limitations during pilot,
+
+and a short “how to use this flow” guide for the pilot group.
+
+5. Keep this constrained
+
+No broad refactors
+
+No email-plumbing changes
+
+No new major concepts
+
+No speculative feature expansion
+
+Focus on usability, clarity, and pilot readiness
+
+Deliverables
+
+I want:
+
+A pilot-readiness audit across the 4 tabs
+
+A prioritized friction list labeled:
+
+Rollout blocker
+
+High-friction
+
+Polish
+
+The next 3–5 recommended fixes only
+
+A short rollout support artifact for pilot users
+
+Desired outcome
+
+I want to know:
+What is still confusing, what is hurting trust, and what are the smallest changes that would make these 4 tabs feel rollout-ready for a broader audience.
