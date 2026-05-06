@@ -515,10 +515,17 @@ export default function GoalsPage() {
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkForm, setBulkForm] = useState(defaultBulkForm);
   const [pastGoalsCollapsed, setPastGoalsCollapsed] = useState(true);
+  // Scope toggle for org-wide viewers (admin / director / sales_director).
+  // When "mine", restrict the visible goal set to goals the viewer is
+  // personally part of (set by them OR assigned to them). When "all"
+  // (default), show every goal the API returns. NAMs and reps don't see
+  // the toggle — their API response is already personal.
+  const [scope, setScope] = useState<"all" | "mine">("all");
 
   const [newMilestoneText, setNewMilestoneText] = useState("");
 
   const isNam = user?.role === "national_account_manager" || user?.role === "director" || user?.role === "sales" || user?.role === "admin" || user?.role === "sales_director";
+  const isOrgWideViewer = user?.role === "admin" || user?.role === "director" || user?.role === "sales_director";
   const isAm = user?.role === "account_manager" || user?.role === "logistics_manager" || user?.role === "logistics_coordinator";
   const isAmRole = user?.role === "account_manager";
 
@@ -707,9 +714,13 @@ export default function GoalsPage() {
   });
   const teamLabel = teamHasLmLc ? "Team" : "AMs";
 
+  // Apply scope toggle first (Mine vs All Reps), then the AM-tab filter.
+  const scopedGoals = (isOrgWideViewer && scope === "mine")
+    ? goals.filter(g => g.amId === user?.id || g.namId === user?.id)
+    : goals;
   const filteredGoals = activeTab === "all"
-    ? goals
-    : goals.filter(g => g.amId === activeTab);
+    ? scopedGoals
+    : scopedGoals.filter(g => g.amId === activeTab);
 
   function openCreate(amId?: string) {
     setEditingGoal(null);
@@ -822,6 +833,26 @@ export default function GoalsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {isOrgWideViewer && (
+            <div className="inline-flex rounded-md border border-input bg-background p-0.5" data-testid="toggle-goals-scope">
+              <button
+                type="button"
+                onClick={() => setScope("all")}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${scope === "all" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                data-testid="button-scope-all"
+              >
+                All Reps
+              </button>
+              <button
+                type="button"
+                onClick={() => setScope("mine")}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${scope === "mine" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                data-testid="button-scope-mine"
+              >
+                Mine Only
+              </button>
+            </div>
+          )}
           {isNam && (
             <Button
               variant="outline"

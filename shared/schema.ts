@@ -6417,6 +6417,43 @@ export const insertConversationSuggestionFeedbackStatsSchema = createInsertSchem
 export type InsertConversationSuggestionFeedbackStats = z.infer<typeof insertConversationSuggestionFeedbackStatsSchema>;
 export type ConversationSuggestionFeedbackStats = typeof conversationSuggestionFeedbackStats.$inferSelect;
 
+// ── Conversations v2 Feedback Events (Task #1087) ────────────────────────────
+// Append-only feedback rows captured from the dev-only `/conversations-v2`
+// learning cockpit. Each click on a feedback affordance writes one row so
+// we can later analyse which suggestions / summaries / classifications the
+// rep actually trusted, without overwriting prior signals. Distinct from
+// `conversation_thread_suggestions.feedbackKind` (which captures only the
+// most recent rating on the active suggestion); the v2 strip records four
+// kinds — suggested_action, summary, is_quote, recommended_reply —
+// alongside the suggestion-style feedback. When a kind maps onto the
+// existing suggestion contract we ALSO update the suggestion row so the
+// existing dismissal-on-rehash logic continues to work.
+export const conversationThreadFeedbackEvents = pgTable(
+  "conversation_thread_feedback_events",
+  {
+    id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+    orgId: varchar("org_id").notNull().references(() => organizations.id, { onDelete: "cascade" }),
+    threadId: text("thread_id").notNull(),
+    // One of: 'suggested_action' | 'summary' | 'is_quote' | 'recommended_reply'
+    kind: text("kind").notNull(),
+    // One of: 'correct' | 'incorrect' | 'useful' | 'not_useful' |
+    //          'is_quote' | 'not_quote' | 'worked' | 'did_not_work'
+    value: text("value").notNull(),
+    notes: text("notes"),
+    userId: varchar("user_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("conv_thread_feedback_events_org_thread_idx").on(table.orgId, table.threadId, table.createdAt),
+  ],
+);
+export const insertConversationThreadFeedbackEventSchema = createInsertSchema(conversationThreadFeedbackEvents).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertConversationThreadFeedbackEvent = z.infer<typeof insertConversationThreadFeedbackEventSchema>;
+export type ConversationThreadFeedbackEvent = typeof conversationThreadFeedbackEvents.$inferSelect;
+
 // ── Email Response Time SLA settings (Task #602) ──────────────────────────────
 // Per-org configurable response-time SLA targets shown on the Response Time
 // tab. Defaults: 1h / 4h / 24h business hours. Stored as an array of

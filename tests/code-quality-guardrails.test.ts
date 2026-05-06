@@ -5761,3 +5761,72 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     "won-quote conversion must not write a synthetic orderNumber (upload-as-source-of-truth contract)",
   );
 })();
+
+// ── Section 1085: LWQ "6× / 30d" UI sync (Task #1085) ───────────────────────
+// Section 1051 made the eligibility rule "≥6 moved loads in the last 30
+// days" and exposes `movesLast30Days` per row. This section locks the LWQ
+// page UI to that same rule end-to-end so the toolbar chip, its count, the
+// active-filter pill, the empty-state copy, the summary stat card, and the
+// URL query param can never silently drift back to the legacy ≥2/wk
+// derived heuristic.
+(() => {
+  console.log("\n── Section 1085: LWQ '6× / 30d' UI sync (Task #1085) ──");
+
+  const lwq = readFile("client/src/pages/lane-work-queue.tsx");
+
+  assert(
+    "[1085] legacy '2+/week' / '2+/wk' / '2/wk' labels are gone from the LWQ page",
+    !/2\+\/week/.test(lwq) && !/2\+\/wk/.test(lwq) && !/2\/wk/.test(lwq),
+    "expected no remaining `2+/week`, `2+/wk`, or `2/wk` literals in lane-work-queue.tsx",
+  );
+  assert(
+    "[1085] legacy HIGH_FREQ_THRESHOLD = 2 constant is gone",
+    !/HIGH_FREQ_THRESHOLD\s*=\s*2/.test(lwq),
+    "expected the legacy `HIGH_FREQ_THRESHOLD = 2` constant to be removed",
+  );
+  assert(
+    "[1085] canonical MIN_MOVES_30D = 6 constant is defined",
+    /MIN_MOVES_30D\s*=\s*6/.test(lwq),
+    "expected `const MIN_MOVES_30D = 6` to mirror the server-side LWQ_MOVES_THRESHOLD",
+  );
+  assert(
+    "[1085] toolbar/queue filter predicates read movesLast30Days, not avgLoadsPerWeek",
+    !/avgLoadsNum\(i\.avgLoadsPerWeek\)\s*[<>]=?\s*HIGH_FREQ_THRESHOLD/.test(lwq) &&
+      /\(i\.movesLast30Days\s*\?\?\s*0\)\s*>=\s*MIN_MOVES_30D/.test(lwq),
+    "expected predicates of the form `(i.movesLast30Days ?? 0) >= MIN_MOVES_30D`",
+  );
+  assert(
+    "[1085] toolbar button label reads '6× / 30d'",
+    /6×\s*\/\s*30d\{recurring30dCount\s*>\s*0\s*&&/.test(lwq),
+    "expected the toolbar filter button label to read `6× / 30d (N)`",
+  );
+  assert(
+    "[1085] active-filter pill uses chip-filter-recurring-30d testid + new wording",
+    /data-testid="chip-filter-recurring-30d"/.test(lwq) &&
+      /title="Remove 6× \/ 30d filter"/.test(lwq),
+    "expected the active-filter pill testid + title to reflect the new rule",
+  );
+  assert(
+    "[1085] empty-state copy reads 'No 6× / 30d lanes in this bucket.'",
+    lwq.includes("No 6× / 30d lanes in this bucket."),
+    "expected the empty-state copy to be relabeled to 6× / 30d",
+  );
+  assert(
+    "[1085] URL writer emits the canonical recurring30d=1 key",
+    /params\.set\("recurring30d",\s*"1"\)/.test(lwq) &&
+      /params\.delete\("highFreq"\)/.test(lwq),
+    "expected the URL writer to set `recurring30d=1` and strip the legacy `highFreq` key",
+  );
+  assert(
+    "[1085] URL reader honours both recurring30d=1 and legacy highFreq=1",
+    /params\.get\("recurring30d"\)\s*===\s*"1"\s*\|\|\s*params\.get\("highFreq"\)\s*===\s*"1"/.test(lwq),
+    "expected one-release back-compat read of the legacy `highFreq=1` key",
+  );
+  assert(
+    "[1085] internal state renamed to recurring30dOnly / setRecurring30dOnly / recurring30dCount",
+    /\[recurring30dOnly,\s*setRecurring30dOnly\]\s*=\s*useState/.test(lwq) &&
+      /const\s+recurring30dCount\s*=\s*useMemo/.test(lwq) &&
+      !/highFreqOnly|setHighFreqOnly|highFreqCount/.test(lwq),
+    "expected the page-local state to be renamed to recurring30d* (no highFreq* identifiers left)",
+  );
+})();

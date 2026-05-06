@@ -1,0 +1,92 @@
+I like the direction of Conversations v2, but I want to push it closer to the actual FreightDNA vision:
+AI should learn from all email communications, get sharper over time, and show what is working vs. not working.
+
+Right now the page is better organized, but the AI layer is still mostly descriptive.
+
+Goal
+
+Turn Conversations v2 into a learning-oriented email cockpit, not just a summarized inbox.
+
+What I want added in development only
+
+Outcome learning
+For each thread, surface whether it led to:
+
+quote created
+
+quote won/lost
+
+no response
+
+tender accepted
+
+carrier decline
+
+or no meaningful outcome yet
+
+Similar-thread intelligence
+Add a panel showing what AI has learned from similar threads:
+
+typical conversion rate
+
+average time to reply / time to outcome
+
+common successful next actions
+
+common failure patterns
+
+Rep feedback loop
+Add lightweight feedback controls so a user can mark:
+
+suggested action was correct / incorrect
+
+summary was useful / not useful
+
+this thread was a quote / not a quote
+
+recommended reply worked / did not work
+
+Relationship memory
+Surface thread-level account/sender intelligence where available:
+
+sender responsiveness
+
+common communication pattern
+
+prior quote/win behavior
+
+known lane/equipment tendencies
+
+Learning-first right pane
+Reorganize the right panel into:
+
+What should I do now?
+
+What has AI learned from similar threads?
+
+What happened the last time we saw this pattern?
+
+Constraints
+
+Development only
+
+No production publish
+
+No email-plumbing rewrite
+
+Reuse existing quote outcomes, thread links, and event history where possible
+
+Prefer surfacing existing data and simple derived intelligence before inventing large new backend systems
+
+Deliverables
+
+exact files changed
+
+what existing data sources were reused
+
+what new derived fields / panels were added
+
+how the UI now helps AI learn from communication outcomes instead of only summarizing messages
+
+Desired outcome:
+Conversations v2 should help reps act now while also helping FreightDNA learn which email patterns, responses, and actions lead to wins.

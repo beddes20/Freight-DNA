@@ -282,17 +282,20 @@ test.describe('Cross-tab breadcrumb contract', () => {
 test.describe('Lane Work Queue filter persistence', () => {
   test.setTimeout(45_000);
 
-  test('?highFreq=1&manual=1&customer=X lights the matching filter pills', async ({ page }) => {
+  test('?recurring30d=1&manual=1&customer=X lights the matching filter pills', async ({ page }) => {
     // Either seeded customer is fine — chips render purely off URL state.
     const customer = seeded.assign.companyName;
+    // Task #1085 — canonical key is `recurring30d`; legacy `highFreq=1`
+    // is still read for one release but the active-filter pill testid
+    // moved to `chip-filter-recurring-30d`.
     await gotoAuth(
       page,
-      `/lanes/work-queue?highFreq=1&manual=1&customer=${encodeURIComponent(customer)}`,
+      `/lanes/work-queue?recurring30d=1&manual=1&customer=${encodeURIComponent(customer)}`,
     );
 
     // The active-filter chips only render when the filter is set, so their
     // mere presence proves the URL was honored on first paint.
-    await expect(page.locator('[data-testid="chip-filter-high-freq"]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('[data-testid="chip-filter-recurring-30d"]')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('[data-testid="chip-filter-manual"]')).toBeVisible();
     await expect(page.locator('[data-testid="chip-filter-customer"]')).toBeVisible();
     await expect(page.locator('[data-testid="btn-clear-all-filters"]')).toBeVisible();
@@ -300,7 +303,7 @@ test.describe('Lane Work Queue filter persistence', () => {
     // Clearing wipes the URL — verifies the bidirectional URL ↔ state sync.
     await page.locator('[data-testid="btn-clear-all-filters"]').click();
     await expect.poll(() => new URL(page.url()).search, { timeout: 5_000 }).toBe('');
-    expect(await page.locator('[data-testid="chip-filter-high-freq"]').count()).toBe(0);
+    expect(await page.locator('[data-testid="chip-filter-recurring-30d"]').count()).toBe(0);
     expect(await page.locator('[data-testid="chip-filter-manual"]').count()).toBe(0);
     expect(await page.locator('[data-testid="chip-filter-customer"]').count()).toBe(0);
   });
