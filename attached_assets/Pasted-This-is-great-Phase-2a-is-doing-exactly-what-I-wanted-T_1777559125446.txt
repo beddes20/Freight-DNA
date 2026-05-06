@@ -1,0 +1,47 @@
+This is great — Phase 2a is doing exactly what I wanted. The leakage tile and by-domain breakdown are super helpful, and the valuetruck.com numbers confirm we need a strong internal-domain guard before any writes.
+
+I’m aligned with your updated Phase 2b spec:
+
+Goal: every new quote-request signal ends in one of three terminal states — created, attached, or explicitly queued — with a visible leakage rate under ~2%, not 60–65%.
+
+Architecture: use quoteOpportunityFromSignalService after insertEmailSignals, with:
+
+internal-domain guard (skip self-domain senders),
+
+a minimum confidence threshold,
+
+14‑day “attach to existing opp” window,
+
+idempotency via mutex + partial unique index,
+
+and extended stats on the existing leakage tile.
+
+Please queue Phase 2b with the following guardrails:
+
+Dry‑run first.
+
+Ship the service and counters with QUOTE_LEAK_FORWARD_CLOSURE_ENABLED=false.
+
+For at least 24 hours, log only what would have been created/attached/skipped.
+
+Compare those dry‑run counters to the leakage tile so we know the closure logic actually explains the leaks.
+
+Internal-domain protection.
+
+Build the per‑org internalDomains set and ensure from_email domains in that set are always skipped and counted as closure.skipped_internal.
+
+I expect this to catch the ~250/week valuetruck.com self‑domain “quote requests” we’re seeing now.
+
+Confidence + free-email handling.
+
+Apply a reasonable confidence floor; route low‑confidence signals to the existing leak queue instead of auto‑creating.
+
+For gmail/yahoo senders, fall back to creating a quote_customers record or queuing for triage, rather than silently dropping them.
+
+Visibility.
+
+Extend /api/admin/conversations/leakage-stats and the tile to show closure.created, closure.attached, closure.skipped_internal, and closure.skipped_low_confidence so we can track impact live.
+
+Once the dry‑run numbers line up with the leakage tile, and we’ve verified that internal-domain noise is being skipped correctly, I’m good turning the flag on and moving to 2c (90‑day backfill) and then 2d (swapping Quote Requests to read from quote_opportunities as the system of record).
+
+This is an important change: we’re effectively making the Quote Requests tab the actual intake system for inbound email quotes, not just a filtered inbox. Let’s keep the staged rollout you described so we get the robustness without surprises.

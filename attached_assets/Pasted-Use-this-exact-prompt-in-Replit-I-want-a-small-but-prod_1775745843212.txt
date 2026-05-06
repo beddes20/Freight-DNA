@@ -1,0 +1,200 @@
+Use this exact prompt in Replit:
+
+I want a small but production-quality UI fix in the existing Value Truck app.
+
+Objective
+Fix the relative timestamp formatting so the UI does not show raw minute counts like:
+
+5239m ago
+
+Instead, it should display human-readable relative time like:
+
+just now
+
+5m ago
+
+42m ago
+
+3h ago
+
+1d ago
+
+6d ago
+
+2w ago
+
+3mo ago
+
+1y ago
+
+This should apply to activity timestamps anywhere this same formatter is used, especially in places like:
+
+Activity Timeline
+
+account activity cards
+
+lane/task timeline rows
+
+any shared “time ago” component/helper
+
+Current issue
+In the screenshot, an activity row is showing:
+
+5238m ago
+
+That is technically correct but bad UX. Once the value gets large enough, it should switch units automatically instead of continuing to display minutes.
+
+What I want
+Implement or update a shared relative-time formatter so it rolls up time units cleanly.
+
+Required formatting behavior
+Use these thresholds:
+
+less than 1 minute → just now
+
+1 minute to 59 minutes → Xm ago
+
+1 hour to 23 hours → Xh ago
+
+1 day to 6 days → Xd ago
+
+1 week to 4 weeks → Xw ago
+
+1 month to 11 months → Xmo ago
+
+1 year+ → Xy ago
+
+Examples:
+
+30 seconds → just now
+
+8 minutes → 8m ago
+
+75 minutes → 1h ago
+
+5 hours → 5h ago
+
+26 hours → 1d ago
+
+6 days → 6d ago
+
+10 days → 1w ago
+
+24 days → 3w ago
+
+45 days → 1mo ago
+
+400 days → 1y ago
+
+Implementation requirements
+1) Use a shared formatter
+If there is already a utility/helper/component for relative time, update that rather than patching one screen only.
+
+Likely places to check:
+
+shared date utils
+
+timeline item renderer
+
+activity row components
+
+task list / feed components
+
+Do not hardcode this fix only in the one Activity Timeline row.
+
+2) Preserve compact style
+I want the display to stay compact:
+
+5m ago
+
+2h ago
+
+4d ago
+
+Not verbose strings like:
+
+5 minutes ago
+
+2 hours ago
+
+Unless there is already a product-wide style setting that requires verbose text. If there is, tell me — but default to compact.
+
+3) Keep behavior consistent across the app
+If other surfaces use the same “time ago” formatting, update them too so the app stays consistent.
+
+4) Handle future-proof edge cases
+Make sure the helper behaves safely for:
+
+missing timestamp
+
+invalid timestamp
+
+future timestamp (if it happens, either show just now or a safe fallback)
+
+timezone-safe parsing using existing app conventions
+
+Suggested implementation
+If needed, create or update a utility like:
+
+formatRelativeTimeCompact(date)
+
+getRelativeTimeLabel(timestamp)
+
+Pseudo-behavior:
+
+calculate diff from now
+
+convert to seconds/minutes/hours/days/weeks/months/years
+
+return the largest sensible unit
+
+never let large minute counts keep growing forever
+
+Tests to add
+Please add/update tests for at least:
+
+30 seconds → just now
+
+1 minute → 1m ago
+
+59 minutes → 59m ago
+
+60 minutes → 1h ago
+
+23 hours → 23h ago
+
+24 hours → 1d ago
+
+6 days → 6d ago
+
+7 days → 1w ago
+
+30 days → 1mo ago
+
+365 days → 1y ago
+
+Also test:
+
+invalid/null input returns a safe fallback
+
+formatter does not return giant minute strings like 5239m ago for multi-day timestamps
+
+Deliverables
+Please return:
+
+summary of what you changed
+
+exact files changed
+
+whether the formatter was shared or duplicated before
+
+any places in the app still using old timestamp logic
+
+Important:
+
+keep this as a clean UI utility fix
+
+do not redesign the Activity Timeline
+
+make the change production-safe and reusable
+

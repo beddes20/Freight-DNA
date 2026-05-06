@@ -1,0 +1,113 @@
+You are working on the FreightDNA codebase. I want the next step on the email system to be a LOW-RISK observability and health-hardening pass only.
+
+IMPORTANT:
+Do not redesign the email system.
+Do not change the core ingestion architecture.
+Do not touch auth, schema, migrations, or dependencies.
+Do not change delta-sync concurrency yet.
+Do not change mailbox processing order yet.
+
+This is a small, careful pass to make email gaps more visible and less silently misleading.
+
+### GOAL
+
+Implement ONLY these three changes:
+
+1. Surface the currently silent partial-failure sites as integration events / health signals.
+2. Expose shared reply mailbox health in the capture-audit / Conversations health model.
+3. Tighten SentItems stale detection from 24h to a much more operationally useful threshold (propose 4h unless code evidence suggests another value is safer).
+
+### HARD CONSTRAINTS
+
+Do NOT:
+- modify database schema
+- add packages
+- touch unrelated schedulers
+- refactor the whole email system
+- change the sequential delta-sync model in this branch
+- change frontend behavior outside the existing email/conversations/admin health surfaces
+- touch routes/pages unrelated to Conversations / monitored mailboxes / integrations health
+
+You MAY:
+- add instrumentation to existing email-related try/catch blocks
+- update existing health aggregation logic
+- update the existing Conversations pill and/or admin integrations health payloads if needed
+- add or update focused tests for these exact changes
+
+If any requested change would violate these constraints, STOP and ask me.
+
+---
+
+### STEP 1 — Read-only implementation plan first
+
+Before making any edits, inspect the existing code paths for:
+
+- the silent swallow sites identified in the audit:
+  - `server/emailIntelligenceScheduler.ts`
+  - `server/routes/graphWebhook.ts`
+  - `server/services/conversationReplyCaptureService.ts`
+  - and `server/integrations/probeRegistry.ts` or the existing integration event/logging mechanism
+
+- the shared reply mailbox subscription health state in:
+  - `server/graphSubscriptionService.ts`
+
+- the capture-audit / Conversations health endpoint and UI in:
+  - `server/routes/conversations.ts`
+  - `server/services/conversationReplyCaptureService.ts`
+  - `client/src/components/conversations/capture-audit-status-pill.tsx`
+  - `client/src/pages/admin-integrations-health.tsx`
+
+Then STOP and give me a short implementation plan covering:
+1. exact files you need to change,
+2. how you will surface silent errors,
+3. how you will expose shared-mailbox health,
+4. the exact stale threshold you recommend and why,
+5. what tests you plan to add/update.
+
+Do not edit anything until I approve the plan.
+
+---
+
+### STEP 2 — After approval, implement ONLY these changes
+
+A) Silent partial-failure visibility
+Add integration-event / diagnostic recording to the specific swallowed-error sites identified in the audit, so these failures become visible in the existing health/admin diagnostics instead of console-only.
+
+Keep behavior the same:
+- do not make these failures fatal if they are currently intentionally non-fatal,
+- just surface them.
+
+B) Shared reply mailbox health
+Add the shared reply mailbox’s health state into the same health model that powers the Conversations pill / capture-audit health response, so a dead or failed shared-mailbox subscription can surface promptly rather than hiding until the next 6-hour renewal cycle.
+
+C) SentItems stale threshold
+Reduce the SentItems stale threshold from 24h to a more operationally useful threshold (target ~4h unless your code review finds a better value).
+This change should only affect health signaling, not ingestion logic.
+
+---
+
+### STEP 3 — Tests
+
+Add or update focused tests for:
+- the new health behavior,
+- the new shared-mailbox health reporting,
+- and any instrumentation assertions that are practical.
+
+Do not write broad new E2E coverage if a focused unit/integration test is enough.
+
+---
+
+### STEP 4 — Final summary
+
+When done, output:
+1. files changed,
+2. exact silent-failure sites instrumented,
+3. how shared-mailbox health now surfaces,
+4. old vs new SentItems stale threshold,
+5. tests added/updated,
+6. confirmation that:
+   - no schema/migrations/packages changed,
+   - no delta-sync parallelism was introduced,
+   - no unrelated systems were touched.
+
+Stop there. No further changes.

@@ -1,0 +1,50 @@
+I want to improve the RFP process first, before we work on award-to-growth.
+
+Use the audit we just completed as the source of truth. Do not redesign the entire data model yet. Stay in Phase 1 / lowest-risk workflow improvements using the existing schema wherever possible.
+
+Goal:
+Turn RFP upload + lane/site discovery into proactive AM action, not passive intelligence.
+
+Implement these 3 changes in order:
+
+1. Auto-create an AM task when an RFP with extracted lanes is uploaded
+- Trigger: successful RFP upload when fileData.highVolumeLanes exists and has at least 1 lane
+- Create a real DB task assigned to the company’s AM
+- Task type: rfp_coverage_review
+- Title should clearly say this is a new RFP coverage review
+- Description should summarize lane count, top facilities if easy, and instruct the AM to review uncovered sites / contacts / lane opportunities
+- Include RFP id and company id in task metadata
+- Prevent duplicates if the same RFP already has a coverage-review task
+
+2. Add a cross-account “Coverage Gaps” AM dashboard surface
+- Show top uncovered high-volume RFP facility gaps across the AM’s accounts
+- Use existing facility-coverage logic if possible; do not redesign schema yet
+- Prioritize by totalVolume and/or uncovered gap count
+- Keep the UI lightweight and clearly actionable
+- Each row/card should link the AM back to the relevant company / RFP context
+
+3. Add a new NBA Phase 1 rule for uncovered high-value RFP facilities
+- Rule intent: if an account has meaningful uncovered RFP facilities and no recent touch, prompt the AM to map contacts / ask for intros
+- Reuse current RFP/facility coverage data where possible
+- Recommendation should sound like an AM action, not analytics
+- Include why-this-now logic and suggested next move
+- Make sure it does not create noisy cards for trivial low-volume gaps
+
+Constraints:
+- Minimize schema changes for this phase
+- Prefer existing routes/services over new architecture
+- Keep changes additive and low-risk
+- Preserve current working upload / gap detection / award / procurement behavior
+- No broad refactor unless required for one of these 3 items
+
+For each implementation:
+- show me the files changed
+- explain the trigger/logic in plain English
+- note any duplicate-prevention logic
+- run typecheck
+- report any net-new TypeScript errors vs baseline
+
+After coding, give me:
+A. what changed
+B. what AM behavior this should improve
+C. what still remains for Phase 2 schema normalization

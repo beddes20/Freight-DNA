@@ -1,0 +1,50 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "v75Z7MwLEwj4CNWXFnwtq"
+uri = "file://assets/linkedin/freight-dna-profile-picture.png"
+type = "image"
+title = "Freight DNA — LinkedIn Profile Picture (1024x1024)"
+
+[[outputs]]
+id = "ydx5Op6ubgJRxzMxwgDUw"
+uri = "file://assets/linkedin/freight-dna-banner.png"
+type = "image"
+title = "Freight DNA — LinkedIn Banner (1584x396)"
+
+[[outputs]]
+id = "eJ5Z1SwM305gu8zA1xuS4"
+uri = "file://FreightDNA_Platform_Reference.md"
+type = "text"
+title = "FreightDNA Platform Reference Guide"
+
+[[outputs]]
+id = "xeUi4oEVrvsHe7eklHnlL"
+uri = "file://exports/ReplitDailyUpload.xlsx"
+type = "table"
+title = "ReplitDailyUpload.xlsx (Available Freight = 412 uncovered loads)"
+
+[[outputs]]
+id = "3gx5rwViu3Op6p60ZhX_K"
+uri = "file://FreightDNA_Platform_Report.md"
+type = "text"
+title = "FreightDNA Platform Report — April 26, 2026"
+
+[[outputs]]
+id = "-E8dV0fV4PR0i3MgGIlc0"
+uri = "file://docs/available-freight-audit.md"
+type = "text"
+title = "Available Freight — Discovery & Audit (with same-day deep-dive)"
+
+[[outputs]]
+id = "JSWcEz43H8jmuUUnKlCqc"
+uri = "file://screenshots/freshness-strip-lagging.jpg"
+type = "image"
+title = "Freshness strip — LAGGING state (live production data)"
+
+[[outputs]]
+id = "qWL5PJaXioifHvUtbT63Y"
+uri = "file://screenshots/freshness-strip-normal.jpg"
+type = "image"
+title = "Freshness strip — STEADY state (gap < 20, hint hidden)"

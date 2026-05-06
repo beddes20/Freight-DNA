@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
 import { Lock, Send, Trash2, ChevronDown, ChevronUp, Reply, MessageSquare } from "lucide-react";
 import type { User } from "@shared/schema";
+import { formatTimeAgo } from "@/lib/utils";
 
 type SafeUser = Omit<User, "password">;
 
@@ -22,33 +23,26 @@ type InternalPost = {
   createdAt: string;
 };
 
-// Preset recipient options — matched by first name (case-insensitive)
-const PRESET_OPTIONS = [
-  { key: "jordan",       label: "Jordan",          names: ["jordan"] },
-  { key: "danny",        label: "Danny",            names: ["danny"] },
-  { key: "sam",          label: "Sam",              names: ["sam"] },
-  { key: "sam_danny",    label: "Sam & Danny",      names: ["sam", "danny"] },
-  { key: "all",          label: "All Leadership",   names: ["jordan", "danny", "sam"] },
-] as const;
-type PresetKey = typeof PRESET_OPTIONS[number]["key"];
+// Preset recipient options — matched by first name (case-insensitive) or by role
+type PresetOption = { key: string; label: string; names: string[]; roles: string[] };
+const PRESET_OPTIONS: PresetOption[] = [
+  { key: "jordan",    label: "Jordan",         names: ["jordan"],             roles: [] },
+  { key: "danny",     label: "Danny",          names: ["danny"],              roles: [] },
+  { key: "sam",       label: "Sam",            names: ["sam"],                roles: [] },
+  { key: "sam_danny", label: "Sam & Danny",    names: ["sam", "danny"],       roles: [] },
+  { key: "all_nams",  label: "All NAMs",       names: [],                     roles: ["national_account_manager"] },
+  { key: "all",       label: "All Leadership", names: ["jordan", "danny", "sam"], roles: ["national_account_manager"] },
+];
+type PresetKey = string;
 
-function formatTimeAgo(iso: string) {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
 
 export default function InternalCommsPortlet() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
 
   const isLeadership = currentUser?.role === "admin" || currentUser?.role === "director";
+  const isNam = currentUser?.role === "national_account_manager";
+  const canView = isLeadership || isNam;
 
   const [content, setContent] = useState("");
   const [selectedPreset, setSelectedPreset] = useState<PresetKey | null>(null);
@@ -61,21 +55,26 @@ export default function InternalCommsPortlet() {
   const { data: rawPosts = [] } = useQuery<InternalPost[]>({
     queryKey: ["/api/internal-posts"],
     refetchInterval: 120000,
-    enabled: isLeadership,
+    enabled: canView,
   });
 
   const { data: teamMembers = [] } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
-    enabled: isLeadership,
+    enabled: canView,
   });
 
-  // Resolve preset → user IDs from team members by first name match
+  // Resolve preset → user IDs from team members by first name match and/or role
   const resolveIds = (preset: PresetKey): string[] => {
     const option = PRESET_OPTIONS.find(o => o.key === preset);
     if (!option) return [];
-    return teamMembers
-      .filter(u => option.names.some(n => u.name.toLowerCase().split(" ")[0] === n))
-      .map(u => u.id);
+    const byName = option.names.length > 0
+      ? teamMembers.filter(u => option.names.some(n => u.name.toLowerCase().split(" ")[0] === n))
+      : [];
+    const byRole = option.roles.length > 0
+      ? teamMembers.filter(u => option.roles.includes(u.role))
+      : [];
+    const combined = [...byName, ...byRole];
+    return Array.from(new Set(combined.map(u => u.id)));
   };
 
   // All hooks must be called before any conditional return
@@ -154,7 +153,7 @@ export default function InternalCommsPortlet() {
   }, []);
 
   // Early return after all hooks
-  if (!isLeadership) return null;
+  if (!canView) return null;
 
   const topLevel = rawPosts.filter(p => !p.parentId);
   const repliesFor = (parentId: string) => rawPosts.filter(p => p.parentId === parentId);
@@ -188,65 +187,67 @@ export default function InternalCommsPortlet() {
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {/* Composer */}
-        <div className="relative">
-          {/* Recipient pill selector */}
-          <div className="flex gap-1.5 mb-2 flex-wrap">
-            {PRESET_OPTIONS.map(opt => (
-              <button
-                key={opt.key}
-                type="button"
-                onClick={() => setSelectedPreset(selectedPreset === opt.key ? null : opt.key)}
-                data-testid={`button-recipient-${opt.key}`}
-                className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
-                  selectedPreset === opt.key
-                    ? "bg-indigo-600 text-white border-indigo-600"
-                    : "bg-transparent border-border text-muted-foreground hover:border-foreground hover:text-foreground"
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
+        {/* Composer — leadership only */}
+        {isLeadership && (
+          <div className="relative">
+            {/* Recipient pill selector */}
+            <div className="flex gap-1.5 mb-2 flex-wrap">
+              {PRESET_OPTIONS.map(opt => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setSelectedPreset(selectedPreset === opt.key ? null : opt.key)}
+                  data-testid={`button-recipient-${opt.key}`}
+                  className={`text-xs px-2.5 py-1 rounded-full font-medium border transition-colors ${
+                    selectedPreset === opt.key
+                      ? "bg-indigo-600 text-white border-indigo-600"
+                      : "bg-transparent border-border text-muted-foreground hover:border-foreground hover:text-foreground"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
 
-          <Textarea
-            value={content}
-            onChange={e => setContent(e.target.value)}
-            onPaste={e => handlePaste(e, false)}
-            onKeyDown={e => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                if (content.trim() && selectedPreset) createMutation.mutate();
+            <Textarea
+              value={content}
+              onChange={e => setContent(e.target.value)}
+              onPaste={e => handlePaste(e, false)}
+              onKeyDown={e => {
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault();
+                  if (content.trim() && selectedPreset) createMutation.mutate();
+                }
+              }}
+              placeholder={
+                selectedPreset
+                  ? `Write a callout to ${PRESET_OPTIONS.find(o => o.key === selectedPreset)?.label}… (Ctrl+Enter to send)`
+                  : "Select a recipient above, then write your callout…"
               }
-            }}
-            placeholder={
-              selectedPreset
-                ? `Write a callout to ${PRESET_OPTIONS.find(o => o.key === selectedPreset)?.label}… (Ctrl+Enter to send)`
-                : "Select a recipient above, then write your callout…"
-            }
-            className="resize-none text-sm min-h-[72px]"
-            data-testid="textarea-internal-post"
-          />
-
-          <div className="flex items-center justify-between mt-1.5">
-            <FileAttachmentUpload
-              pendingFiles={pendingFiles}
-              onAdd={files => setPendingFiles(prev => [...prev, ...files])}
-              onRemove={i => setPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
-              compact
+              className="resize-none text-sm min-h-[72px]"
+              data-testid="textarea-internal-post"
             />
-            <Button
-              size="sm"
-              className="gap-1"
-              onClick={() => createMutation.mutate()}
-              disabled={!content.trim() || !selectedPreset || createMutation.isPending}
-              data-testid="button-send-internal-post"
-            >
-              <Send className="h-3 w-3" />
-              Post
-            </Button>
+
+            <div className="flex items-center justify-between mt-1.5">
+              <FileAttachmentUpload
+                pendingFiles={pendingFiles}
+                onAdd={files => setPendingFiles(prev => [...prev, ...files])}
+                onRemove={i => setPendingFiles(prev => prev.filter((_, idx) => idx !== i))}
+                compact
+              />
+              <Button
+                size="sm"
+                className="gap-1"
+                onClick={() => createMutation.mutate()}
+                disabled={!content.trim() || !selectedPreset || createMutation.isPending}
+                data-testid="button-send-internal-post"
+              >
+                <Send className="h-3 w-3" />
+                Post
+              </Button>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Posts */}
         {topLevel.length === 0 ? (
@@ -295,14 +296,16 @@ export default function InternalCommsPortlet() {
                         )}
                       </div>
                     </div>
-                    <button
-                      onClick={() => deleteMutation.mutate(post.id)}
-                      className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all shrink-0 p-1"
-                      title="Delete"
-                      data-testid={`button-delete-${post.id}`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {isLeadership && (
+                      <button
+                        onClick={() => deleteMutation.mutate(post.id)}
+                        className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all shrink-0 p-1"
+                        title="Delete"
+                        data-testid={`button-delete-${post.id}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
 
                   {/* Expanded replies */}
@@ -320,13 +323,15 @@ export default function InternalCommsPortlet() {
                               <span>{formatTimeAgo(reply.createdAt)}</span>
                             </div>
                           </div>
-                          <button
-                            onClick={() => deleteMutation.mutate(reply.id)}
-                            className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all shrink-0 p-1"
-                            data-testid={`button-delete-reply-${reply.id}`}
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
+                          {isLeadership && (
+                            <button
+                              onClick={() => deleteMutation.mutate(reply.id)}
+                              className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive transition-all shrink-0 p-1"
+                              data-testid={`button-delete-reply-${reply.id}`}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>

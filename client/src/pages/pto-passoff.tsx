@@ -229,7 +229,7 @@ function PassoffDialog({
           </SelectContent>
         </Select>
       </div>
-      <Button type="submit" className="w-full bg-gradient-to-r from-blue-600 to-green-600" disabled={isPending} data-testid="button-save-passoff">
+      <Button type="submit" className="w-full bg-primary hover:bg-primary/90 text-primary-foreground" disabled={isPending} data-testid="button-save-passoff">
         {isPending ? "Saving..." : passoff ? "Update Passoff" : `Create Passoff${selectedCompanyIds.size > 0 ? ` with ${selectedCompanyIds.size} account${selectedCompanyIds.size !== 1 ? "s" : ""}` : ""}`}
       </Button>
     </form>
@@ -841,7 +841,7 @@ export default function PtoPassoffPage() {
   const [createOpen, setCreateOpen] = useState(false);
 
   const { data: passoffs = [], isLoading } = useQuery<PassoffWithItems[]>({ queryKey: ["/api/pto-passoffs"] });
-  const { data: users = [] } = useQuery<SafeUser[]>({ queryKey: ["/api/users"] });
+  const { data: users = [] } = useQuery<SafeUser[]>({ queryKey: ["/api/users?includeManagers=true"] });
   const { data: companies = [] } = useQuery<Company[]>({ queryKey: ["/api/companies"] });
 
   if (!currentUser) return null;
@@ -861,11 +861,11 @@ export default function PtoPassoffPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-pto-title">
-            <Plane className="w-6 h-6 text-blue-600" />PTO Passoff
+            <Plane className="w-6 h-6 text-amber-600" />PTO Passoff
           </h1>
           <p className="text-muted-foreground mt-1">Ensure seamless account coverage when you're out</p>
         </div>
-        <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" onClick={() => setCreateOpen(true)} data-testid="button-create-passoff">
+        <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" onClick={() => setCreateOpen(true)} data-testid="button-create-passoff">
           <Plus className="w-4 h-4 mr-2" />New Passoff
         </Button>
       </div>

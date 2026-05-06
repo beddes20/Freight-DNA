@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "wouter";
+import { QueryError } from "@/components/query-error";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -26,11 +27,20 @@ import {
   Bookmark,
   BookmarkCheck,
   UserPlus,
+  Clock,
+  Mail,
+  MessageSquare,
+  MapPin,
 } from "lucide-react";
+import { PinButton } from "@/components/pin-button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CompanyDialog } from "@/components/company-dialog";
+import { GROWTH_BAND_STYLES } from "@/components/account-growth-portlet";
+import { MomentumScoreDrawer } from "@/components/momentum-score-drawer";
+import type { MomentumScore } from "@/components/momentum-score-drawer";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
@@ -48,7 +58,7 @@ type AccountSummaryRow = {
   byMonth?: Record<string, MonthBucket>;
 };
 
-type TouchpointSummary = Record<string, { week: number; month: number }>;
+type TouchpointSummary = Record<string, { week: number; month: number; lastType: string | null; lastDate: string | null; daysSince: number | null }>;
 
 function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummaryRow | null {
   if (!rows.length) return null;
@@ -171,6 +181,7 @@ export default function Customers() {
   const [quickTouchMeaningful, setQuickTouchMeaningful] = useState(false);
 
   const [quickAddContact, setQuickAddContact] = useState<Company | null>(null);
+  const [momentumCompanyId, setMomentumCompanyId] = useState<string | null>(null);
   const [quickAddName, setQuickAddName] = useState("");
   const [quickAddTitle, setQuickAddTitle] = useState("");
   const [quickAddEmail, setQuickAddEmail] = useState("");
@@ -178,7 +189,7 @@ export default function Customers() {
   const [saveFilterName, setSaveFilterName] = useState("");
   const [showSaveFilter, setShowSaveFilter] = useState(false);
 
-  type SavedFilter = { name: string; rep: string; industry: string; touch: string; sort: string };
+  type SavedFilter = { name: string; search: string; rep: string; industry: string; touch: string; mode: string; sort: string };
 
   const { data: savedFiltersData } = useQuery<{ filters: SavedFilter[] }>({
     queryKey: ["/api/users/saved-filters"],
@@ -191,21 +202,28 @@ export default function Customers() {
       queryClient.invalidateQueries({ queryKey: ["/api/users/saved-filters"] });
       setSaveFilterName("");
       setShowSaveFilter(false);
-      toast({ title: "Filter preset saved!" });
+      toast({ title: "View saved!" });
     },
   });
 
   const handleSaveFilter = () => {
     if (!saveFilterName.trim()) return;
-    const newFilter: SavedFilter = { name: saveFilterName.trim(), rep: repFilter, industry: industryFilter, touch: touchFilter, sort: sortBy };
+    if (savedFilters.length >= 10 && !savedFilters.find(f => f.name === saveFilterName.trim())) {
+      toast({ title: "Maximum 10 saved views", description: "Remove an existing view first.", variant: "destructive" });
+      return;
+    }
+    const newFilter: SavedFilter = { name: saveFilterName.trim(), search: searchQuery, rep: repFilter, industry: industryFilter, touch: touchFilter, mode: modeFilter, sort: sortBy };
     saveFilterMutation.mutate([...savedFilters.filter(f => f.name !== newFilter.name), newFilter]);
   };
 
   const handleLoadFilter = (f: SavedFilter) => {
+    if (f.search !== undefined) setSearchQuery(f.search || "");
     setRepFilter(f.rep || "all");
     setIndustryFilter(f.industry || "all");
     setTouchFilter(f.touch || "all");
+    setModeFilter(f.mode || "all");
     setSortBy(f.sort || "name");
+    if (f.rep !== "all" || f.industry !== "all" || f.touch !== "all") setShowFilters(true);
   };
 
   const handleDeleteFilter = (name: string) => {
@@ -214,11 +232,13 @@ export default function Customers() {
 
   const logTouchMutation = useMutation({
     mutationFn: ({ contactId, type, notes, sentiment, isMeaningful }: { contactId: string; type: string; notes: string; sentiment?: string; isMeaningful?: boolean }) =>
-      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false }),
+      apiRequest("POST", `/api/contacts/${contactId}/touchpoints`, { type, date: new Date().toISOString().slice(0, 10), notes, sentiment: sentiment || null, isMeaningful: isMeaningful || false }).then(r => r.json()),
     onSuccess: (data: any) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/touchpoints/company-summary"] });
+      invalidateAfterTouchpoint(data?.companyId);
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       toast({ title: "Touch logged!" });
+      // Fast response: aiInsights/autoTask now arrive via background work
+      // (live-sync). buildAiToasts no-ops until then; see follow-up #790.
       buildAiToasts(data?.aiInsights, data?.autoTask, toast);
       setQuickTouch(null);
       setQuickTouchContactId("");
@@ -242,11 +262,11 @@ export default function Customers() {
     onError: () => toast({ title: "Failed to add contact", variant: "destructive" }),
   });
 
-  const { data: companies, isLoading: companiesLoading } = useQuery<Company[]>({
+  const { data: companies, isLoading: companiesLoading, isError: companiesError, refetch: refetchCompanies } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
   });
 
-  const { data: archivedCompanies, isLoading: archivedLoading } = useQuery<Company[]>({
+  const { data: archivedCompanies, isLoading: archivedLoading, isError: archivedError, refetch: refetchArchived } = useQuery<Company[]>({
     queryKey: ["/api/companies", { includeArchived: true }],
     queryFn: async () => {
       const res = await fetch("/api/companies?includeArchived=true", { credentials: "include" });
@@ -265,6 +285,16 @@ export default function Customers() {
     queryKey: ["/api/research-tasks"],
   });
 
+  const { data: suggestionCounts = [] } = useQuery<{ accountId: string; accountName: string; pendingCount: number }[]>({
+    queryKey: ["/api/internal/accounts/suggestion-counts"],
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  const suggestionCountMap = useMemo(
+    () => new Map(suggestionCounts.map(r => [r.accountId, r.pendingCount])),
+    [suggestionCounts],
+  );
+
   const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
     queryKey: ["/api/financials/account-summary"],
   });
@@ -277,12 +307,34 @@ export default function Customers() {
     queryKey: ["/api/users/sales"],
   });
   const salesPersonMap = new Map(salesUsers.map(u => [u.id, u.name]));
+  const accountOwnerMap = useMemo(
+    () => new Map(teamMembers.map(u => [u.id, u.name])),
+    [teamMembers],
+  );
 
   type MsSummaryRow = { companyId: string; currentPct: number | null };
   const { data: msSummary = [] } = useQuery<MsSummaryRow[]>({
     queryKey: ["/api/market-share/summary"],
   });
   const msMap = useMemo(() => new Map(msSummary.map(r => [r.companyId, r.currentPct ?? 0])), [msSummary]);
+
+  type GrowthScoreRow = { companyId: string; score: number; band: string; bandLabel: string };
+  const { data: growthScores = [] } = useQuery<GrowthScoreRow[]>({
+    queryKey: ["/api/growth-scores"],
+    staleTime: 90 * 1000,
+    refetchInterval: 90 * 1000,
+  });
+  const growthScoreMap = useMemo(() => new Map(growthScores.map(r => [r.companyId, r])), [growthScores]);
+
+  const { data: momentumScoreDetail, isLoading: momentumScoreLoading } = useQuery<MomentumScore>({
+    queryKey: ["/api/companies", momentumCompanyId, "growth-score"],
+    enabled: !!momentumCompanyId,
+    staleTime: 6 * 60 * 60 * 1000,
+  });
+  const momentumCompanyName = useMemo(() => {
+    if (!momentumCompanyId) return "";
+    return (companies as Company[]).find(c => c.id === momentumCompanyId)?.name ?? "";
+  }, [momentumCompanyId, companies]);
 
   const thisMonthKey = (() => {
     const n = new Date();
@@ -339,7 +391,7 @@ export default function Customers() {
       if (repFilter !== "all" && company.assignedTo !== repFilter && !sharedRepIds.includes(repFilter)) return false;
       if (industryFilter !== "all" && company.industry !== industryFilter) return false;
       if (touchFilter !== "all") {
-        const tps = tpSummary[company.id] || { week: 0, month: 0 };
+        const tps = tpSummary[company.id] || { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
         if (touchFilter === "not_this_month" && tps.month > 0) return false;
         if (touchFilter === "not_this_week" && tps.week > 0) return false;
         if (touchFilter === "needs_attention" && tps.month > 0) return false;
@@ -364,6 +416,8 @@ export default function Customers() {
         case "margin_desc":  return getFinVal(b, "totalMargin") - getFinVal(a, "totalMargin");
         case "ms_desc":      return (msMap.get(b.id) ?? -1) - (msMap.get(a.id) ?? -1);
         case "margin_pct_desc": return getFinVal(b, "marginPct") - getFinVal(a, "marginPct");
+        case "score_desc":   return (growthScoreMap.get(b.id)?.score ?? -1) - (growthScoreMap.get(a.id)?.score ?? -1);
+        case "score_asc":    return (growthScoreMap.get(a.id)?.score ?? 101) - (growthScoreMap.get(b.id)?.score ?? 101);
         default:             return a.name.localeCompare(b.name);
       }
     });
@@ -371,6 +425,8 @@ export default function Customers() {
 
   const displayList = applyFilters(showArchived ? archivedCompanies : companies);
   const isLoading = showArchived ? archivedLoading : companiesLoading;
+  const isError = showArchived ? archivedError : companiesError;
+  const refetchData = showArchived ? refetchArchived : refetchCompanies;
 
   function clearFilters() {
     setRepFilter("all");
@@ -380,40 +436,72 @@ export default function Customers() {
   }
 
   return (
-    <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold" data-testid="text-customers-title">
-            {showArchived ? "Archived Accounts" : "Customers"}
-          </h1>
-          <p className="text-muted-foreground">
-            {showArchived ? "Accounts that have been parked — click to view or restore" : "View customer org charts and manage contacts"}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button
-            variant={showArchived ? "default" : "outline"}
-            onClick={() => setShowArchived(v => !v)}
-            data-testid="button-toggle-archived"
-          >
-            {showArchived ? (
-              <><ArchiveX className="h-4 w-4 mr-2" />Show Active</>
-            ) : (
-              <><Archive className="h-4 w-4 mr-2" />Archived</>
-            )}
-          </Button>
-          {!showArchived && (
-            <Button onClick={() => setDialogOpen(true)} data-testid="button-add-customer">
-              <Plus className="h-4 w-4 mr-2" />
-              Add Customer
+    <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6" data-tour="tour-companies-table">
+      <div className="relative overflow-hidden rounded-xl px-6 py-5 text-white" style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}>
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
+        <div className="relative flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-xl font-bold flex items-center gap-2" data-testid="text-customers-title">
+              <Network className="h-5 w-5" style={{ color: "#ffb400" }} />
+              {showArchived ? "Archived Accounts" : "Customers"}
+            </h1>
+            <p className="text-white/60 text-sm mt-1">
+              {showArchived ? "Accounts that have been parked — click to view or restore" : "View customer org charts and manage contacts"}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant={showArchived ? "default" : "outline"}
+              onClick={() => setShowArchived(v => !v)}
+              className={showArchived ? "" : "bg-white/10 border-white/20 text-white hover:bg-white/20"}
+              data-testid="button-toggle-archived"
+            >
+              {showArchived ? (
+                <><ArchiveX className="h-4 w-4 mr-2" />Show Active</>
+              ) : (
+                <><Archive className="h-4 w-4 mr-2" />Archived</>
+              )}
             </Button>
-          )}
+            {!showArchived && (
+              <Button onClick={() => setDialogOpen(true)} data-testid="button-add-customer">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Customer
+              </Button>
+            )}
+          </div>
         </div>
       </div>
 
+      {/* Saved view chips — shown above the filter bar when views exist */}
+      {!showArchived && savedFilters.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap" data-testid="saved-filter-chips">
+          <BookmarkCheck className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+          {savedFilters.map(f => (
+            <div key={f.name} className="flex items-center gap-0">
+              <button
+                onClick={() => handleLoadFilter(f)}
+                className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-l-full border border-r-0 border-border bg-background hover:bg-muted transition-colors font-medium"
+                data-testid={`chip-load-filter-${f.name}`}
+              >
+                {f.name}
+              </button>
+              <button
+                onClick={() => handleDeleteFilter(f.name)}
+                className="flex items-center px-1.5 py-1 rounded-r-full border border-border bg-background text-muted-foreground hover:bg-red-50 hover:text-destructive hover:border-red-200 dark:hover:bg-red-950/20 transition-colors"
+                data-testid={`chip-delete-filter-${f.name}`}
+                title={`Remove "${f.name}" view`}
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Search + Filter bar */}
       <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px] max-w-sm">
+        <div className="relative flex-1 min-w-0 w-full md:max-w-sm">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder={showArchived ? "Search archived..." : "Search customers..."}
@@ -445,11 +533,32 @@ export default function Customers() {
             <X className="h-3.5 w-3.5" /> Clear
           </Button>
         )}
+        {!showArchived && (activeFiltersCount > 0 || searchQuery) && (
+          !showSaveFilter ? (
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={() => setShowSaveFilter(true)} data-testid="button-show-save-filter">
+              <Bookmark className="h-3.5 w-3.5" /> Save View
+            </Button>
+          ) : (
+            <div className="flex items-center gap-1">
+              <Input
+                value={saveFilterName}
+                onChange={e => setSaveFilterName(e.target.value)}
+                placeholder="View name"
+                className="h-9 text-sm w-28"
+                onKeyDown={e => { if (e.key === "Enter") handleSaveFilter(); if (e.key === "Escape") setShowSaveFilter(false); }}
+                autoFocus
+                data-testid="input-save-filter-name"
+              />
+              <Button size="sm" className="h-9 text-sm px-3" onClick={handleSaveFilter} disabled={!saveFilterName.trim() || saveFilterMutation.isPending} data-testid="button-confirm-save-filter">Save</Button>
+              <Button variant="ghost" size="sm" className="h-9 px-2" onClick={() => setShowSaveFilter(false)}><X className="h-3.5 w-3.5" /></Button>
+            </div>
+          )
+        )}
         {!showArchived && (
-          <div className="flex items-center gap-1.5 ml-auto">
+          <div className="flex items-center gap-1.5 ml-auto w-full md:w-auto">
             <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <Select value={sortBy} onValueChange={setSortBy}>
-              <SelectTrigger className="h-9 text-sm w-[170px]" data-testid="select-sort-by">
+              <SelectTrigger className="h-9 text-sm flex-1 md:w-[170px]" data-testid="select-sort-by">
                 <SelectValue placeholder="Sort by…" />
               </SelectTrigger>
               <SelectContent>
@@ -457,6 +566,8 @@ export default function Customers() {
                 <SelectItem value="loads_desc">Highest Load Count</SelectItem>
                 <SelectItem value="margin_desc">Highest Margin $</SelectItem>
                 <SelectItem value="margin_pct_desc">Highest Margin %</SelectItem>
+                <SelectItem value="score_desc">Highest Growth Score</SelectItem>
+                <SelectItem value="score_asc">At Risk First</SelectItem>
                 <SelectItem value="ms_desc">Highest Market Share</SelectItem>
               </SelectContent>
             </Select>
@@ -475,7 +586,7 @@ export default function Customers() {
       </div>
 
       {showFilters && !showArchived && (
-        <div className="flex items-center gap-3 flex-wrap p-3 bg-muted/40 rounded-lg border" data-testid="filter-bar">
+        <div className="flex flex-col md:flex-row md:items-center gap-3 flex-wrap p-3 bg-muted/40 rounded-lg border" data-testid="filter-bar">
           <div className="flex items-center gap-2">
             <span className="text-xs font-medium text-muted-foreground whitespace-nowrap">Rep</span>
             <Select value={repFilter} onValueChange={setRepFilter}>
@@ -531,47 +642,13 @@ export default function Customers() {
               </button>
             ))}
           </div>
-          <div className="ml-auto flex items-center gap-2">
-            {savedFilters.length > 0 && savedFilters.map(f => (
-              <div key={f.name} className="flex items-center gap-0.5">
-                <button
-                  onClick={() => handleLoadFilter(f)}
-                  className="flex items-center gap-1 text-xs px-2 py-1 rounded-md border border-border bg-background hover:bg-muted transition-colors"
-                  data-testid={`button-load-filter-${f.name}`}
-                >
-                  <BookmarkCheck className="h-3 w-3 text-blue-500" />
-                  {f.name}
-                </button>
-                <button onClick={() => handleDeleteFilter(f.name)} className="text-muted-foreground hover:text-destructive p-0.5" data-testid={`button-delete-filter-${f.name}`}>
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-            {!showSaveFilter ? (
-              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" onClick={() => setShowSaveFilter(true)} data-testid="button-show-save-filter">
-                <Bookmark className="h-3.5 w-3.5" /> Save
-              </Button>
-            ) : (
-              <div className="flex items-center gap-1">
-                <Input
-                  value={saveFilterName}
-                  onChange={e => setSaveFilterName(e.target.value)}
-                  placeholder="Filter name"
-                  className="h-7 text-xs w-24"
-                  onKeyDown={e => { if (e.key === "Enter") handleSaveFilter(); if (e.key === "Escape") setShowSaveFilter(false); }}
-                  autoFocus
-                  data-testid="input-save-filter-name"
-                />
-                <Button size="sm" className="h-7 text-xs px-2" onClick={handleSaveFilter} disabled={!saveFilterName.trim() || saveFilterMutation.isPending} data-testid="button-confirm-save-filter">Save</Button>
-                <Button variant="ghost" size="sm" className="h-7 px-1" onClick={() => setShowSaveFilter(false)}><X className="h-3.5 w-3.5" /></Button>
-              </div>
-            )}
-          </div>
         </div>
       )}
 
-      {isLoading ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      {isError ? (
+        <QueryError message="We couldn't load your accounts. This is usually temporary." onRetry={() => refetchData()} />
+      ) : isLoading ? (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {[1, 2, 3, 4, 5, 6].map((i) => (
             <Card key={i}>
               <CardContent className="p-4">
@@ -583,24 +660,25 @@ export default function Customers() {
           ))}
         </div>
       ) : displayList && displayList.length > 0 ? (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {displayList.map((company) => {
             const contacts = contactsByCompany.get(company.id) || [];
             const openTasks = openTasksByCompany.get(company.id) || 0;
+            const pendingSuggestions = suggestionCountMap.get(company.id) ?? 0;
             const fin = getCompanyFinancials(company, accountSummary);
-            const tps = tpSummary[company.id] || { week: 0, month: 0 };
+            const tps = tpSummary[company.id] || { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
             return (
               <Link key={company.id} href={`/companies/${company.id}`}>
                 <Card className="hover-elevate cursor-pointer h-full" data-testid={`card-customer-${company.id}`}>
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
                         <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${company.archivedAt ? "bg-muted text-muted-foreground" : "bg-primary/10 text-primary"}`}>
                           {company.archivedAt ? <Archive className="h-5 w-5" /> : <Building2 className="h-5 w-5" />}
                         </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <h3 className="font-medium truncate" data-testid={`text-customer-name-${company.id}`}>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <h3 className="font-medium text-sm leading-tight break-words line-clamp-2" data-testid={`text-customer-name-${company.id}`}>
                               {company.name}
                             </h3>
                             {company.archivedAt && (
@@ -621,25 +699,72 @@ export default function Customers() {
                               </p>
                             );
                           })()}
+                          {(() => {
+                            const ownerId = company.ownerRepId;
+                            const ownerName = ownerId ? accountOwnerMap.get(ownerId) : null;
+                            const display = ownerName || "Unassigned";
+                            return (
+                              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5" data-testid={`text-account-owner-${company.id}`}>
+                                <UserCheck className="h-3 w-3" />
+                                {display}
+                              </p>
+                            );
+                          })()}
                         </div>
                       </div>
-                      {!company.archivedAt && (
-                        <div className="flex items-center gap-1">
-                          {contacts.length > 0 && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        {!company.archivedAt && (
+                          <PinButton companyId={company.id} />
+                        )}
+                        {!company.archivedAt && (() => {
+                          const gs = growthScoreMap.get(company.id);
+                          if (!gs) return null;
+                          if (gs.score === 0) {
+                            return (
+                              <button
+                                type="button"
+                                data-testid={`badge-momentum-header-${company.id}`}
+                                title="Momentum not yet scored. Click to view details."
+                                aria-label="Momentum not yet scored"
+                                onClick={e => { e.preventDefault(); e.stopPropagation(); setMomentumCompanyId(company.id); }}
+                                className="inline-flex items-center font-medium rounded-full border px-2 py-0.5 text-xs hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-ring cursor-pointer mr-0.5 bg-muted text-muted-foreground border-border"
+                              >
+                                <span className="hidden sm:inline">Not Scored</span>
+                                <span className="sm:hidden">—</span>
+                              </button>
+                            );
+                          }
+                          const style = GROWTH_BAND_STYLES[gs.band] ?? GROWTH_BAND_STYLES.stable;
+                          return (
                             <button
-                              className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
-                              title="Quick log touch"
-                              data-testid={`button-quick-touch-${company.id}`}
-                              onClick={e => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setQuickTouch({ company, contacts });
-                                setQuickTouchContactId(contacts[0]?.id ?? "");
-                              }}
+                              type="button"
+                              data-testid={`badge-momentum-header-${company.id}`}
+                              title={`Momentum Score: ${gs.score}/100 — ${gs.bandLabel}. Click for breakdown.`}
+                              aria-label={`Momentum Score: ${gs.score}/100 — ${gs.bandLabel}`}
+                              onClick={e => { e.preventDefault(); e.stopPropagation(); setMomentumCompanyId(company.id); }}
+                              className={`inline-flex items-center font-bold rounded-full border px-2 py-0.5 text-xs hover:opacity-80 transition-opacity focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-ring cursor-pointer mr-0.5 ${style.bg} ${style.text} ${style.border}`}
                             >
-                              <PhoneCall className="h-4 w-4" />
+                              <span className="hidden sm:inline">Momentum&nbsp;</span>
+                              <span>{gs.score}</span>
                             </button>
-                          )}
+                          );
+                        })()}
+                        {!company.archivedAt && contacts.length > 0 && (
+                          <button
+                            className="p-1 rounded text-muted-foreground hover:text-primary hover:bg-primary/10 transition-colors"
+                            title="Quick log touch"
+                            data-testid={`button-quick-touch-${company.id}`}
+                            onClick={e => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setQuickTouch({ company, contacts });
+                              setQuickTouchContactId(contacts[0]?.id ?? "");
+                            }}
+                          >
+                            <PhoneCall className="h-4 w-4" />
+                          </button>
+                        )}
+                        {!company.archivedAt && (
                           <button
                             className="p-1 rounded text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors"
                             title="Quick add contact"
@@ -652,9 +777,9 @@ export default function Customers() {
                           >
                             <UserPlus className="h-4 w-4" />
                           </button>
-                        </div>
-                      )}
-                      <ChevronRight className="h-5 w-5 text-muted-foreground shrink-0" />
+                        )}
+                        <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                      </div>
                     </div>
 
                     <div className="mt-3 flex items-center gap-3 flex-wrap">
@@ -670,6 +795,15 @@ export default function Customers() {
                         <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs">
                           <AlertTriangle className="h-3 w-3 mr-1" />
                           {openTasks} lane{openTasks !== 1 ? "s" : ""} need research
+                        </Badge>
+                      )}
+                      {pendingSuggestions > 0 && !company.archivedAt && (
+                        <Badge
+                          className="bg-blue-50 text-blue-600 dark:bg-blue-950/40 dark:text-blue-400 text-xs"
+                          data-testid={`badge-suggestions-${company.id}`}
+                        >
+                          <UserPlus className="h-3 w-3 mr-1" />
+                          {pendingSuggestions} contact{pendingSuggestions !== 1 ? "s" : ""} suggested
                         </Badge>
                       )}
                       {company.archivedAt && (
@@ -730,12 +864,19 @@ export default function Customers() {
                         ) : (
                           <span className="text-xs text-muted-foreground italic">No financial data</span>
                         )}
-                        {(tps.week > 0 || tps.month > 0) && (
-                          <div className="flex items-center gap-1.5 text-xs text-muted-foreground ml-auto">
-                            <PhoneCall className="h-3 w-3" />
-                            <span>{tps.week > 0 ? `${tps.week} this wk` : `${tps.month} this mo.`}</span>
-                          </div>
-                        )}
+                        {(() => {
+                          if (tps.daysSince === null && !tps.lastType) return null;
+                          const d = tps.daysSince ?? 999;
+                          const urgency = d <= 7 ? "text-emerald-600 dark:text-emerald-400" : d <= 14 ? "text-amber-500 dark:text-amber-400" : d <= 30 ? "text-orange-500 dark:text-orange-400" : "text-red-500 dark:text-red-400";
+                          const TypeIcon = tps.lastType === "email" ? Mail : tps.lastType === "text" ? MessageSquare : tps.lastType === "site_visit" ? MapPin : PhoneCall;
+                          const label = d === 0 ? "today" : d === 1 ? "yesterday" : `${d}d ago`;
+                          return (
+                            <div className={`flex items-center gap-1 text-xs ml-auto ${urgency}`} title={`Last touch: ${tps.lastType} ${label}`}>
+                              <TypeIcon className="h-3 w-3" />
+                              <span>{label}</span>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
                   </CardContent>
@@ -750,10 +891,17 @@ export default function Customers() {
           <p className="font-medium">
             {activeFiltersCount > 0 || searchQuery ? "No accounts match your filters" : (showArchived ? "No archived accounts" : "No customers yet")}
           </p>
-          {(activeFiltersCount > 0 || searchQuery) && (
+          {(activeFiltersCount > 0 || searchQuery) ? (
             <Button variant="ghost" size="sm" className="mt-3" onClick={() => { clearFilters(); setSearchQuery(""); }}>
               Clear all filters
             </Button>
+          ) : !showArchived && (
+            <div className="mt-3 space-y-2">
+              <p className="text-sm">Add your first customer account to get started.</p>
+              <Button size="sm" onClick={() => setDialogOpen(true)} className="bg-amber-500 hover:bg-amber-600 text-black" data-testid="btn-empty-add-customer">
+                <Plus className="h-4 w-4 mr-1" /> Add Customer
+              </Button>
+            </div>
           )}
         </div>
       )}
@@ -773,7 +921,7 @@ export default function Customers() {
                   <SelectValue placeholder="Select contact..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {quickTouch?.contacts.map(c => (
+                  {[...(quickTouch?.contacts ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
                     <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -788,8 +936,8 @@ export default function Customers() {
                 <SelectContent>
                   <SelectItem value="call">Call</SelectItem>
                   <SelectItem value="email">Email</SelectItem>
-                  <SelectItem value="text">Text</SelectItem>
                   <SelectItem value="site_visit">Site Visit</SelectItem>
+                  <SelectItem value="text">Text</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -922,6 +1070,14 @@ export default function Customers() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <MomentumScoreDrawer
+        open={!!momentumCompanyId}
+        onClose={() => setMomentumCompanyId(null)}
+        companyName={momentumCompanyName}
+        scoreData={momentumScoreDetail}
+        isLoading={momentumScoreLoading}
+      />
     </div>
   );
 }

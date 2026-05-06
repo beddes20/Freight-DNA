@@ -1,0 +1,137 @@
+You are working on the FreightDNA codebase. I want a full read-only diagnostic of the email connection/sync system as a whole because we are seeing gaps often, and email is a critical system for how information flows through the platform.
+
+IMPORTANT:
+This is a READ-ONLY audit first.
+Do NOT modify code.
+Do NOT install packages.
+Do NOT change config, secrets, env vars, schema, migrations, or tests.
+Do NOT “fix” anything yet.
+Your job is to inspect, trace, explain, and identify the real failure points and drift risks.
+
+I want you to analyze the entire email pipeline end-to-end and tell me why the connection may fail to “stick” or remain fluid over time.
+
+### GOAL
+
+Produce a complete diagnostic of:
+1. how email is connected,
+2. how new messages enter the system,
+3. what background jobs keep it healthy,
+4. how webhook and polling/delta-sync interact,
+5. where gaps can occur,
+6. how the UI reflects health/problems,
+7. what the highest-probability causes are for missed threads, lag, stale inboxes, or unhealthy webhook state.
+
+### WHAT TO INSPECT
+
+Trace the real implementation for all email-related areas, including but not limited to:
+
+- auth/connection flow for email providers
+- Microsoft Graph / Outlook connection logic
+- webhook subscription creation / renewal / validation
+- mailbox sync jobs
+- delta sync / historical backfill behavior
+- conversation ingestion / thread matching / message persistence
+- any email intelligence or email scheduler processes
+- health checks, heartbeat rows, cron jobs, or integration health pages
+- conversation/inbox UI data sources
+- any “webhook unhealthy” indicators in the frontend
+- retry logic, dead-letter behavior, error handling, and backoff
+- places where partial failure could silently create data gaps
+
+Please inspect all relevant backend, scheduler, service, route, and frontend files. Follow the real code paths rather than guessing.
+
+### OUTPUT FORMAT
+
+Return your answer in these sections:
+
+## 1. Email system map
+Give me a plain-English architecture map of the email system:
+- connection/auth
+- ingestion path
+- webhook path
+- fallback sync path
+- storage path
+- UI path
+
+Name the specific files/modules responsible for each part.
+
+## 2. Canonical flow
+Tell me what the intended “happy path” is from:
+email arrives in Outlook/Graph
+→ webhook or polling notices it
+→ sync job runs
+→ message/thread is stored
+→ conversation UI updates
+
+Be specific about which files/functions own each step.
+
+## 3. Failure points
+List the most likely places the system can break or drift, such as:
+- expired subscriptions
+- webhook validation issues
+- missed renewals
+- delta token problems
+- scheduler overlap / stuck scheduler
+- retries not covering certain failures
+- race conditions between webhook and backfill
+- thread matching failures
+- UI health state not matching backend truth
+- anything else you find
+
+For each failure point, include:
+- why it can happen,
+- what code/file indicates that risk,
+- what symptom a user would experience.
+
+## 4. Existing protections
+List what protections already exist today, such as:
+- mutex/in-flight guards
+- heartbeat tracking
+- retries/backoff
+- unhealthy-state detection
+- manual re-sync endpoints/buttons
+- test coverage
+
+Be honest about which protections are strong vs partial.
+
+## 5. Health visibility
+Show me:
+- how the app currently determines and surfaces email/webhook health,
+- where the “Webhook unhealthy” UI comes from,
+- what admin pages/endpoints/logs exist for diagnosis,
+- what metrics or status fields are already available.
+
+## 6. Gaps between truth and UI
+Explain where the UI could appear healthy while sync is actually stale, OR where the UI shows unhealthy but data is still partially flowing.
+
+I care a lot about “false confidence” and “silent degradation.”
+
+## 7. Top 5 probable causes
+Rank the top 5 most likely real-world causes of the email gaps we’re feeling.
+This ranking should be based on the actual code you inspected, not generic theory.
+
+## 8. Safest next fixes
+Do NOT implement them yet.
+Just recommend the safest next 5 actions, ranked from lowest-risk/highest-leverage to more invasive.
+Examples: instrumentation, renewals hardening, route-level health checks, scheduler protection, admin diagnostics, replay/re-sync tools, etc.
+
+## 9. File index
+Give me a concise list of every file you inspected, grouped by:
+- backend services
+- schedulers/jobs
+- routes
+- frontend UI
+- tests
+- docs / replit.md
+
+### IMPORTANT CONSTRAINTS
+
+- Read-only only.
+- No edits.
+- No assumptions without file evidence.
+- If there are two overlapping mechanisms (example: webhook + delta sync), explain which is canonical and which is fallback.
+- If something was recently hardened, say so.
+- If something looks scary but is actually acceptable, say that too.
+- I want the truth, not a dramatic rewrite proposal.
+
+Stop after the audit. Do not make any changes.

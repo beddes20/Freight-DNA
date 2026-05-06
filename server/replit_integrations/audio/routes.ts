@@ -1,15 +1,19 @@
 import express, { type Express, type Request, type Response } from "express";
+import { pStr, qStr, qOptStr } from "../../lib/req";
 import { chatStorage } from "../chat/storage";
 import { openai, speechToText, ensureCompatibleFormat } from "./client";
+import { getCurrentUser } from "../../auth";
 
 // Body parser with 50MB limit for audio payloads
 const audioBodyParser = express.json({ limit: "50mb" });
 
 export function registerAudioRoutes(app: Express): void {
-  // Get all conversations
+  // Get all conversations for the current user
   app.get("/api/conversations", async (req: Request, res: Response) => {
     try {
-      const conversations = await chatStorage.getAllConversations();
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const conversations = await chatStorage.getAllConversationsForUser(user.id);
       res.json(conversations);
     } catch (error) {
       console.error("Error fetching conversations:", error);
@@ -17,11 +21,13 @@ export function registerAudioRoutes(app: Express): void {
     }
   });
 
-  // Get single conversation with messages
+  // Get single conversation with messages — must be owned by current user
   app.get("/api/conversations/:id", async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
-      const conversation = await chatStorage.getConversation(id);
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(pStr(req.params.id));
+      const conversation = await chatStorage.getConversationForUser(id, user.id);
       if (!conversation) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -36,8 +42,10 @@ export function registerAudioRoutes(app: Express): void {
   // Create new conversation
   app.post("/api/conversations", async (req: Request, res: Response) => {
     try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { title } = req.body;
-      const conversation = await chatStorage.createConversation(title || "New Chat");
+      const conversation = await chatStorage.createConversation(title || "New Chat", user.id);
       res.status(201).json(conversation);
     } catch (error) {
       console.error("Error creating conversation:", error);
@@ -45,11 +53,14 @@ export function registerAudioRoutes(app: Express): void {
     }
   });
 
-  // Delete conversation
+  // Delete conversation — must be owned by current user
   app.delete("/api/conversations/:id", async (req: Request, res: Response) => {
     try {
-      const id = parseInt(req.params.id);
-      await chatStorage.deleteConversation(id);
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const id = parseInt(pStr(req.params.id));
+      const ok = await chatStorage.deleteConversationForUser(id, user.id);
+      if (!ok) return res.status(404).json({ error: "Conversation not found" });
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting conversation:", error);
@@ -57,12 +68,16 @@ export function registerAudioRoutes(app: Express): void {
     }
   });
 
-  // Send voice message and get streaming audio response
+  // Send voice message and get streaming audio response — must own the conversation
   // Auto-detects audio format and converts WebM/MP4/OGG to WAV
   // Uses gpt-4o-mini-transcribe for STT, gpt-audio for voice response
   app.post("/api/conversations/:id/messages", audioBodyParser, async (req: Request, res: Response) => {
     try {
-      const conversationId = parseInt(req.params.id);
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const conversationId = parseInt(pStr(req.params.id));
+      const owned = await chatStorage.getConversationForUser(conversationId, user.id);
+      if (!owned) return res.status(404).json({ error: "Conversation not found" });
       const { audio, voice = "alloy" } = req.body;
 
       if (!audio) {

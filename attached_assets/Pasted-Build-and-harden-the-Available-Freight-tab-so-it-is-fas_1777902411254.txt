@@ -1,0 +1,148 @@
+Build and harden the “Available Freight” tab so it is fast, trustworthy, and operationally useful for NAM/AM teams.
+
+This tab is powered by a spreadsheet-like freight dataset with fields similar to:
+- order/load id
+- brokerage
+- move status
+- origin city/state
+- destination city/state
+- equipment type
+- weight
+- stops
+- distance
+- early pickup date/time
+- early delivery date/time
+- planning comments
+- target pay / max pay
+- carrier reference / tracking
+- customer
+- total charge / total amount [file:2]
+
+Current product vision:
+This page is an ACTIONABLE freight cockpit, not a historical report. Users should only see loads worth working right now. The page already has top summary cards, quick filter chips, search, customer filter, owner filter, queue filter, sorting, grouping, and pickup timing logic, and those must all stay aligned to one shared rules engine. [file:3]
+
+Business rules to enforce:
+1. Never show loads that picked up yesterday or earlier.
+2. Exclude all past pickups by default everywhere in the tab.
+3. Only show actionable loads unless the user explicitly turns on a special stale/history view.
+4. Add a first-class Ops User filter so teams can select NAM/AM owners easily.
+5. Make owner/team filtering powerful enough for:
+   - all
+   - me
+   - my team
+   - specific NAM/AM
+   - unassigned
+6. Make counts, visible rows, chips, and side-panel metrics all use the exact same filtered dataset.
+7. Optimize for speed and triage: users should find the highest-priority loads first with minimal clicks.
+
+What I want you to build:
+
+A. Data model / normalization
+- Create a normalized freight model from the spreadsheet source.
+- Parse pickup and delivery date/time safely.
+- Normalize owner fields so NAM/AM / ops user data is reliable even if source values vary by name, email, id, or team mapping.
+- Create one canonical helper for current owner resolution.
+
+B. Core visibility logic
+Implement a single shared predicate called something like isVisibleAvailableFreight(load, filters, now, timezone).
+The default visibility rules must:
+- exclude loads with pickup date before today
+- exclude cancelled / covered / delivered / closed rows unless a non-default workflow explicitly needs them
+- include only active, actionable freight
+- treat stale rows separately from active rows
+- allow an optional “show stale” mode, but OFF by default
+Use one business timezone consistently for all pickup logic.
+
+C. Queue design
+Create explicit queue buckets:
+- Ready to send
+- Pickup today
+- Pickup tomorrow
+- At risk within 24h
+- Team needs approval
+- No response in 4h
+- Covered today
+- Stale
+- Unassigned
+Make sure rows belong to clear buckets based on deterministic rules.
+Do not let a row appear actionable if it is already in the past.
+
+D. Ops user / NAM / AM filtering
+Add a robust filter labeled “Ops user” or “Owner”.
+Requirements:
+- searchable dropdown
+- supports NAM and AM users
+- supports team grouping
+- supports multi-select
+- options for Me, My team, Unassigned, All
+- owner chips visible at top when active
+- owner logic shared by cards + rows + ROI panel
+If source data lacks a clean owner column, create a mapping layer and document it.
+
+E. UX / workflow improvements
+Improve the page so it feels like a real dispatch cockpit:
+- default sort = pickup soonest, then highest urgency
+- strong quick filters: All, My freight today, Pickup today, Pickup tomorrow, At risk <24h, Team needs approval, Unassigned, Low confidence, No response in 4h, Stale
+- sticky filter bar
+- show why each load is in the queue
+- show why a row is hidden when excluded by filters
+- make the empty state diagnostic, not generic
+- add “Reset to operational default”
+- support saved views, but never let saved views silently hide all actionable freight without a warning
+
+F. Performance requirements
+Make this tab efficient and scalable:
+- memoize normalized rows and derived filter results
+- centralize all predicates so cards and table cannot drift
+- virtualize the list/table if row count is large
+- debounce text search
+- avoid recomputing summary metrics separately from table data
+- compute one filtered dataset, then derive cards/panels from it
+- log timing for normalization, filtering, sorting, and rendering
+- target smooth performance on several hundred to a few thousand rows
+
+G. Metrics / card alignment
+Top cards, visible row count, hidden-by-filters diagnostics, and ROI panel must all come from the same source-of-truth filtered collection.
+No contradictory states allowed, such as:
+- queue count says 75
+- but the visible table is empty
+- or cards count past pickups while table excludes them
+If contradictory states occur, surface a warning in dev mode.
+
+H. Date handling
+This is critical:
+- pickup yesterday or older must not appear in Available Freight
+- “today” and “tomorrow” must use the chosen business timezone, not browser ambiguity
+- handle spreadsheet date/time parsing carefully
+- create utilities for startOfToday, endOfToday, startOfTomorrow, overdue, and within24h
+- add regression tests around midnight / timezone boundaries
+
+I. Testing
+Add tests for:
+- past pickups excluded by default
+- yesterday pickups excluded
+- today pickups included
+- tomorrow pickups included only in the proper bucket
+- stale loads hidden by default unless toggle is on
+- owner filter works for NAM / AM / Me / My team / Unassigned
+- cards always equal rows for same scope
+- saved view reset returns to operational default
+- large dataset filtering remains performant
+
+J. Deliverables
+Return:
+- root logic design
+- files changed
+- exact filter rules
+- owner mapping strategy
+- date/time strategy and timezone used
+- tests added
+- performance improvements made
+- recommended future enhancements
+
+Important implementation constraints:
+- Do NOT build this as a passive reporting screen.
+- Build it as an execution queue for teams working freight right now.
+- Past pickups belong in history/reporting, not in the default Available Freight tab.
+- The owner/NAM/AM filter must be first-class and reliable.
+- The same rules engine must power cards, chips, table, hidden-state explanations, and side metrics.

@@ -1,0 +1,327 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+We are ready to build **Email Intelligence Layer v1** for Value Truck.
+
+This is NOT a generic inbox feature.
+This is a structured pipeline that:
+1) normalizes all app-side email we already send/receive,
+2) extracts intents and signals from those messages (customer + carrier),
+3) writes those signals into the right places: account score / NBA, carrier hub / carrier NBAs, lane work queue, and win-tracking.
+
+We will NOT (yet) integrate with every external inbox (e.g., Outlook/Gmail for every rep).
+In v1, we focus on email that already flows through the Value Truck app:
+- carrier procurement emails
+- future customer emails sent/received via the platform
+- any existing send-from-platform lanes we already log
+
+--------------------------------------------------
+1. GOAL & SCOPE
+--------------------------------------------------
+
+Goal:
+Create a reusable **Email Intelligence Layer** with three pieces:
+- a normalized email message store
+- an intent/signal extraction pipeline
+- small, safe integrations into:
+  - Account score / NBA inputs (customer side)
+  - Carrier Hub / carrier NBAs (carrier side)
+  - Lane Work Queue / tasks where appropriate
+
+Scope:
+- v1 is **app-side** only (emails passing through the platform).
+- Do NOT attempt full Outlook/Gmail sync in this task.
+- Do NOT redesign the NBA engine or account scoring, but make it easy to consume email signals.
+
+--------------------------------------------------
+2. UNIFIED EMAIL MESSAGE STORE
+--------------------------------------------------
+
+First, normalize email messages.
+
+If an `email_messages`-like table already exists, extend/reuse it.
+If not, add a new table (name suggestions: `email_messages` or `messages_email`).
+
+Minimum fields:
+- id (PK)
+- threadId (group messages into conversations)
+- direction: 'inbound' | 'outbound'
+- sentAt / receivedAt timestamps
+- fromAddress
+- toAddresses (array/json)
+- ccAddresses (array/json, optional)
+- subject
+- bodyText (plain text)
+- bodyHtml (optional)
+- rawHeaders (optional)
+- mailbox / channel / source (if needed)
+- orgId (if multi-org is relevant)
+- userId (sending/owning user, if outbound)
+- linkedAccountId (nullable)
+- linkedCarrierId (nullable)
+- linkedLaneId (nullable)
+- linkedLoadId (nullable)
+- linkedTaskId / linkedNbaId (nullable)
+
+Design principles:
+- This table is the source of truth for message content.
+- Keep the schema simple but expressive enough for future use.
+
+Tasks:
+- Add schema + migration (via runMigrations.ts and any associated SQL/journal).
+- Add storage methods to IStorage / DatabaseStorage:
+  - insertEmailMessage
+  - updateEmailMessageLinks (to attach account/carrier/lane/load)
+  - getEmailMessagesForAccount / Carrier / Lane / Task as needed
+
+For v1, it’s OK if linkage is done by existing flows that already know the account/carrier/lane.
+
+--------------------------------------------------
+3. EMAIL INTENT & SIGNAL TAXONOMY
+--------------------------------------------------
+
+Define a small, explicit taxonomy of **intents** and **signals** we care about.
+
+Customer-side email intents (examples):
+- meaningful_touchpoint
+- pricing_request
+- objection (with subtype: budget, service, timing, competitor, internal_priority)
+- service_complaint
+- positive_feedback
+- new_opportunity (new lane, new location, new product, etc.)
+- stalled_thread (detected by time + content)
+- urgency_signal (deadline, “ASAP”, risk language)
+- closed_won_indicator
+- closed_lost_indicator
+
+Carrier-side email intents (examples):
+- lane_offer (we can cover X→Y)
+- lane_decline
+- capacity_available (region/equipment/date)
+- capacity_unavailable
+- new_lane_preference
+- new_equipment / new_region
+- price_pushback
+- service_issue
+- paperwork/compliance step
+- soft_commitment / hard_commitment
+
+Represent these as:
+- string enums / union types in code,
+- optional reference tables in DB if needed.
+
+We do NOT need a huge taxonomy in v1; it just needs to be:
+- explicit,
+- documented,
+- easy to extend.
+
+--------------------------------------------------
+4. EMAIL SIGNAL STORAGE
+--------------------------------------------------
+
+Create a table to store extracted signals per message, e.g. `email_signals`.
+
+Suggested fields:
+- id
+- emailMessageId (FK -> email_messages)
+- orgId (if relevant)
+- direction (inbound/outbound)
+- intent (string or enum)
+- intentSubtype (optional, e.g., objection_budget)
+- actorType: 'customer' | 'carrier' | 'internal' | 'unknown'
+- primaryEntityType: 'account' | 'carrier' | 'lane' | 'load' | 'task' | 'unknown'
+- primaryEntityId
+- confidenceScore (0–1 or 0–100)
+- extractedData JSONB (structured payload: e.g., lane description, dates, locations, amounts)
+- createdAt
+
+Tasks:
+- Add schema + migration for `email_signals`.
+- Add IStorage / DatabaseStorage methods:
+  - insertEmailSignals(emailMessageId, signals[])
+  - getEmailSignalsForAccount / Carrier / Lane / Load (basic queries)
+
+--------------------------------------------------
+5. INTENT & ENTITY EXTRACTION PIPELINE
+--------------------------------------------------
+
+Implement a service (e.g., `emailIntelligenceService.ts`) that:
+
+- Takes an email message (subject + bodyText + metadata).
+- Detects:
+  - actorType,
+  - intent(s),
+  - optional intentSubtype(s),
+  - extracted entities:
+    - for customer: lanes, locations, dates, volumes, price mentions, competitor names, sentiments
+    - for carrier: origin/destination, equipment, date ranges, willingness (yes/no/maybe), rate hints
+- Returns one or more `EmailSignal` objects ready to store.
+
+Implementation notes:
+- Use existing OpenAI client / LLM integration patterns if present.
+- Keep the extraction deterministic in terms of output schema (no freeform text fields beyond explanation).
+- Include rules to:
+  - ignore signatures / quoted history where possible,
+  - avoid double-counting the same intent on a thread unless clearly new.
+
+For v1, a simple call per email is fine. Later we can batch or stream.
+
+Tests:
+- Provide fixtures of synthetic email bodies and test that:
+  - pricing requests are detected correctly,
+  - objections are classified with the right subtype,
+  - service complaints vs. neutral status updates are distinguished,
+  - carrier lane offers produce structured lane/region/equipment data in extractedData.
+
+--------------------------------------------------
+6. WIRING INTO EXISTING FLOWS (v1 INTEGRATIONS)
+--------------------------------------------------
+
+Hook the Email Intelligence Layer into the flows that already exist.
+
+6.1 Carrier procurement emails
+- For emails sent from the Lane Work Queue / CarrierOutreachPanel:
+  - On send:
+    - write an outbound `email_messages` row.
+    - optionally add a `meaningful_touchpoint` or outreach intent.
+  - On reply (once inbound handling is available):
+    - create `email_messages` row.
+    - run the intent extraction pipeline.
+    - write `email_signals`.
+    - if a carrier lane_offer / new_lane_preference / capacity_available signal is detected:
+      - create or update carrier-declared lanes / carrier hub intelligence (or at least staging records — see earlier carrier declared lanes spec).
+      - optionally generate a follow-up carrier NBA.
+
+6.2 Customer-side emails (future-ready)
+- Ensure the system is ready to be used from:
+  - account email send flows,
+  - any future customer portal/email integration.
+- For this task, it’s enough to:
+  - expose services helpers that can be called when a customer email is sent or received, to produce signals that feed:
+    - account growth score,
+    - account NBAs (e.g., new opportunity, service complaint, stalled thread, urgency).
+
+You do NOT have to fully wire customer UI in this task, but you should:
+- implement library functions / services that:
+  - given emailSignals, compute and return:
+    - touchpoint indicators for account scoring,
+    - candidate NBAs/tasks for accounts or loads.
+
+--------------------------------------------------
+7. WIN / LOSS & BEST-PRACTICES TRACKING (HOOKS ONLY)
+--------------------------------------------------
+
+We will NOT build full win-analytics UI in this task.
+But we want the **hooks** in place.
+
+Design & implement:
+- An association between loads/opportunities and end-state:
+  - closed_won
+  - closed_lost
+  - saved_at_risk
+  - churned
+
+Ensure:
+- Email signals associated with those loads/accounts can be queried later for analysis.
+
+At minimum:
+- For `closed_won` / `closed_lost` opportunities or loads, make sure we can:
+  - fetch all `email_signals` on the related threads,
+  - with their intent types and timestamps.
+
+You do NOT need to compute analytics yet.
+We just need the data model to make later analysis possible.
+
+--------------------------------------------------
+8. PIPELINE & SCHEDULING
+--------------------------------------------------
+
+We need to decide how and when the email intelligence runs.
+
+For v1:
+- For emails sent from the app:
+  - run extraction synchronously or via a simple async job after send.
+- For inbound emails coming into the platform:
+  - ensure they are:
+    - saved to `email_messages`,
+    - passed through the extraction pipeline,
+    - and signals stored in `email_signals`.
+
+If there is already a job queue / scheduler:
+- Use the existing pattern (e.g., a 5–15 minute worker) to:
+  - process any unprocessed `email_messages` rows,
+  - run extraction,
+  - store signals.
+
+Add a simple flag:
+- `email_messages.processedForSignalsAt` timestamp
+to avoid re-processing.
+
+--------------------------------------------------
+9. GUARDRAILS & SAFETY
+--------------------------------------------------
+
+Important:
+- Do NOT auto-overwrite account, contact, or carrier core fields directly from email in v1.
+- Instead:
+  - use email signals as:
+    - inputs to scores and NBAs,
+    - or as suggestions (staging tables) for profile updates.
+- Avoid spam:
+  - do not create dozens of NBAs or tasks from one noisy thread.
+  - dedupe signals per thread where appropriate.
+
+Implement:
+- Simple dedupe rules:
+  - e.g., only one `pricing_request` signal per thread per day,
+  - only one `service_complaint` signal per thread unless clearly separate issues.
+
+--------------------------------------------------
+10. TESTS
+--------------------------------------------------
+
+Add tests for at least:
+
+1) Schema & storage:
+   - email messages can be inserted and linked to accounts/carriers/lanes.
+   - email signals can be inserted and fetched by entity.
+
+2) Extraction:
+   - pricing request email ⇒ `pricing_request` intent with extracted lane/volume/timeframe.
+   - objection emails ⇒ `objection` with correct subtype (budget, timing, service).
+   - service complaint emails ⇒ `service_complaint`.
+   - carrier capacity emails ⇒ `capacity_available` / lane_offer with structured origin/destination/equipment.
+
+3) Integration with existing flows:
+   - sending a carrier outreach email records an `email_messages` row.
+   - (if inbound path exists) replying to a carrier outreach triggers extraction and produces at least one signal.
+
+4) Idempotency:
+   - re-running the extractor on the same message does not create duplicate signals (based on your dedupe logic).
+
+5) Performance sanity:
+   - extraction pipeline handles reasonable email sizes without timeouts.
+   - basic error handling: if extraction fails, it does not crash the app; message is marked for retry or skipped with a log.
+
+--------------------------------------------------
+11. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. short summary of what you changed
+2. exact files changed
+3. schemas added/updated (`email_messages`, `email_signals`, etc.)
+4. the intent taxonomy and how it’s represented in code
+5. details of the extraction pipeline (how it’s invoked, how it handles failures)
+6. how signals can be consumed by:
+   - account score / account NBAs,
+   - carrier hub / carrier NBAs,
+   - lane work queue
+7. how dedupe / safety is handled
+8. tests added/updated
+9. key assumptions and edge cases
+
+Success criteria:
+- All app-side emails are normalized into a structured message store.
+- We can extract and persist meaningful signals from those emails.
+- Those signals are ready to feed account and carrier intelligence (scores, NBAs, ranking) in subsequent tasks.
+- The system is safe, auditable, and does not silently overwrite core records.

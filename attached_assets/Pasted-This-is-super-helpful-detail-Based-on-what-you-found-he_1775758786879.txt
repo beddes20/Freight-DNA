@@ -1,0 +1,56 @@
+This is super helpful detail. Based on what you found, here’s what I still want to tighten or explicitly confirm before we call the Generate Procurement Tasks flow “done”:
+
+1. Same‑page placement vs. upload flow
+   - Right now the button only exists on the AwardCard on the RFP Awards page, after the award is saved.
+   - Confirm: there is still **no inline step** or CTA immediately after a fresh upload/parse that prompts the user to generate tasks.
+   - If that’s true, please propose the minimal change needed so that:
+     - after a new award is created/parsed, the user sees a clear next‑step nudge on that same screen (not only on a separate RFP Awards listing view).
+
+2. Visibility/affordance of “already generated” state
+   - Today the button looks identical whether:
+     - tasks have never been generated, or
+     - all tasks already exist and we’re just reopening the workspace.
+   - Please confirm:
+     - is there any visual indicator (icon, chip, subtle label) on the AwardCard to show “Procurement tasks already set up”?
+   - If not, propose a lightweight way to:
+     - show that tasks already exist for this award, and
+     - differentiate “create tasks” vs. “reopen procurement workspace” in the copy.
+
+3. Duplicate key robustness
+   - Current key is `${awardId}:${laneName}` (exact lane string).
+   - I want you to explicitly check:
+     - what happens if the user edits the lane text (e.g. adds “(contract)” or changes spacing)
+     - do we now treat it as a new lane and create another task, even if it’s logically the same lane?
+   - If yes, suggest whether we should:
+     - normalize lane strings (trim/whitespace/case), or
+     - move to a more structured key (originId, destId, mode, awardId).
+
+4. Edge cases around “qualifying lanes”
+   - The button is disabled when `highVolumeLanes.length === 0` or no lanes have 50+ loads/year.
+   - Please confirm:
+     - in the UI, is there anywhere that clearly explains the “50+ loads/year” threshold to the user?
+     - if not, propose where to surface that rule (tooltip text, helper text under the button, etc.).
+   - I want to avoid a situation where the button is disabled and the user has no idea that volume threshold is the reason.
+
+5. Error and partial‑success behavior
+   - You mentioned a 400 with toast “Failed to generate procurement tasks.”
+   - Please confirm:
+     - how partial failures are handled (some lanes succeed, some fail),
+     - what the user sees if that happens (is the count split out, or do we only show a generic failure?).
+   - If partial success is possible, I’d like the toast to reflect:
+     - `X new tasks created, Y lanes skipped/failed`, and
+     - that the workspace still opens when at least one task exists.
+
+6. Final UX check on the RFP Awards page
+   - With your current implementation:
+     - confirm there is at least one award where:
+       - the button is enabled,
+       - clicking it creates tasks,
+       - the toast shows the correct created vs reused counts, and
+       - the procurement workspace dialog opens without navigating away.
+   - Send back a short before/after description of that one real award:
+     - initial lane count and state,
+     - what happened on first click,
+     - what happens on subsequent clicks.
+
+I don’t just want the code‑path description — I want confirmation that a fresh user, right after uploading an award, sees a clear “next step” and can tell whether procurement tasks are already in place or still need to be generated.

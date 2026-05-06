@@ -1,0 +1,72 @@
+You are a senior product engineer implementing a reliable scheduled alert workflow in Freight-DNA.
+
+Context:
+We need two daily operational alerts for NAMs and AMs.
+
+Alert 1:
+Time: 7:30 AM local time
+Purpose: confirm the LM has completed check calls and the board is clean by 7:30.
+
+Alert 2:
+Time: 4:00 PM local time
+Purpose: confirm the checkout process is complete and the board is clean.
+
+Current problem:
+The existing process is clunky and alerts are not appearing at the correct times.
+
+Your task:
+Implement a clean, reliable version of this alert workflow.
+
+Requirements:
+1. Use the audit findings and fix the actual timing/trigger issue, not just the wording.
+2. Make alert delivery timezone-aware using the correct local timezone for the user or organization.
+3. Handle business days correctly:
+   - default to weekdays only unless current logic explicitly requires otherwise
+   - document any assumptions
+4. Ensure NAMs and AMs are targeted correctly.
+5. Use the simplest reliable trigger model:
+   - background scheduler / cron / server-side recurring job if appropriate
+   - avoid page-load-only triggers if that is what is causing missed alerts
+6. Make the UX practical and low-friction:
+   - clear question
+   - clear CTA
+   - easy to dismiss or complete
+   - visible without being overly disruptive
+7. If the app already has an alerts/tasks/checklist pattern, reuse it instead of inventing a new one.
+8. Prevent duplicate alerts for the same user/time window.
+9. Log enough information to debug future timing problems.
+10. Stop after implementing the two alerts only. Do not redesign the whole notification system.
+
+Use this exact wording unless the current app pattern requires small UX adjustments:
+
+7:30 AM alert:
+"Have LM check calls been completed and is the board clean by 7:30?"
+
+4:00 PM alert:
+"Is the checkout process complete and is the board clean for the day?"
+
+Implementation expectations:
+- identify where schedule config should live
+- store/interpret times correctly
+- ensure the alerts fire at the right local time
+- make the alert surface reliable and easy to notice
+- document how duplicates are prevented
+- document how timezone and weekday logic works
+
+Validation required:
+- typecheck/build
+- app/server starts cleanly
+- verify alerts schedule correctly for a sample NAM/AM user
+- verify timezone behavior explicitly
+- verify duplicate alerts are not created
+- verify the alert appears in the intended UI surface
+- provide a short test plan for 7:30 AM and 4:00 PM scenarios
+
+Output:
+A. Files changed
+B. Trigger model implemented
+C. Timezone and weekday logic
+D. UI behavior
+E. Validation results
+F. Any limitations or future improvements
+Then stop and wait for approval before expanding this workflow further.

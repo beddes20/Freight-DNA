@@ -18,8 +18,9 @@ import {
   CheckCircle2, Calendar, Trash2, Crown, Send, Lightbulb, MessageSquare,
   PhoneCall, AlertTriangle, BellRing, X, CloudOff, Upload, Plane,
   Phone, Mail, Package, FileText, Shield, Clock, Target, ListTodo, Search, MoreHorizontal,
-  Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell, Pencil, ArrowUpRight, ArrowDownRight,
+  Pin, PinOff, ChevronDown, ChevronUp, MessageCircle, Bell, Pencil, ArrowUpRight, ArrowDownRight, ArrowRight,
   Activity, UserPlus, Repeat2, Trophy, Settings2,
+  Truck, Route,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -30,23 +31,52 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
+import { formatTimeAgo } from "@/lib/utils";
 import { TaskDialog } from "@/components/task-dialog";
+import { ForcedFocusBanner } from "@/components/forced-focus-banner";
+import { ForcedFocusDialog } from "@/components/forced-focus-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import InternalCommsPortlet from "@/components/internal-comms-portlet";
-import MarketSharePortlet from "@/components/market-share-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
-import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification } from "@shared/schema";
+import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification, LaneCarrier } from "@shared/schema";
+import { formatCustomerName } from "@shared/laneFormatters";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, fileToBase64, type PendingFile } from "@/components/file-attachment";
 import { LmCareerPanel } from "@/components/lm-career-panel";
+import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
 import { LmDailyCheckInPortlets } from "@/components/lm-daily-checkin-portlet";
+import { LmCheckinBanner } from "@/components/lm-checkin-banner";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
+import { AccountGrowthPortlet } from "@/components/account-growth-portlet";
+import { IntelSnapshotPortlet } from "@/components/intel-snapshot-portlet";
+import { NextBestActionsPortlet } from "@/components/next-best-actions-portlet";
 import { DashboardActivitySheet, type PortletType } from "@/components/dashboard-activity-sheet";
 import { RelationshipDashboardSection } from "@/components/relationship-freight-portlet";
 import { useDashboardLayout } from "@/hooks/use-dashboard-layout";
 import { DashboardLayoutPanel } from "@/components/dashboard-layout-panel";
-
-type SafeUser = Omit<User, "password">;
-type FeedPostWithReplies = FeedPost & { replies: FeedPost[] };
+import { PortletErrorBoundary } from "@/components/portlet-error-boundary";
+import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
+import type { ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
+import type { SafeUser, FeedPostWithReplies, ActionItem, TrendingAccount, TrendingResponse, StaleAccount, TodaysFiveItem, AmRow, TeamActivity, RelationshipsMovedData, MarginMetrics, PersonalMetrics, WeeklyRep, OpportunityLog } from "./dashboard/types";
+import { HeroBanner } from "./dashboard/HeroBanner";
+import { DirectorPortlets } from "./dashboard/DirectorPortlets";
+import { NamPortlets } from "./dashboard/NamPortlets";
+import { AmPortlets } from "./dashboard/AmPortlets";
+import { AccountsDriftingPortlet, RelationshipAdvancementPortlet, GrowthCallsPortlet } from "./dashboard/Phase2Portlets";
+import { CommitDialog } from "./dashboard/CommitDialog";
+import type { CommitPayload } from "./dashboard/commitTypes";
+import { WeeklyCommitmentsPanel, TeamCommitmentsPortlet } from "./dashboard/WeeklyCommitmentsPanel";
+import { TasksSection } from "./dashboard/TasksSection";
+import { TeamDirectorySection } from "./dashboard/TeamDirectorySection";
+import { NbaDashboardPanel } from "@/components/NbaDashboardPanel";
+import { CoverageGapsPortlet } from "./dashboard/CoverageGapsPortlet";
+import { AwardHealthPortlet } from "./dashboard/AwardHealthPortlet";
+import { TodaysBriefingPortlet } from "@/components/todays-briefing-portlet";
+import { RecentlyVisitedPortlet } from "@/components/recently-visited-portlet";
+import { useRecentlyVisited } from "@/hooks/use-recently-visited";
+import { PinnedAccountsPortlet } from "@/components/pinned-accounts-portlet";
+import { MissedInboundPortlet } from "@/components/missed-inbound-portlet";
+import { useWebexConnectionStatus } from "@/hooks/use-webex";
+import { VideoOff } from "lucide-react";
 
 const METRIC_LABELS: Record<string, string> = {
   contacts_added: "New Contacts",
@@ -62,93 +92,13 @@ function getMetricLabel(metric: string, customLabel?: string | null): string {
   return METRIC_LABELS[metric] || metric;
 }
 
-function dueDateBadge(dueDate: string | null) {
-  if (!dueDate) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const due = new Date(dueDate + "T00:00:00");
-  const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
-
-  let color = "bg-muted text-muted-foreground";
-  if (diffDays < 0) color = "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400";
-  else if (diffDays === 0) color = "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400";
-
-  const label = diffDays < 0 ? `${Math.abs(diffDays)}d overdue` : diffDays === 0 ? "Today" : `${diffDays}d`;
-  return (
-    <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-md font-medium ${color}`}>
-      <Calendar className="h-3 w-3" />
-      {label}
-    </span>
-  );
-}
-
-const statusIcon = (status: string) => {
-  if (status === "completed") return <CheckCircle2 className="h-4 w-4 text-green-500" />;
-  if (status === "in_progress") return <PlayCircle className="h-4 w-4 text-blue-500" />;
-  return <Circle className="h-4 w-4 text-muted-foreground" />;
-};
-
-const nextStatus = (s: string) => s === "open" ? "in_progress" : s === "in_progress" ? "completed" : "open";
-
-function MarginGoalEditButton({ userId, goalId, currentTarget, onSave }: {
-  userId: string;
-  goalId: string | null;
-  currentTarget: number;
-  onSave: (target: number) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [value, setValue] = useState(currentTarget > 0 ? String(Math.round(currentTarget)) : "");
-
-  const handleSave = () => {
-    const n = parseFloat(value.replace(/,/g, ""));
-    if (!isNaN(n) && n > 0) {
-      onSave(n);
-      setOpen(false);
-    }
-  };
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-          title={goalId ? "Edit margin goal" : "Set margin goal"}
-          data-testid={`button-edit-margin-goal-${userId}`}
-        >
-          <Pencil className="h-3 w-3" />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent className="w-56 p-3" align="end">
-        <p className="text-xs font-semibold mb-2">Monthly Margin Goal</p>
-        <div className="flex gap-2">
-          <Input
-            type="number"
-            min={0}
-            step={1000}
-            value={value}
-            onChange={e => setValue(e.target.value)}
-            placeholder="e.g. 50000"
-            className="h-8 text-sm"
-            onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") setOpen(false); }}
-            data-testid={`input-margin-goal-${userId}`}
-            autoFocus
-          />
-          <Button size="sm" className="h-8 px-2" onClick={handleSave} data-testid={`button-save-margin-goal-${userId}`}>
-            Save
-          </Button>
-        </div>
-        <p className="text-[10px] text-muted-foreground mt-1.5">Enter target margin in dollars for this month.</p>
-      </PopoverContent>
-    </Popover>
-  );
-}
-
 export default function Dashboard() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
   const [taskDialogOpen, setTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | undefined>();
   const [viewContact, setViewContact] = useState<Contact | null>(null);
+  const [composeContact, setComposeContact] = useState<{ email: string; name: string; companyName: string; contactId?: string; companyId?: string } | null>(null);
   const [feedContent, setFeedContent] = useState("");
   const [feedCategory, setFeedCategory] = useState<"trend" | "growth" | "idea" | "celebrate">("idea");
   const [mentionState, setMentionState] = useState<{ mentionStart: number; query: string } | null>(null);
@@ -163,7 +113,7 @@ export default function Dashboard() {
   const [activePortlet, setActivePortlet] = useState<{ type: PortletType; personal: boolean; title: string } | null>(null);
   const [feedAuthorFilter, setFeedAuthorFilter] = useState("all");
   const [ptoBannerDismissed, setPtoBannerDismissed] = useState(false);
-  const [touchpointsTodayCollapsed, setTouchpointsTodayCollapsed] = useState(() => localStorage.getItem("dash_touchpoints_today_collapsed") === "true");
+  const [touchpointsTodayCollapsed, setTouchpointsTodayCollapsed] = useState(() => localStorage.getItem("dash_touchpoints_today_collapsed") !== "false");
   const toggleTouchpointsToday = () => {
     setTouchpointsTodayCollapsed(prev => {
       const next = !prev;
@@ -171,8 +121,24 @@ export default function Dashboard() {
       return next;
     });
   };
+  const [nbaBriefingCollapsed, setNbaBriefingCollapsed] = useState(() => localStorage.getItem("dash_nba_briefing_collapsed") !== "false");
+  const [accountGrowthCollapsed, setAccountGrowthCollapsed] = useState(() => localStorage.getItem("dash_account_growth_collapsed") !== "false");
+  const [personalMetricsCollapsed, setPersonalMetricsCollapsed] = useState(() => localStorage.getItem("dash_personal_metrics_collapsed") !== "false");
+  const [accountsDriftingCollapsed, setAccountsDriftingCollapsed] = useState(() => localStorage.getItem("dash_accounts_drifting_collapsed") === "true");
+  const [relationshipAdvancementCollapsed, setRelationshipAdvancementCollapsed] = useState(() => localStorage.getItem("dash_rel_advancement_collapsed") === "true");
+  const [growthCallsCollapsed, setGrowthCallsCollapsed] = useState(() => localStorage.getItem("dash_growth_calls_collapsed") === "true");
+  const [weeklyCommitmentsCollapsed, setWeeklyCommitmentsCollapsed] = useState(() => localStorage.getItem("dash_weekly_commitments_collapsed") === "true");
+  const [teamCommitmentsCollapsed, setTeamCommitmentsCollapsed] = useState(() => localStorage.getItem("dash_team_commitments_collapsed") === "true");
+  const [commitPayload, setCommitPayload] = useState<CommitPayload | null>(null);
   const [tasksCollapsed, setTasksCollapsed] = useState(() => localStorage.getItem("dash_tasks_collapsed") === "true");
-  const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") === "true");
+  const [waitingOnMeCollapsed, setWaitingOnMeCollapsed] = useState(() => localStorage.getItem("dash_waiting_on_me_collapsed") === "true");
+  // Task #374
+  const [nbaImpactCollapsed, setNbaImpactCollapsed] = useState(() => localStorage.getItem("dash_nba_impact_collapsed") === "true");
+  const [nbaRollupCollapsed, setNbaRollupCollapsed] = useState(() => localStorage.getItem("dash_nba_rollup_collapsed") === "true");
+  const toggleNbaImpact = () => setNbaImpactCollapsed(prev => { const n = !prev; localStorage.setItem("dash_nba_impact_collapsed", String(n)); return n; });
+  const toggleNbaRollup = () => setNbaRollupCollapsed(prev => { const n = !prev; localStorage.setItem("dash_nba_rollup_collapsed", String(n)); return n; });
+  const [teamOverdueCollapsed, setTeamOverdueCollapsed] = useState(() => localStorage.getItem("dash_team_overdue_collapsed") === "true");
+  const [feedCollapsed, setFeedCollapsed] = useState(() => localStorage.getItem("dash_feed_collapsed") !== "false");
   const [lmCheckInsGroupCollapsed, setLmCheckInsGroupCollapsed] = useState(() => localStorage.getItem("dash_lm_checkins_group_collapsed") === "true");
   const toggleLmCheckInsGroup = () => {
     setLmCheckInsGroupCollapsed(prev => {
@@ -217,11 +183,7 @@ export default function Dashboard() {
 
   const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
 
-  const { data: missingMonthlyGoals = [] } = useQuery<Array<{ amId: string; amName: string }>>({
-    queryKey: ["/api/goals/monthly-check"],
-    enabled: canSeeTeam,
-    refetchOnWindowFocus: false,
-  });
+  // Replaced by /api/dashboard/summary below — aliased for backward-compat
 
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/users"],
@@ -246,25 +208,34 @@ export default function Dashboard() {
     queryKey: ["/api/pto-passoffs"],
   });
 
-  const { data: syncAlert } = useQuery<{ failed: boolean; month?: string; error?: string }>({
-    queryKey: ["/api/sync-alert"],
+  // ── Dashboard summary — replaces 5 separate small requests ──────────────
+  const { data: dashSummary } = useQuery<{
+    urgentRfps: Array<{ id: string; title: string; companyId: string; dueDate: string | null }>;
+    syncAlert: { failed: boolean; month?: string; error?: string };
+    missingMonthlyGoals: Array<{ amId: string; amName: string }>;
+    streak: { streak: number; goal: number; todayCount: number };
+    oneOnOnePending: { count: number };
+  }>({
+    queryKey: ["/api/dashboard/summary"],
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
+  // Aliases preserve existing variable names — no downstream JSX changes needed
+  const syncAlert = dashSummary?.syncAlert;
+  const missingMonthlyGoals = dashSummary?.missingMonthlyGoals ?? [];
+  const urgentRfps = dashSummary?.urgentRfps ?? [];
+  const oneOnOnePendingData = dashSummary?.oneOnOnePending;
+
+  const { data: billingInfo } = useQuery<{ billingStatus: string | null; planName: string | null } | null>({
+    queryKey: ["/api/admin/billing"],
     enabled: currentUser?.role === "admin",
+    staleTime: 5 * 60 * 1000,
   });
+  const [billingBannerDismissed, setBillingBannerDismissed] = useState(false);
+  const showBillingBanner = !billingBannerDismissed &&
+    currentUser?.role === "admin" &&
+    (billingInfo?.billingStatus === "trialing" || billingInfo?.billingStatus === "past_due");
 
-  const { data: allRfps = [] } = useQuery<any[]>({
-    queryKey: ["/api/rfps"],
-  });
-
-  const { data: oneOnOnePendingData } = useQuery<{ count: number }>({
-    queryKey: ["/api/one-on-one/pending-count"],
-    refetchInterval: 90000,
-  });
-
-  type ActionItem = {
-    id: string; text: string; tag: string; status: string; createdAt: string;
-    sessionId: string; addedById: string; namId: string; amId: string;
-    withUserName: string; addedByName: string;
-  };
   const { data: actionItems = [] } = useQuery<ActionItem[]>({
     queryKey: ["/api/one-on-one/action-items"],
     refetchInterval: 90000,
@@ -282,6 +253,7 @@ export default function Dashboard() {
 
   const isDirector = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director";
   const isNam = currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
+  const canAssignForcedFocus = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales_director";
   const isAm = currentUser?.role === "account_manager";
 
   const [, setLocation] = useLocation();
@@ -293,15 +265,15 @@ export default function Dashboard() {
   const [amMarginCollapsed, setAmMarginCollapsed] = useState(false);
   const [namTrendingUpCollapsed, setNamTrendingUpCollapsed] = useState(false);
   const [namTrendingDownCollapsed, setNamTrendingDownCollapsed] = useState(false);
-  const [amTrendingUpCollapsed, setAmTrendingUpCollapsed] = useState(false);
-  const [amTrendingDownCollapsed, setAmTrendingDownCollapsed] = useState(false);
+  const [amTrendingUpCollapsed, setAmTrendingUpCollapsed] = useState(() => localStorage.getItem("dash_am_trending_up_collapsed") !== "false");
+  const [amTrendingDownCollapsed, setAmTrendingDownCollapsed] = useState(() => localStorage.getItem("dash_am_trending_down_collapsed") !== "false");
 
   // Collapsible state for list portlets — initialized after user loads (role-based defaults)
   const [recentWinsCollapsed, setRecentWinsCollapsed] = useState(false);
   const [coldContactsCollapsed, setColdContactsCollapsed] = useState(false);
   const [meaningfulOverdueCollapsed, setMeaningfulOverdueCollapsed] = useState(false);
   const [topOppsCollapsed, setTopOppsCollapsed] = useState(false);
-  const [churnRiskCollapsed, setChurnRiskCollapsed] = useState(false);
+  const [churnRiskCollapsed, setChurnRiskCollapsed] = useState(() => localStorage.getItem("dash_churn_risk_collapsed") !== "false");
   const [rfpDeadlineCollapsed, setRfpDeadlineCollapsed] = useState(false);
   const [goalsNudgeCollapsed, setGoalsNudgeCollapsed] = useState(false);
   const [goalsAlertCollapsed, setGoalsAlertCollapsed] = useState(false);
@@ -331,17 +303,14 @@ export default function Dashboard() {
     lp("dash_cold_contacts_collapsed", setColdContactsCollapsed);
     lp("dash_meaningful_overdue_collapsed", setMeaningfulOverdueCollapsed);
     lp("dash_top_opps_collapsed", setTopOppsCollapsed);
-    lp("dash_churn_risk_collapsed", setChurnRiskCollapsed);
     lp("dash_rfp_deadline_collapsed", setRfpDeadlineCollapsed);
     lp("dash_goals_nudge_collapsed", setGoalsNudgeCollapsed);
     lp("dash_goals_alert_collapsed", setGoalsAlertCollapsed);
   }, [currentUser, isDirector]);
 
-  type TrendingAccount = { name: string; delta: number; isNew?: boolean; companyId?: string };
-  type TrendingResponse = { up: TrendingAccount[]; down: TrendingAccount[]; monthFraction?: number; isPartialMonth?: boolean; curMonthLabel?: string };
   const { data: trendingAccounts, isLoading: trendingLoading } = useQuery<TrendingResponse>({
     queryKey: ["/api/dashboard/trending-accounts", selectedDirectorId],
-    queryFn: () => fetch(`/api/dashboard/trending-accounts${directorFilterParam}`).then(r => r.json()),
+    queryFn: async () => { const r = await fetch(`/api/dashboard/trending-accounts${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
     enabled: isDirector,
     refetchOnWindowFocus: false,
   });
@@ -359,7 +328,6 @@ export default function Dashboard() {
     refetchOnWindowFocus: false,
   });
 
-  type StaleAccount = { id: string; name: string; daysSince: number };
   const { data: staleAccountsData } = useQuery<{ stale: StaleAccount[] }>({
     queryKey: ["/api/dashboard/stale-accounts"],
     enabled: isAm || isNam,
@@ -367,10 +335,22 @@ export default function Dashboard() {
   });
   const staleAccounts = staleAccountsData?.stale ?? [];
 
-  type TeamActivity = { touches: number; meaningful: number; newContacts: number };
+  const { data: todaysFive = [], isLoading: todaysFiveLoading } = useQuery<TodaysFiveItem[]>({
+    queryKey: ["/api/dashboard/todays-five"],
+    enabled: isAm,
+    staleTime: 120000,
+  });
+
+  const { data: amComparison = [], isLoading: amComparisonLoading } = useQuery<AmRow[]>({
+    queryKey: ["/api/dashboard/am-comparison", selectedDirectorId],
+    queryFn: async () => { const r = await fetch(`/api/dashboard/am-comparison${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
+    enabled: isNam || isDirector,
+    staleTime: 120000,
+  });
+
   const { data: teamActivity, isLoading: teamActivityLoading } = useQuery<TeamActivity>({
     queryKey: ["/api/dashboard/team-activity", selectedDirectorId],
-    queryFn: () => fetch(`/api/dashboard/team-activity${directorFilterParam}`).then(r => r.json()),
+    queryFn: async () => { const r = await fetch(`/api/dashboard/team-activity${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
     enabled: isDirector,
     refetchInterval: 120000,
   });
@@ -381,10 +361,9 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
-  type RelationshipsMovedData = { count: number };
   const { data: relationshipsMoved, isLoading: relationshipsMovedLoading } = useQuery<RelationshipsMovedData>({
     queryKey: ["/api/dashboard/relationships-moved", selectedDirectorId],
-    queryFn: () => fetch(`/api/dashboard/relationships-moved${directorFilterParam}`).then(r => r.json()),
+    queryFn: async () => { const r = await fetch(`/api/dashboard/relationships-moved${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
     enabled: isDirector,
     refetchInterval: 120000,
   });
@@ -395,14 +374,9 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
-  type MarginUserMetric = {
-    userId: string; name: string; role: string; margin: number;
-    goal: { id: string; target: number } | null;
-  };
-  type MarginMetrics = { nams: MarginUserMetric[]; ams: MarginUserMetric[] };
   const { data: marginMetrics, isLoading: marginMetricsLoading } = useQuery<MarginMetrics>({
     queryKey: ["/api/dashboard/margin-metrics", selectedDirectorId],
-    queryFn: () => fetch(`/api/dashboard/margin-metrics${directorFilterParam}`).then(r => r.json()),
+    queryFn: async () => { const r = await fetch(`/api/dashboard/margin-metrics${directorFilterParam}`, { credentials: "include" }); if (!r.ok) throw new Error(`${r.status}`); return r.json(); },
     enabled: isDirector,
     refetchInterval: 120000,
   });
@@ -413,12 +387,21 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
-  type PersonalMetrics = { relationshipsMovedThisMonth: number; meaningfulToday: number; contactsAddedToday: number; touchesToday: number };
   const { data: personalMetrics, isLoading: personalMetricsLoading } = useQuery<PersonalMetrics>({
     queryKey: ["/api/dashboard/personal-metrics"],
     enabled: isNam || isAm,
     refetchInterval: 120000,
   });
+
+  // Gate for suppressing the legacy NextBestActionsPortlet when Phase 1 NBA cards are
+  // active — same queryKey as NbaDashboardPanel so TanStack reuses the cached result
+  // (zero extra HTTP requests).
+  const { data: nbaCardsForGate = [] } = useQuery<{ id: string }[]>({
+    queryKey: ["/api/nba/cards"],
+    staleTime: 60_000,
+    enabled: isAm || isNam,
+  });
+  const nbaHasCards = nbaCardsForGate.length > 0;
 
   const { data: leaderboard = [], isLoading: leaderboardLoading } = useQuery<{
     metric: string;
@@ -430,7 +413,6 @@ export default function Dashboard() {
     refetchInterval: 120000,
   });
 
-  type WeeklyRep = { userId: string; name: string; total: number; call: number; email: number; text: number; site_visit: number; meaningful: number };
   const { data: weeklyData, isLoading: weeklyLoading } = useQuery<{ weekStart: string; results: WeeklyRep[] }>({
     queryKey: ["/api/leaderboard/weekly-touchpoints"],
     enabled: canSeeTeam,
@@ -438,28 +420,61 @@ export default function Dashboard() {
   });
   const weeklyResults = weeklyData?.results || [];
 
-  type OpportunityLog = { id: string; repId: string; companyId: string | null; type: string; category: string; title: string; description: string | null; estimatedLoads: number | null; estimatedValue: string | null; loggedAt: string; createdAt: string };
+  interface TeamForcedFocusItem {
+    id: string;
+    assignedToUserId: string;
+    assignedByUserId: string;
+    companyName: string | null;
+    lever: string | null;
+    actionText: string;
+    dueDate: string | null;
+    status: string;
+    createdAt: string;
+    assignedToName?: string;
+  }
+  const { data: teamForcedFocus = [] } = useQuery<TeamForcedFocusItem[]>({
+    queryKey: ["/api/forced-focus/team"],
+    enabled: canSeeTeam && canAssignForcedFocus,
+    staleTime: 60_000,
+  });
+  const activeTeamFf = teamForcedFocus.filter(f => f.status === "active");
+
   const recentWinsStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
   const { data: recentWins = [] } = useQuery<OpportunityLog[]>({
     queryKey: ["/api/opportunity-logs", "win", recentWinsStart],
     queryFn: async () => {
-      const res = await fetch(`/api/opportunity-logs?type=win&startDate=${recentWinsStart}`, { credentials: "include" });
-      return res.json();
+      const r = await fetch(`/api/opportunity-logs?type=win&startDate=${recentWinsStart}`, { credentials: "include" });
+      if (!r.ok) throw new Error(`${r.status}`);
+      return r.json();
     },
     enabled: isDirector || isNam,
     staleTime: 60000,
   });
 
-  const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string } | undefined>();
+  const [taskPrefill, setTaskPrefill] = useState<{ title?: string; companyId?: string; notes?: string } | undefined>();
   const [prefillDialogOpen, setPrefillDialogOpen] = useState(false);
+  const [forcedFocusDialogOpen, setForcedFocusDialogOpen] = useState(false);
+  const [forcedFocusEditId, setForcedFocusEditId] = useState<string | undefined>();
+  const [forcedFocusPrefill, setForcedFocusPrefill] = useState<{ assignedToUserId?: string; companyId?: string; companyName?: string; contactId?: string; contactName?: string; lever?: string; actionText?: string; contextReason?: string; dueDate?: string } | undefined>();
   const [briefingDismissed, setBriefingDismissed] = useState(() => {
     const today = new Date().toISOString().slice(0, 10);
     return localStorage.getItem("briefing_dismissed") === today;
   });
 
-  const { data: streakData } = useQuery<{ streak: number; goal: number; todayCount: number }>({
-    queryKey: ["/api/users/streak"],
-    refetchInterval: 300000,
+  const [todaysBriefingCollapsed, setTodaysBriefingCollapsed] = useState(() => localStorage.getItem("dash_todays_briefing_collapsed") === "true");
+
+  const { data: webexStatus } = useWebexConnectionStatus();
+  const webexSyncPaused = !!(webexStatus?.configured && webexStatus?.needsReauth);
+
+  const { entries: recentlyVisited } = useRecentlyVisited(currentUser?.id);
+
+  // streakData now comes from dashSummary (no separate request needed)
+  const streakData = dashSummary?.streak;
+
+  const { data: activeForcedFocus } = useQuery<{ id: string } | null>({
+    queryKey: ["/api/forced-focus/my"],
+    staleTime: 60_000,
+    enabled: !isDirector && !isNam,
   });
 
   const { data: briefingData } = useQuery<{
@@ -645,29 +660,13 @@ export default function Dashboard() {
     if (results.length > 0) setFeedPendingFiles(prev => [...prev, ...results]);
   }, [toast]);
 
-  const formatTimeAgo = (iso: string) => {
-    const diff = Date.now() - new Date(iso).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins}m ago`;
-    const hrs = Math.floor(mins / 60);
-    if (hrs < 24) return `${hrs}h ago`;
-    const days = Math.floor(hrs / 24);
-    return `${days}d ago`;
-  };
 
 
   const isLoading = companiesLoading || contactsLoading;
 
-  // T004: RFP deadline warnings — within 14 days or overdue
+  // urgentRfps comes from dashSummary alias declared above (replaces allRfps filter)
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const urgentRfps = allRfps.filter((r: any) => {
-    if (!r.dueDate || r.status === "awarded" || r.status === "partially_awarded" || r.status === "lost" || r.status === "declined") return false;
-    const due = new Date(r.dueDate + "T00:00:00");
-    const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
-    return diffDays <= 14;
-  }).sort((a: any, b: any) => a.dueDate.localeCompare(b.dueDate));
 
   // T005: Goals mid-month nudge — after 15th, flag active goals < 50% progress
   const dayOfMonth = new Date().getDate();
@@ -720,8 +719,26 @@ export default function Dashboard() {
   const completedCount = myTasks.filter(t => t.status === "completed").length;
   const displayTasks = openTasks.slice(0, 10);
 
+  // Lane procurement tasks — created when a lane is assigned in the work queue
+  const laneProcurementTasks = openTasks.filter(t => (t.laneContext as any)?.type === "lane_procurement");
+
+  // AM NOW zone: RFPs due within 7 days (compact strip)
+  const rfp7Days = urgentRfps.filter((rfp: any) => {
+    if (!rfp.dueDate) return false;
+    const due = new Date(rfp.dueDate + "T00:00:00");
+    const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
+    return diffDays >= 0 && diffDays <= 7;
+  });
+
+  // AM NOW zone: tasks due today or overdue (compact strip)
+  const tasksDueToday = openTasks.filter(t => t.dueDate && t.dueDate <= todayStr);
+
   // Split open tasks into "incoming" (assigned by others, not yet acknowledged) and regular
-  const incomingTasks = displayTasks.filter(t => t.assignedBy !== currentUser?.id && taskAssignedNotifMap.has(t.id));
+  // Lane procurement tasks are always treated as "incoming" so they surface prominently
+  const incomingTasks = displayTasks.filter(t =>
+    (t.assignedBy !== currentUser?.id && taskAssignedNotifMap.has(t.id)) ||
+    (t.laneContext as any)?.type === "lane_procurement"
+  );
   const regularTasks = displayTasks.filter(t => !incomingTasks.includes(t));
 
   const toggleStatusMutation = useMutation({
@@ -785,7 +802,8 @@ export default function Dashboard() {
   });
 
   const getUserName = (userId: string) => teamMembers.find(u => u.id === userId)?.name || "";
-  const getCompanyName = (companyId: string | null) => companyId ? companies?.find(c => c.id === companyId)?.name || "" : "";
+  // Apply customer-name cleaner so legacy "code - name" rows render cleanly even without a DB backfill.
+  const getCompanyName = (companyId: string | null) => companyId ? formatCustomerName(companies?.find(c => c.id === companyId)?.name || "") : "";
 
   const totalFreightSpend = contacts?.reduce((acc, c) => {
     return acc + (c.freightSpend ? parseFloat(c.freightSpend) : 0);
@@ -841,49 +859,11 @@ export default function Dashboard() {
   const nams = allUsers.filter((u) => u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director");
   const ams = allUsers.filter((u) => u.role === "account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator");
 
-  const companyCountFor = (userId: string) =>
-    companies?.filter((c) => c.assignedTo === userId).length ?? 0;
-
-  const managerNameFor = (managerId: string | null) => {
-    if (!managerId) return null;
-    return allUsers.find((u) => u.id === managerId)?.name ?? null;
-  };
-
-  const UserRow = ({ user }: { user: SafeUser }) => {
-    const count = companyCountFor(user.id);
-    const initials = user.name.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase();
-    const manager = managerNameFor(user.managerId);
-    return (
-      <Link
-        href={`/reps/${user.id}`}
-        className="flex items-center justify-between p-3 rounded-lg hover:bg-muted/50 hover:border-border border border-transparent transition-all group cursor-pointer"
-        data-testid={`row-user-${user.id}`}
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-100 to-green-100 dark:from-blue-900/40 dark:to-green-900/40 text-blue-700 dark:text-blue-300 font-semibold text-sm">
-            {initials}
-          </div>
-          <div className="min-w-0">
-            <p className="font-medium text-sm truncate group-hover:text-primary transition-colors" data-testid={`text-user-name-${user.id}`}>{user.name}</p>
-            <p className="text-xs text-muted-foreground truncate">{user.username}</p>
-            {manager && (
-              <p className="text-xs text-muted-foreground/70 truncate">Reports to: {manager}</p>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0 ml-2">
-          <div className="text-right">
-            <p className="text-sm font-semibold text-blue-600 dark:text-blue-400">{count}</p>
-            <p className="text-xs text-muted-foreground">{count === 1 ? "account" : "accounts"}</p>
-          </div>
-          <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-primary transition-colors" />
-        </div>
-      </Link>
-    );
-  };
-
   return (
-    <div className="flex flex-col gap-6 p-4 sm:p-6">
+    <div className="flex flex-col gap-4 sm:gap-6 p-3 sm:p-6">
+
+      {/* Task #639 — Today queue invitation banner */}
+      <TryTodayQueueBanner />
 
       {/* Daily Briefing Popup — hidden for management roles via skip flag */}
       {!briefingDismissed && briefingData && !briefingData.skip && (
@@ -927,6 +907,35 @@ export default function Dashboard() {
         </div>
       )}
 
+      {webexSyncPaused && (
+        <div
+          className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40 p-3"
+          data-testid="banner-webex-sync-paused"
+        >
+          <VideoOff className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm text-amber-800 dark:text-amber-200">
+              Webex sync paused — disconnected
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-300 mt-0.5">
+              Missed-call cards and call activity won't update until an admin re-authorizes Webex.
+            </p>
+          </div>
+          {currentUser?.role === "admin" && (
+            <a href="/api/webex/authorize" className="shrink-0">
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 text-amber-700 border-amber-300 hover:bg-amber-100 dark:text-amber-300 dark:border-amber-700 dark:hover:bg-amber-900/50"
+                data-testid="button-webex-reconnect"
+              >
+                Reconnect
+              </Button>
+            </a>
+          )}
+        </div>
+      )}
+
       {syncAlert?.failed && (
         <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/50 p-4" data-testid="banner-sync-failed">
           <CloudOff className="h-5 w-5 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
@@ -947,6 +956,30 @@ export default function Dashboard() {
             className="shrink-0 text-red-400 hover:text-red-600 dark:hover:text-red-300"
             data-testid="button-dismiss-sync-alert"
           >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {showBillingBanner && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-950/40 p-4" data-testid="banner-billing-alert">
+          <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm text-amber-800 dark:text-amber-200">
+              {billingInfo?.billingStatus === "past_due" ? "Subscription payment past due" : "Trial period active"}
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-300 mt-0.5">
+              {billingInfo?.billingStatus === "past_due"
+                ? "Your subscription payment could not be processed. Update your payment method to avoid service interruption."
+                : `You're on a trial${billingInfo?.planName ? ` of ${billingInfo.planName}` : ""}. Visit the Admin panel to manage your subscription.`}
+            </p>
+            <Link href="/admin/users">
+              <Button size="sm" variant="outline" className="mt-2 gap-1.5 text-amber-700 border-amber-300 hover:bg-amber-100 dark:text-amber-300 dark:border-amber-700 dark:hover:bg-amber-900/50" data-testid="button-billing-manage">
+                Manage Subscription
+              </Button>
+            </Link>
+          </div>
+          <button onClick={() => setBillingBannerDismissed(true)} className="shrink-0 text-amber-400 hover:text-amber-600 dark:hover:text-amber-300" data-testid="button-dismiss-billing-banner">
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -983,98 +1016,221 @@ export default function Dashboard() {
         });
       })()}
 
-      {/* Hero Banner */}
-      <div
-        className="relative overflow-hidden rounded-xl px-6 py-5 text-white"
-        style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}
-        data-testid="banner-hero"
-      >
-        {/* decorative gold glow circles */}
-        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
-        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
+      {/* ── AM NOW zone: RFPs due in ≤7 days (compact strip) ────────────────── */}
+      {isAm && rfp7Days.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 dark:border-red-800 bg-red-50/60 dark:bg-red-950/20 px-4 py-2.5" data-testid="strip-rfp-deadlines-now">
+          <span className="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5 shrink-0">
+            <Calendar className="h-3.5 w-3.5" />
+            RFPs due this week:
+          </span>
+          {rfp7Days.map((rfp: any) => {
+            const due = new Date(rfp.dueDate + "T00:00:00");
+            const diffDays = Math.round((due.getTime() - today.getTime()) / 86400000);
+            return (
+              <Link key={rfp.id} href={rfp.companyId ? `/companies/${rfp.companyId}` : `/rfp-calendar`} data-testid={`rfp-strip-${rfp.id}`}>
+                <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 whitespace-nowrap hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors cursor-pointer">
+                  {rfp.title ?? rfp.companyName ?? "RFP"} · {diffDays === 0 ? "today" : `${diffDays}d`}
+                </span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
 
-        <div className="relative flex items-center gap-4">
-          {/* Left: greeting */}
-          <div className="shrink-0">
-            <p className="text-xs font-medium tracking-widest uppercase mb-1" style={{ color: "#ffb400" }}>
-              {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-            </p>
-            <h2 className="text-xl font-bold leading-tight text-white">
-              {(() => {
-                const h = new Date().getHours();
-                const greeting = h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
-                const first = currentUser?.name?.split(" ")[0];
-                return first ? `${greeting}, ${first}` : greeting;
-              })()}
-            </h2>
-            <p className="mt-1.5 text-sm tracking-wide" style={{ color: "#ffc333" }} data-testid="text-dna-tagline-hero">
-              <span className="font-bold">DNA</span>
-              <span className="mx-2" style={{ color: "#444" }}>·</span>
-              <span className="font-bold">D</span>own <span className="font-bold">N</span>ot <span className="font-bold">A</span>cross
-            </p>
-          </div>
-
-          {/* Center: briefing chips */}
-          {briefingData && (
-            <div className="flex-1 flex flex-wrap items-center justify-center gap-2">
-              <span
-                className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium"
-                style={{ background: "rgba(255,180,0,0.12)", color: "#ffc333", border: "1px solid rgba(255,180,0,0.2)" }}
-                data-testid="text-hero-touches"
-              >
-                <PhoneCall className="h-3 w-3" />
-                {briefingData.streakToday}/{briefingData.streakGoal} touches today
+      {/* ── AM NOW zone: Tasks due today / overdue (compact strip) ───────────── */}
+      {isAm && tasksDueToday.length > 0 && (
+        <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-2.5" data-testid="strip-tasks-due-today">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-xs font-semibold text-amber-700 dark:text-amber-400 flex items-center gap-1.5 shrink-0">
+              <ListTodo className="h-3.5 w-3.5" />
+              {tasksDueToday.length} task{tasksDueToday.length !== 1 ? "s" : ""} due today:
+            </span>
+            {tasksDueToday.slice(0, 5).map((task) => (
+              <span key={task.id} className="text-xs text-amber-700 dark:text-amber-400 truncate max-w-[180px]" data-testid={`task-strip-${task.id}`}>
+                · {task.title}
               </span>
-              {briefingData.dueTasks > 0 && (
-                <span
-                  className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium"
-                  style={{ background: "rgba(255,255,255,0.07)", color: "rgba(255,255,255,0.75)", border: "1px solid rgba(255,255,255,0.12)" }}
-                  data-testid="text-hero-tasks"
-                >
-                  <ListTodo className="h-3 w-3" />
-                  {briefingData.dueTasks} task{briefingData.dueTasks !== 1 ? "s" : ""} due
-                </span>
-              )}
-              {briefingData.streak > 0 && (
-                <span
-                  className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-semibold"
-                  style={{ background: "rgba(251,146,60,0.15)", color: "#fb923c", border: "1px solid rgba(251,146,60,0.25)" }}
-                  data-testid="text-hero-streak"
-                >
-                  🔥 {briefingData.streak}-day streak
-                </span>
-              )}
-            </div>
-          )}
-
-          {/* Right: VT logo + edit layout button */}
-          <div className="shrink-0 flex items-center gap-3">
-            {isDirector && (
-              <button
-                onClick={() => setLayoutPanelOpen(true)}
-                className="hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border border-white/10 text-white/60 hover:text-white hover:border-white/30 hover:bg-white/5 transition-all"
-                title="Customize dashboard layout"
-                data-testid="button-edit-dashboard-layout"
-              >
-                <Settings2 className="h-3.5 w-3.5" />
-                Customize
-              </button>
+            ))}
+            {tasksDueToday.length > 5 && (
+              <span className="text-xs text-amber-600 dark:text-amber-500">+{tasksDueToday.length - 5} more</span>
             )}
-            <div
-              className="hidden sm:flex items-center justify-center h-16 w-16 rounded-full p-2.5"
-              style={{ border: "2px solid #ffb400", background: "#111", boxShadow: "0 0 20px rgba(255,180,0,0.2)" }}
-            >
-              <img src={vtLogoWhite} alt="Value Truck" className="w-full h-full object-contain" />
-            </div>
           </div>
         </div>
+      )}
+
+      {/* ── Intel Snapshot (admin only) ───────────────────────────────────────── */}
+      {isAdmin && (
+        <PortletErrorBoundary label="Intel Snapshot">
+          <IntelSnapshotPortlet />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── Forced Focus banner (Leadership Priority) — above NBA for reps/LMs ─── */}
+      {!isDirector && !isNam && (
+        <PortletErrorBoundary label="Leadership Priority">
+          <ForcedFocusBanner
+            onCommit={setCommitPayload}
+            onCreateTask={(prefill) => {
+              setTaskPrefill({
+                title: prefill.title,
+                companyId: prefill.companyId,
+                notes: [
+                  prefill.description ? `Context: ${prefill.description}` : null,
+                  prefill.lever ? `Lever: ${prefill.lever}` : null,
+                ].filter(Boolean).join("\n") || undefined,
+              });
+              setPrefillDialogOpen(true);
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── NBA Phase 1 Persistent Cards — Today's Priorities ───────────────── */}
+      {(isAm || isNam) && (
+        <PortletErrorBoundary label="NBA Today's Priorities">
+          <NbaDashboardPanel userRole={currentUser?.role ?? ""} isAdmin={isAdmin} />
+        </PortletErrorBoundary>
+      )}
+
+      <HeroBanner
+        currentUser={currentUser as SafeUser}
+        briefingData={briefingData}
+        isDirector={isDirector}
+        onOpenLayoutPanel={() => setLayoutPanelOpen(true)}
+        isLeadership={canAssignForcedFocus}
+        onAssignForcedFocus={() => { setForcedFocusEditId(undefined); setForcedFocusPrefill(undefined); setForcedFocusDialogOpen(true); }}
+      />
+
+      {/* ── Today's Briefing portlet ─────────────────────────────────────── */}
+      <div style={{ order: getOrder("todays-briefing") }} className={(!isVisible("todays-briefing") || isLmRole) ? "hidden" : ""}>
+        <PortletErrorBoundary label="Today's Briefing">
+          <TodaysBriefingPortlet
+            collapsed={todaysBriefingCollapsed}
+            onToggle={() => {
+              const next = !todaysBriefingCollapsed;
+              setTodaysBriefingCollapsed(next);
+              localStorage.setItem("dash_todays_briefing_collapsed", String(next));
+            }}
+            allTasks={allTasks}
+            tasksLoading={tasksLoading}
+            notifications={safeNotifications}
+            currentUserId={currentUser?.id}
+          />
+        </PortletErrorBoundary>
       </div>
 
-      {/* ── Outbound Touchpoints Today ──────────────────────────────────────── */}
-      <TouchpointsTodayPortlet
-        collapsed={touchpointsTodayCollapsed}
-        onToggle={toggleTouchpointsToday}
-      />
+      {/* ── Recently Visited portlet ─────────────────────────────────────── */}
+      <div style={{ order: getOrder("recently-visited") }} className={(!isVisible("recently-visited") || isLmRole) ? "hidden" : ""}>
+        <PortletErrorBoundary label="Recently Visited">
+          <RecentlyVisitedPortlet entries={recentlyVisited} />
+        </PortletErrorBoundary>
+      </div>
+
+      {/* ── "Do This First" — NBA priority actions (top of dashboard) ─────── */}
+      {/* Hidden for AM/NAM when Phase 1 cards are active — NbaDashboardPanel wins.   */}
+      {/* Shown as fallback when no cards exist, and always shown for Directors/others. */}
+      {!isLmRole && ((!isAm && !isNam) || !nbaHasCards) && (
+        <PortletErrorBoundary label="Priority Actions">
+          <NextBestActionsPortlet
+            collapsed={nbaBriefingCollapsed}
+            showSystemRecommendationLabel={!!activeForcedFocus}
+            onToggle={() => {
+              const next = !nbaBriefingCollapsed;
+              setNbaBriefingCollapsed(next);
+              localStorage.setItem("dash_nba_briefing_collapsed", String(next));
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── AM NOW zone: Today's Priority Accounts ──────────────────────────── */}
+      {isAm && (
+        <PortletErrorBoundary label="Today's Priority Accounts">
+          <Card data-testid="card-todays-priority-accounts">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Target className="h-4 w-4 text-blue-500" />
+                Accounts Needing Attention
+                {!todaysFiveLoading && todaysFive.length > 0 && (
+                  <Badge className="ml-auto text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 border-0">
+                    {todaysFive.length} account{todaysFive.length !== 1 ? "s" : ""}
+                  </Badge>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              {todaysFiveLoading ? (
+                <div className="space-y-2">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
+              ) : todaysFive.length === 0 ? (
+                <p className="text-sm text-muted-foreground py-2">No accounts prioritized today. Upload financial data to unlock AI prioritization.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {todaysFive.map((acct, idx) => (
+                    <Link key={acct.id ?? idx} href={`/companies/${acct.id}`} data-testid={`priority-account-${acct.id ?? idx}`}>
+                      <div className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50 transition-colors cursor-pointer">
+                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-semibold truncate">{acct.name}</p>
+                          {acct.reasons.length > 0 && (
+                            <p className="text-xs text-muted-foreground truncate mt-0.5">{acct.reasons[0]}</p>
+                          )}
+                        </div>
+                        <span className="shrink-0 text-xs font-medium px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                          {acct.score}
+                        </span>
+                        <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── Pinned Accounts ──────────────────────────────────────────────────── */}
+      <div style={{ order: getOrder("pinned-accounts") }} className={(!isVisible("pinned-accounts") || isLmRole) ? "hidden" : ""}>
+        <PortletErrorBoundary label="Pinned Accounts">
+          <PinnedAccountsPortlet />
+        </PortletErrorBoundary>
+      </div>
+
+      {/* ── Outbound Touchpoints Today (collapsed by default, running context) ── */}
+      <PortletErrorBoundary label="Touchpoints Today">
+        <TouchpointsTodayPortlet
+          collapsed={touchpointsTodayCollapsed}
+          onToggle={toggleTouchpointsToday}
+        />
+      </PortletErrorBoundary>
+
+      {/* ── Account Growth Score ─────────────────────────────────────────────── */}
+      {!isLmRole && companies && companies.length > 0 && (
+        <PortletErrorBoundary label="Account Growth">
+          <AccountGrowthPortlet
+            companies={companies.map(c => ({ id: c.id, name: c.name }))}
+            collapsed={accountGrowthCollapsed}
+            onToggle={() => {
+              const next = !accountGrowthCollapsed;
+              setAccountGrowthCollapsed(next);
+              localStorage.setItem("dash_account_growth_collapsed", String(next));
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── RFP Coverage Gaps (AM only) ──────────────────────────────────────── */}
+      {isAm && (
+        <PortletErrorBoundary label="Coverage Gaps">
+          <CoverageGapsPortlet />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── Award Lane Health (AM only) ───────────────────────────────────────── */}
+      {isAm && (
+        <PortletErrorBoundary label="Award Health">
+          <AwardHealthPortlet />
+        </PortletErrorBoundary>
+      )}
 
       {/* ── Dashboard Layout Editor ──────────────────────────────────────────── */}
       <DashboardLayoutPanel
@@ -1086,963 +1242,240 @@ export default function Dashboard() {
       />
 
       {/* ── Director/Admin Portlets ─────────────────────────────────────────── */}
+      <PortletErrorBoundary label="Director metrics">
       {isDirector && (
-        <>
-          {/* Director filter toggle — admin only */}
-          {isAdmin && (() => {
-            const directors = allUsers.filter(u => u.role === "director");
-            if (directors.length === 0) return null;
-            return (
-              <div className="flex items-center gap-2" data-testid="director-filter-toggle">
-                <span className="text-sm text-muted-foreground font-medium">View:</span>
-                <div className="inline-flex rounded-lg border border-border bg-muted p-1 gap-1">
-                  <button
-                    onClick={() => setSelectedDirectorId(null)}
-                    className={`px-3 py-1 text-sm rounded-md font-medium transition-colors ${selectedDirectorId === null ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                    data-testid="director-filter-both"
-                  >
-                    All
-                  </button>
-                  {directors.map(d => (
-                    <button
-                      key={d.id}
-                      onClick={() => setSelectedDirectorId(d.id)}
-                      className={`px-3 py-1 text-sm rounded-md font-medium transition-colors ${selectedDirectorId === d.id ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-                      data-testid={`director-filter-${d.id}`}
-                    >
-                      {d.name.split(" ")[0]}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* Row 1: Small activity count portlets */}
-          <div style={{ order: getOrder("dir-activity") }} className={!isVisible("dir-activity") ? "hidden" : ""}>
-          <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="director-activity-row">
-
-            {/* Relationships Moved Up */}
-            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="portlet-relationships-moved" onClick={() => setActivePortlet({ type: "relationships", personal: false, title: "Relationships Moved Up This Month" })}>
-              <CardContent className="p-4">
-                {relationshipsMovedLoading ? <Skeleton className="h-16 w-full" /> : (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                        <Repeat2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold" data-testid="stat-relationships-moved">{relationshipsMoved?.count ?? 0}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">Relationships moved up this month</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Meaningful Conversations Today */}
-            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="portlet-meaningful-conversations" onClick={() => setActivePortlet({ type: "meaningful", personal: false, title: "Meaningful Conversations Today" })}>
-              <CardContent className="p-4">
-                {teamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
-                        <MessageSquare className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold" data-testid="stat-meaningful-conversations">{teamActivity?.meaningful ?? 0}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">Meaningful conversations today</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* New Contacts Added Today */}
-            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="portlet-new-contacts" onClick={() => setActivePortlet({ type: "contacts", personal: false, title: "New Contacts Added Today" })}>
-              <CardContent className="p-4">
-                {teamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                        <UserPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold" data-testid="stat-new-contacts">{teamActivity?.newContacts ?? 0}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">New contacts added today</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Touches Today */}
-            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="portlet-touches-today" onClick={() => setActivePortlet({ type: "touches", personal: false, title: "Touches Today" })}>
-              <CardContent className="p-4">
-                {teamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                        <Activity className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold" data-testid="stat-touches-today">{teamActivity?.touches ?? 0}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">Touches today (all types)</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-          </div>{/* end dir-activity */}
-
-          {/* Row 2: Trending accounts up & down */}
-          <div style={{ order: getOrder("dir-trending") }} className={!isVisible("dir-trending") ? "hidden" : ""}>
-          <div className="grid gap-4 md:grid-cols-2" data-testid="director-trending-row">
-
-            {/* Trending Up */}
-            <Card data-testid="portlet-trending-up">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <button
-                    onClick={() => setTrendingUpCollapsed(!trendingUpCollapsed)}
-                    className="flex items-center gap-2 hover:opacity-80 transition-opacity"
-                    data-testid="button-toggle-trending-up"
-                  >
-                    {trendingUpCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
-                      Trending Accounts Up
-                    </CardTitle>
-                  </button>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {trendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
-                  </span>
-                </div>
-              </CardHeader>
-              {!trendingUpCollapsed && (
-                <CardContent className="pt-0">
-                  {trendingLoading ? (
-                    <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
-                  ) : (trendingAccounts?.up?.length ?? 0) === 0 ? (
-                    <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  ) : (
-                    <>
-                      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                        {trendingAccounts!.up.map((acct, idx) => (
-                          <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`trending-up-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
-                            <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                            <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                            {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                            <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
-                              <ArrowUpRight className="h-3.5 w-3.5" />
-                              ${Math.round(acct.delta).toLocaleString()} ahead
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="flex items-center justify-between pt-2 mt-2 border-t">
-                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{trendingAccounts!.up.length} accounts</span>
-                        <span className="text-sm font-bold text-green-600 dark:text-green-400">+${Math.round(trendingAccounts!.up.reduce((s, a) => s + a.delta, 0)).toLocaleString()} total</span>
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              )}
-            </Card>
-
-            {/* Trending Down */}
-            <Card data-testid="portlet-trending-down">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <button
-                    onClick={() => setTrendingDownCollapsed(!trendingDownCollapsed)}
-                    className="flex items-center gap-2 hover:opacity-80 transition-opacity"
-                    data-testid="button-toggle-trending-down"
-                  >
-                    {trendingDownCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <TrendingDown className="h-4 w-4 text-red-500 dark:text-red-400" />
-                      Trending Accounts Down
-                    </CardTitle>
-                  </button>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {trendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
-                  </span>
-                </div>
-              </CardHeader>
-              {!trendingDownCollapsed && (
-                <CardContent className="pt-0">
-                  {trendingLoading ? (
-                    <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
-                  ) : (trendingAccounts?.down?.length ?? 0) === 0 ? (
-                    <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  ) : (
-                    <>
-                      <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                        {trendingAccounts!.down.map((acct, idx) => (
-                          <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`trending-down-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
-                            <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                            <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                            {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                            <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
-                              <ArrowDownRight className="h-3.5 w-3.5" />
-                              ${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="flex items-center justify-between pt-2 mt-2 border-t">
-                        <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{trendingAccounts!.down.length} accounts</span>
-                        <span className="text-sm font-bold text-red-600 dark:text-red-400">-${Math.round(Math.abs(trendingAccounts!.down.reduce((s, a) => s + a.delta, 0))).toLocaleString()} total</span>
-                      </div>
-                    </>
-                  )}
-                </CardContent>
-              )}
-            </Card>
-          </div>
-          </div>{/* end dir-trending */}
-
-          {/* Row 3: NAM & AM Margin Metrics */}
-          <div style={{ order: getOrder("dir-margin") }} className={!isVisible("dir-margin") ? "hidden" : ""}>
-          <div className="grid gap-4 md:grid-cols-2" data-testid="director-margin-row">
-            {(["nams", "ams"] as const).map(group => {
-              const label = group === "nams" ? "NAM Margin Metrics" : "AM Margin Metrics";
-              const members: MarginUserMetric[] = (marginMetrics?.[group] ?? []) as MarginUserMetric[];
-              const iconColor = group === "nams" ? "text-blue-600 dark:text-blue-400" : "text-green-600 dark:text-green-400";
-              const Icon = group === "nams" ? ShieldCheck : UserCircle;
-              const monthLabel = new Date().toLocaleString("default", { month: "long", year: "numeric" });
-              const collapsed = group === "nams" ? namMarginCollapsed : amMarginCollapsed;
-              const setCollapsed = group === "nams" ? setNamMarginCollapsed : setAmMarginCollapsed;
-
-              return (
-                <Card key={group} data-testid={`portlet-margin-${group}`}>
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <button
-                        onClick={() => setCollapsed(!collapsed)}
-                        className="flex items-center gap-2 hover:opacity-80 transition-opacity"
-                        data-testid={`button-toggle-margin-${group}`}
-                      >
-                        {collapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                        <CardTitle className="text-base flex items-center gap-2">
-                          <Icon className={`h-4 w-4 ${iconColor}`} />
-                          {label}
-                        </CardTitle>
-                      </button>
-                      <span className="text-xs font-normal text-muted-foreground">{monthLabel}</span>
-                    </div>
-                  </CardHeader>
-                  {!collapsed && (
-                  <CardContent className="pt-0">
-                    {marginMetricsLoading ? (
-                      <div className="space-y-3">{[1,2,3].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
-                    ) : members.length === 0 ? (
-                      <p className="text-sm text-muted-foreground py-3">No {group === "nams" ? "NAMs" : "AMs"} found.</p>
-                    ) : (
-                      <div className="space-y-3">
-                        {members.map(m => {
-                          const target = m.goal?.target ?? 0;
-                          const pct = target > 0 ? Math.min(Math.round((m.margin / target) * 100), 100) : 0;
-                          return (
-                            <div key={m.userId} className="space-y-1" data-testid={`margin-metric-${m.userId}`}>
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium flex-1 truncate">{m.name}</span>
-                                <span className="text-sm font-bold tabular-nums text-green-700 dark:text-green-400">
-                                  ${Math.round(m.margin).toLocaleString()}
-                                </span>
-                                {target > 0 && (
-                                  <span className="text-xs text-muted-foreground">/ ${Math.round(target).toLocaleString()}</span>
-                                )}
-                                <MarginGoalEditButton
-                                  userId={m.userId}
-                                  goalId={m.goal?.id ?? null}
-                                  currentTarget={target}
-                                  onSave={(t) => setMarginGoalMutation.mutate({ userId: m.userId, goalId: m.goal?.id ?? null, target: t })}
-                                />
-                              </div>
-                              {target > 0 && (
-                                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                                  <div
-                                    className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : pct >= 50 ? "bg-blue-500" : "bg-amber-500"}`}
-                                    style={{ width: `${pct}%` }}
-                                  />
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </CardContent>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
-          </div>{/* end dir-margin */}
-
-          {/* Recent Wins (Director view - MTD) */}
-          <div style={{ order: getOrder("dir-recent-wins") }} className={!isVisible("dir-recent-wins") ? "hidden" : ""}>
-          {recentWins.length > 0 && (
-            <Card data-testid="portlet-director-recent-wins">
-              <CardHeader className="pb-3">
-                <button onClick={() => togglePortlet("dash_recent_wins_collapsed", !recentWinsCollapsed, setRecentWinsCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-recent-wins">
-                  {recentWinsCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Trophy className="h-4 w-4 text-amber-500" />
-                    Recent Wins — {new Date().toLocaleString("default", { month: "long" })}
-                    <Badge className="ml-1 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 font-semibold text-xs">{recentWins.length}</Badge>
-                  </CardTitle>
-                </button>
-              </CardHeader>
-              {!recentWinsCollapsed && <CardContent className="pt-0">
-                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                  {recentWins.slice(0, 15).map(win => {
-                    const rep = teamMembers.find(m => m.id === win.repId);
-                    return (
-                      <div key={win.id} className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40" data-testid={`director-win-${win.id}`}>
-                        <Trophy className="h-3.5 w-3.5 text-amber-500 mt-0.5 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{win.title}</p>
-                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                            {rep && <span className="text-xs text-muted-foreground">{rep.name}</span>}
-                            {win.estimatedLoads && <span className="text-xs text-muted-foreground">· {win.estimatedLoads} loads</span>}
-                            {win.estimatedValue && <span className="text-xs text-green-700 dark:text-green-400 font-medium">· ${Number(win.estimatedValue).toLocaleString()}</span>}
-                            <span className="text-xs text-muted-foreground ml-auto">{new Date(win.loggedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </CardContent>}
-            </Card>
-          )}
-          </div>{/* end dir-recent-wins */}
-        </>
+        <DirectorPortlets
+          isAdmin={isAdmin}
+          allUsers={allUsers as SafeUser[]}
+          selectedDirectorId={selectedDirectorId}
+          setSelectedDirectorId={setSelectedDirectorId}
+          teamActivity={teamActivity}
+          teamActivityLoading={teamActivityLoading}
+          relationshipsMoved={relationshipsMoved}
+          relationshipsMovedLoading={relationshipsMovedLoading}
+          trendingAccounts={trendingAccounts}
+          trendingLoading={trendingLoading}
+          trendingUpCollapsed={trendingUpCollapsed}
+          setTrendingUpCollapsed={setTrendingUpCollapsed}
+          trendingDownCollapsed={trendingDownCollapsed}
+          setTrendingDownCollapsed={setTrendingDownCollapsed}
+          marginMetrics={marginMetrics}
+          marginMetricsLoading={marginMetricsLoading}
+          namMarginCollapsed={namMarginCollapsed}
+          setNamMarginCollapsed={setNamMarginCollapsed}
+          amMarginCollapsed={amMarginCollapsed}
+          setAmMarginCollapsed={setAmMarginCollapsed}
+          onSaveMarginGoal={(userId, goalId, target) => setMarginGoalMutation.mutate({ userId, goalId, target })}
+          recentWins={recentWins}
+          teamMembers={teamMembers as SafeUser[]}
+          recentWinsCollapsed={recentWinsCollapsed}
+          setRecentWinsCollapsed={setRecentWinsCollapsed}
+          isVisible={isVisible}
+          getOrder={getOrder}
+          setActivePortlet={setActivePortlet}
+          togglePortlet={togglePortlet}
+          setLocation={setLocation}
+          teamOverdueCollapsed={teamOverdueCollapsed}
+          setTeamOverdueCollapsed={(v) => { setTeamOverdueCollapsed(v); localStorage.setItem("dash_team_overdue_collapsed", String(v)); }}
+          nbaRollupCollapsed={nbaRollupCollapsed}
+          onToggleNbaRollup={toggleNbaRollup}
+        />
       )}
+      </PortletErrorBoundary>
 
       {/* ── NAM Dashboard Portlets ──────────────────────────────────────────── */}
       {isNam && (
-        <>
-          {/* Row 1: Team activity metrics */}
-          <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-activity-row">
-            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-relationships-moved" onClick={() => setActivePortlet({ type: "relationships", personal: false, title: "Team Relationships Moved Up This Month" })}>
-              <CardContent className="p-4">
-                {namRelationshipsMovedLoading ? <Skeleton className="h-16 w-full" /> : (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                      <Repeat2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold" data-testid="nam-stat-relationships-moved">{namRelationshipsMoved?.count ?? 0}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">Team relationships moved up this month</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-meaningful" onClick={() => setActivePortlet({ type: "meaningful", personal: false, title: "Team Meaningful Conversations Today" })}>
-              <CardContent className="p-4">
-                {namTeamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
-                      <MessageSquare className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold" data-testid="nam-stat-meaningful">{namTeamActivity?.meaningful ?? 0}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">Team meaningful conversations today</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-contacts" onClick={() => setActivePortlet({ type: "contacts", personal: false, title: "Team New Contacts Added Today" })}>
-              <CardContent className="p-4">
-                {namTeamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                      <UserPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold" data-testid="nam-stat-contacts">{namTeamActivity?.newContacts ?? 0}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">Team new contacts added today</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-            <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-portlet-touches" onClick={() => setActivePortlet({ type: "touches", personal: false, title: "Team Touches Today" })}>
-              <CardContent className="p-4">
-                {namTeamActivityLoading ? <Skeleton className="h-16 w-full" /> : (
-                  <div className="flex flex-col gap-2">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                      <Activity className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                    </div>
-                    <div>
-                      <div className="text-2xl font-bold" data-testid="nam-stat-touches">{namTeamActivity?.touches ?? 0}</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">Team touches today (all types)</p>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Row 2: Trending accounts */}
-          <div className="grid gap-4 md:grid-cols-2" data-testid="nam-trending-row">
-            <Card data-testid="nam-portlet-trending-up">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <button onClick={() => setNamTrendingUpCollapsed(!namTrendingUpCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-nam-trending-up">
-                    {namTrendingUpCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
-                      Trending Accounts Up
-                    </CardTitle>
-                  </button>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {namTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
-                  </span>
-                </div>
-              </CardHeader>
-              {!namTrendingUpCollapsed && (
-                <CardContent className="pt-0">
-                  {namTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
-                  : (namTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <>
-                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.up.map((acct, idx) => (
-                      <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`nam-trending-up-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
-                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                        <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                        {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                        <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
-                          <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
-                        </span>
-                      </div>
-                    ))}</div>
-                    <div className="flex items-center justify-between pt-2 mt-2 border-t">
-                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{namTrendingAccounts!.up.length} accounts</span>
-                      <span className="text-sm font-bold text-green-600 dark:text-green-400">+${Math.round(namTrendingAccounts!.up.reduce((s, a) => s + a.delta, 0)).toLocaleString()} total</span>
-                    </div>
-                  </>}
-                </CardContent>
-              )}
-            </Card>
-            <Card data-testid="nam-portlet-trending-down">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <button onClick={() => setNamTrendingDownCollapsed(!namTrendingDownCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-nam-trending-down">
-                    {namTrendingDownCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <TrendingDown className="h-4 w-4 text-red-500 dark:text-red-400" />
-                      Trending Accounts Down
-                    </CardTitle>
-                  </button>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {namTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
-                  </span>
-                </div>
-              </CardHeader>
-              {!namTrendingDownCollapsed && (
-                <CardContent className="pt-0">
-                  {namTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
-                  : (namTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <>
-                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{namTrendingAccounts!.down.map((acct, idx) => (
-                      <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`nam-trending-down-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
-                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                        <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                        {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                        <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
-                          <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
-                        </span>
-                      </div>
-                    ))}</div>
-                    <div className="flex items-center justify-between pt-2 mt-2 border-t">
-                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{namTrendingAccounts!.down.length} accounts</span>
-                      <span className="text-sm font-bold text-red-600 dark:text-red-400">-${Math.round(Math.abs(namTrendingAccounts!.down.reduce((s, a) => s + a.delta, 0))).toLocaleString()} total</span>
-                    </div>
-                  </>}
-                </CardContent>
-              )}
-            </Card>
-          </div>
-
-          {/* Row 3: AM Margin Metrics (NAM's team) */}
-          <Card data-testid="nam-portlet-margin-ams">
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <button onClick={() => setAmMarginCollapsed(!amMarginCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-nam-am-margin">
-                  {amMarginCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <UserCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
-                    My Team — AM Margin Metrics
-                  </CardTitle>
-                </button>
-                <span className="text-xs font-normal text-muted-foreground">{new Date().toLocaleString("default", { month: "long", year: "numeric" })}</span>
-              </div>
-            </CardHeader>
-            {!amMarginCollapsed && (
-              <CardContent className="pt-0">
-                {namMarginMetricsLoading ? (
-                  <div className="space-y-3">{[1,2,3].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
-                ) : (namMarginMetrics?.ams?.length ?? 0) === 0 ? (
-                  <p className="text-sm text-muted-foreground py-3">No AMs found on your team.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {(namMarginMetrics?.ams ?? []).map(m => {
-                      const target = m.goal?.target ?? 0;
-                      const pct = target > 0 ? Math.min(Math.round((m.margin / target) * 100), 100) : 0;
-                      return (
-                        <div key={m.userId} className="space-y-1" data-testid={`nam-margin-metric-${m.userId}`}>
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium flex-1 truncate">{m.name}</span>
-                            <span className="text-sm font-bold tabular-nums text-green-700 dark:text-green-400">${Math.round(m.margin).toLocaleString()}</span>
-                            {target > 0 && <span className="text-xs text-muted-foreground">/ ${Math.round(target).toLocaleString()}</span>}
-                            <MarginGoalEditButton
-                              userId={m.userId}
-                              goalId={m.goal?.id ?? null}
-                              currentTarget={target}
-                              onSave={(t) => setMarginGoalMutation.mutate({ userId: m.userId, goalId: m.goal?.id ?? null, target: t })}
-                            />
-                          </div>
-                          {target > 0 && (
-                            <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                              <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${pct}%` }} />
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            )}
-          </Card>
-
-          {/* Recent Wins (MTD) */}
-          {recentWins.length > 0 && (
-            <Card data-testid="portlet-recent-wins">
-              <CardHeader className="pb-3">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <Trophy className="h-4 w-4 text-amber-500" />
-                  Recent Wins — {new Date().toLocaleString("default", { month: "long" })}
-                  <Badge className="ml-1 bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300 font-semibold text-xs">{recentWins.length}</Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                  {recentWins.slice(0, 15).map(win => {
-                    const rep = teamMembers.find(m => m.id === win.repId);
-                    return (
-                      <div key={win.id} className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-100 dark:border-amber-900/40" data-testid={`recent-win-${win.id}`}>
-                        <Trophy className="h-3.5 w-3.5 text-amber-500 mt-0.5 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{win.title}</p>
-                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                            {rep && <span className="text-xs text-muted-foreground">{rep.name}</span>}
-                            {win.estimatedLoads && <span className="text-xs text-muted-foreground">· {win.estimatedLoads} loads</span>}
-                            {win.estimatedValue && <span className="text-xs text-green-700 dark:text-green-400 font-medium">· ${Number(win.estimatedValue).toLocaleString()}</span>}
-                            <span className="text-xs text-muted-foreground ml-auto">{new Date(win.loggedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Stale Accounts Alert — accounts with no touchpoint in 21+ days */}
-          {staleAccounts.length > 0 && (
-            <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-stale-accounts-nam">
-              <CardHeader className="pb-2 pt-4 px-4">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                  <CardTitle className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-                    Accounts Needing Attention
-                  </CardTitle>
-                  <Badge variant="outline" className="ml-auto text-xs text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700">
-                    {staleAccounts.length} account{staleAccounts.length !== 1 ? "s" : ""} · 21+ days no touch
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-0 px-4 pb-4">
-                <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3 max-h-36 overflow-y-auto">
-                  {staleAccounts.slice(0, 12).map(acct => (
-                    <div
-                      key={acct.id}
-                      className="flex items-center gap-2 cursor-pointer hover:bg-amber-100/60 dark:hover:bg-amber-900/30 rounded px-1.5 py-1 -mx-0.5"
-                      onDoubleClick={() => setLocation(`/companies/${acct.id}`)}
-                      data-testid={`stale-account-nam-${acct.id}`}
-                    >
-                      <Clock className="h-3 w-3 text-amber-500 shrink-0" />
-                      <span className="text-xs flex-1 truncate text-amber-900 dark:text-amber-200 font-medium">{acct.name}</span>
-                      <span className="text-xs text-amber-600 dark:text-amber-400 shrink-0">{acct.daysSince >= 90 ? "90+" : acct.daysSince}d</span>
-                    </div>
-                  ))}
-                </div>
-                {staleAccounts.length > 12 && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1.5">+{staleAccounts.length - 12} more accounts need attention</p>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Row 4: My Personal Metrics */}
-          <div className="space-y-1">
-            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide px-0.5">My Activity</h3>
-            <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="nam-personal-metrics-row">
-              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-personal-relationships" onClick={() => setActivePortlet({ type: "relationships", personal: true, title: "My Relationships Moved Up This Month" })}>
-                <CardContent className="p-4">
-                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                        <Repeat2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold" data-testid="nam-personal-stat-relationships">{personalMetrics?.relationshipsMovedThisMonth ?? 0}</div>
-                        <p className="text-xs text-muted-foreground mt-0.5">My relationships moved up this month</p>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-personal-meaningful" onClick={() => setActivePortlet({ type: "meaningful", personal: true, title: "My Meaningful Conversations Today" })}>
-                <CardContent className="p-4">
-                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
-                        <MessageSquare className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold" data-testid="nam-personal-stat-meaningful">{personalMetrics?.meaningfulToday ?? 0}</div>
-                        <p className="text-xs text-muted-foreground mt-0.5">My meaningful conversations today</p>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-personal-contacts" onClick={() => setActivePortlet({ type: "contacts", personal: true, title: "My New Contacts Added Today" })}>
-                <CardContent className="p-4">
-                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                        <UserPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold" data-testid="nam-personal-stat-contacts">{personalMetrics?.contactsAddedToday ?? 0}</div>
-                        <p className="text-xs text-muted-foreground mt-0.5">My new contacts added today</p>
-                      </div>
-                      {(() => {
-                        const goal = myGoals.find((g: any) => g.metric === "contacts_added" && g.startDate <= todayStr && g.endDate >= todayStr && !g.companyId);
-                        if (!goal) return null;
-                        const target = parseFloat(goal.target || "0");
-                        const current = goal.computedValue != null ? goal.computedValue : parseFloat(goal.currentValue || "0");
-                        const pct = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
-                        return (
-                          <div className="space-y-0.5 mt-0.5" data-testid="nam-contacts-goal-progress">
-                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : "bg-blue-500"}`} style={{ width: `${pct}%` }} />
-                            </div>
-                            <div className="flex justify-between text-xs text-muted-foreground">
-                              <span>{Math.round(current)} / {Math.round(target)} this month</span>
-                              <span>{pct}%</span>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="nam-personal-touches" onClick={() => setActivePortlet({ type: "touches", personal: true, title: "My Touches Today" })}>
-                <CardContent className="p-4">
-                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                        <Activity className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold" data-testid="nam-personal-stat-touches">{personalMetrics?.touchesToday ?? 0}</div>
-                        <p className="text-xs text-muted-foreground mt-0.5">My touches today (all types)</p>
-                      </div>
-                      {(() => {
-                        const goal = myGoals.find((g: any) => g.metric === "touchpoints" && g.startDate <= todayStr && g.endDate >= todayStr && !g.companyId);
-                        if (!goal) return null;
-                        const target = parseFloat(goal.target || "0");
-                        const current = goal.computedValue != null ? goal.computedValue : parseFloat(goal.currentValue || "0");
-                        const pct = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
-                        return (
-                          <div className="space-y-0.5 mt-0.5" data-testid="nam-touches-goal-progress">
-                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : "bg-amber-500"}`} style={{ width: `${pct}%` }} />
-                            </div>
-                            <div className="flex justify-between text-xs text-muted-foreground">
-                              <span>{Math.round(current)} / {Math.round(target)} this month</span>
-                              <span>{pct}%</span>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        </>
+        <PortletErrorBoundary label="NAM Portlets">
+        <NamPortlets
+          namRelationshipsMoved={namRelationshipsMoved}
+          namRelationshipsMovedLoading={namRelationshipsMovedLoading}
+          namTeamActivity={namTeamActivity}
+          namTeamActivityLoading={namTeamActivityLoading}
+          setActivePortlet={setActivePortlet}
+          namTrendingUpCollapsed={namTrendingUpCollapsed}
+          setNamTrendingUpCollapsed={setNamTrendingUpCollapsed}
+          namTrendingDownCollapsed={namTrendingDownCollapsed}
+          setNamTrendingDownCollapsed={setNamTrendingDownCollapsed}
+          namTrendingAccounts={namTrendingAccounts}
+          namTrendingLoading={namTrendingLoading}
+          setLocation={setLocation}
+          amMarginCollapsed={amMarginCollapsed}
+          setAmMarginCollapsed={setAmMarginCollapsed}
+          namMarginMetrics={namMarginMetrics}
+          namMarginMetricsLoading={namMarginMetricsLoading}
+          onSaveMarginGoal={(userId, goalId, target) => setMarginGoalMutation.mutate({ userId, goalId, target })}
+          recentWins={recentWins}
+          teamMembers={teamMembers as SafeUser[]}
+          amComparison={amComparison}
+          amComparisonLoading={amComparisonLoading}
+          staleAccounts={staleAccounts}
+          personalMetrics={personalMetrics}
+          personalMetricsLoading={personalMetricsLoading}
+          myGoals={myGoals}
+          todayStr={todayStr}
+          waitingOnMeCollapsed={waitingOnMeCollapsed}
+          setWaitingOnMeCollapsed={(v) => { setWaitingOnMeCollapsed(v); localStorage.setItem("dash_waiting_on_me_collapsed", String(v)); }}
+          teamOverdueCollapsed={teamOverdueCollapsed}
+          setTeamOverdueCollapsed={(v) => { setTeamOverdueCollapsed(v); localStorage.setItem("dash_team_overdue_collapsed", String(v)); }}
+          nbaRollupCollapsed={nbaRollupCollapsed}
+          onToggleNbaRollup={toggleNbaRollup}
+        />
+        </PortletErrorBoundary>
       )}
 
-      {/* ── AM Dashboard Portlets ────────────────────────────────────────────── */}
+      {/* ── AM Phase 3: My Weekly Commitments ───────────────────────────────── */}
       {isAm && (
-        <>
-          {/* Stale Accounts Alert — accounts with no touchpoint in 21+ days */}
-          {staleAccounts.length > 0 && (
-            <Card className="border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20" data-testid="card-stale-accounts-am">
-              <CardHeader className="pb-2 pt-4 px-4">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0" />
-                  <CardTitle className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-                    Accounts Needing Attention
-                  </CardTitle>
-                  <Badge variant="outline" className="ml-auto text-xs text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700">
-                    {staleAccounts.length} account{staleAccounts.length !== 1 ? "s" : ""} · 21+ days no touch
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="pt-0 px-4 pb-4">
-                <div className="grid gap-1 sm:grid-cols-2 lg:grid-cols-3 max-h-36 overflow-y-auto">
-                  {staleAccounts.slice(0, 12).map(acct => (
-                    <div
-                      key={acct.id}
-                      className="flex items-center gap-2 cursor-pointer hover:bg-amber-100/60 dark:hover:bg-amber-900/30 rounded px-1.5 py-1 -mx-0.5"
-                      onDoubleClick={() => setLocation(`/companies/${acct.id}`)}
-                      data-testid={`stale-account-am-${acct.id}`}
-                    >
-                      <Clock className="h-3 w-3 text-amber-500 shrink-0" />
-                      <span className="text-xs flex-1 truncate text-amber-900 dark:text-amber-200 font-medium">{acct.name}</span>
-                      <span className="text-xs text-amber-600 dark:text-amber-400 shrink-0">{acct.daysSince >= 90 ? "90+" : acct.daysSince}d</span>
-                    </div>
-                  ))}
-                </div>
-                {staleAccounts.length > 12 && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1.5">+{staleAccounts.length - 12} more accounts need attention</p>
-                )}
-              </CardContent>
-            </Card>
-          )}
+        <PortletErrorBoundary label="Weekly Commitments">
+          <WeeklyCommitmentsPanel
+            collapsed={weeklyCommitmentsCollapsed}
+            onToggle={() => {
+              const next = !weeklyCommitmentsCollapsed;
+              setWeeklyCommitmentsCollapsed(next);
+              localStorage.setItem("dash_weekly_commitments_collapsed", String(next));
+            }}
+          />
+        </PortletErrorBoundary>
+      )}
 
-          {/* Row 1: Trending accounts */}
-          <div className="grid gap-4 md:grid-cols-2" data-testid="am-trending-row">
-            <Card data-testid="am-portlet-trending-up">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <button onClick={() => setAmTrendingUpCollapsed(!amTrendingUpCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-am-trending-up">
-                    {amTrendingUpCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <TrendingUp className="h-4 w-4 text-green-600 dark:text-green-400" />
-                      My Trending Accounts Up
-                    </CardTitle>
-                  </button>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {amTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
-                  </span>
-                </div>
-              </CardHeader>
-              {!amTrendingUpCollapsed && (
-                <CardContent className="pt-0">
-                  {amTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
-                  : (amTrendingAccounts?.up?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <>
-                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.up.map((acct, idx) => (
-                      <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`am-trending-up-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
-                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                        <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                        {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                        <span className="flex items-center gap-0.5 text-sm font-semibold text-green-600 dark:text-green-400 shrink-0">
-                          <ArrowUpRight className="h-3.5 w-3.5" />${Math.round(acct.delta).toLocaleString()} ahead
-                        </span>
-                      </div>
-                    ))}</div>
-                    <div className="flex items-center justify-between pt-2 mt-2 border-t">
-                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{amTrendingAccounts!.up.length} accounts</span>
-                      <span className="text-sm font-bold text-green-600 dark:text-green-400">+${Math.round(amTrendingAccounts!.up.reduce((s, a) => s + a.delta, 0)).toLocaleString()} total</span>
-                    </div>
-                  </>}
-                </CardContent>
-              )}
-            </Card>
-            <Card data-testid="am-portlet-trending-down">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <button onClick={() => setAmTrendingDownCollapsed(!amTrendingDownCollapsed)} className="flex items-center gap-2 hover:opacity-80 transition-opacity" data-testid="button-toggle-am-trending-down">
-                    {amTrendingDownCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-                    <CardTitle className="text-base flex items-center gap-2">
-                      <TrendingDown className="h-4 w-4 text-red-500 dark:text-red-400" />
-                      My Trending Accounts Down
-                    </CardTitle>
-                  </button>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {amTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
-                  </span>
-                </div>
-              </CardHeader>
-              {!amTrendingDownCollapsed && (
-                <CardContent className="pt-0">
-                  {amTrendingLoading ? <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-8 w-full" />)}</div>
-                  : (amTrendingAccounts?.down?.length ?? 0) === 0 ? <p className="text-sm text-muted-foreground py-3">No trending data yet — upload financial data to see trends.</p>
-                  : <>
-                    <div className="space-y-2 max-h-72 overflow-y-auto pr-1">{amTrendingAccounts!.down.map((acct, idx) => (
-                      <div key={acct.name} className={`flex items-center gap-2${acct.companyId ? " cursor-pointer hover:bg-muted/50 rounded px-1 -mx-1" : ""}`} data-testid={`am-trending-down-${idx}`} onDoubleClick={() => acct.companyId && setLocation(`/companies/${acct.companyId}`)}>
-                        <span className="text-xs font-bold text-muted-foreground w-5 shrink-0 text-center">#{idx + 1}</span>
-                        <span className="text-sm flex-1 truncate font-medium">{acct.name}</span>
-                        {acct.isNew && <span className="text-xs font-semibold text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-950/40 px-1.5 py-0.5 rounded shrink-0">New</span>}
-                        <span className="flex items-center gap-0.5 text-sm font-semibold text-red-600 dark:text-red-400 shrink-0">
-                          <ArrowDownRight className="h-3.5 w-3.5" />${Math.round(Math.abs(acct.delta)).toLocaleString()} behind
-                        </span>
-                      </div>
-                    ))}</div>
-                    <div className="flex items-center justify-between pt-2 mt-2 border-t">
-                      <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{amTrendingAccounts!.down.length} accounts</span>
-                      <span className="text-sm font-bold text-red-600 dark:text-red-400">-${Math.round(Math.abs(amTrendingAccounts!.down.reduce((s, a) => s + a.delta, 0))).toLocaleString()} total</span>
-                    </div>
-                  </>}
-                </CardContent>
-              )}
-            </Card>
-          </div>
+      {/* ── AM Phase 2: Unified "Accounts Drifting" (replaces Phase 1 stale card) ── */}
+      {isAm && (
+        <PortletErrorBoundary label="Accounts Drifting">
+          <AccountsDriftingPortlet
+            staleAccounts={staleAccounts}
+            coldContacts={coldContacts}
+            meaningfulOverdue={meaningfulOverdue}
+            collapsed={accountsDriftingCollapsed}
+            onToggle={() => {
+              const next = !accountsDriftingCollapsed;
+              setAccountsDriftingCollapsed(next);
+              localStorage.setItem("dash_accounts_drifting_collapsed", String(next));
+            }}
+            onCommit={setCommitPayload}
+          />
+        </PortletErrorBoundary>
+      )}
 
-          {/* Row 2: Personal metrics */}
-          <div className="space-y-1">
-            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide px-0.5">My Activity</h3>
-            <div className="grid gap-3 sm:gap-4 grid-cols-2 lg:grid-cols-4" data-testid="am-personal-metrics-row">
-              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="am-personal-relationships" onClick={() => setActivePortlet({ type: "relationships", personal: true, title: "My Relationships Moved Up This Month" })}>
-                <CardContent className="p-4">
-                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                        <Repeat2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold" data-testid="am-personal-stat-relationships">{personalMetrics?.relationshipsMovedThisMonth ?? 0}</div>
-                        <p className="text-xs text-muted-foreground mt-0.5">Relationships moved up this month</p>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="am-personal-meaningful" onClick={() => setActivePortlet({ type: "meaningful", personal: true, title: "My Meaningful Conversations Today" })}>
-                <CardContent className="p-4">
-                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
-                        <MessageSquare className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold" data-testid="am-personal-stat-meaningful">{personalMetrics?.meaningfulToday ?? 0}</div>
-                        <p className="text-xs text-muted-foreground mt-0.5">Meaningful conversations today</p>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="am-personal-contacts" onClick={() => setActivePortlet({ type: "contacts", personal: true, title: "My New Contacts Added Today" })}>
-                <CardContent className="p-4">
-                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                        <UserPlus className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold" data-testid="am-personal-stat-contacts">{personalMetrics?.contactsAddedToday ?? 0}</div>
-                        <p className="text-xs text-muted-foreground mt-0.5">New contacts added today</p>
-                      </div>
-                      {(() => {
-                        const goal = myGoals.find((g: any) => g.metric === "contacts_added" && g.startDate <= todayStr && g.endDate >= todayStr && !g.companyId);
-                        if (!goal) return null;
-                        const target = parseFloat(goal.target || "0");
-                        const current = goal.computedValue != null ? goal.computedValue : parseFloat(goal.currentValue || "0");
-                        const pct = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
-                        return (
-                          <div className="space-y-0.5 mt-0.5" data-testid="am-contacts-goal-progress">
-                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : "bg-blue-500"}`} style={{ width: `${pct}%` }} />
-                            </div>
-                            <div className="flex justify-between text-xs text-muted-foreground">
-                              <span>{Math.round(current)} / {Math.round(target)} this month</span>
-                              <span>{pct}%</span>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-              <Card className="overflow-hidden cursor-pointer hover:bg-muted/40 transition-colors" data-testid="am-personal-touches" onClick={() => setActivePortlet({ type: "touches", personal: true, title: "My Touches Today" })}>
-                <CardContent className="p-4">
-                  {personalMetricsLoading ? <Skeleton className="h-16 w-full" /> : (
-                    <div className="flex flex-col gap-2">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                        <Activity className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                      </div>
-                      <div>
-                        <div className="text-2xl font-bold" data-testid="am-personal-stat-touches">{personalMetrics?.touchesToday ?? 0}</div>
-                        <p className="text-xs text-muted-foreground mt-0.5">Touches today (all types)</p>
-                      </div>
-                      {(() => {
-                        const goal = myGoals.find((g: any) => g.metric === "touchpoints" && g.startDate <= todayStr && g.endDate >= todayStr && !g.companyId);
-                        if (!goal) return null;
-                        const target = parseFloat(goal.target || "0");
-                        const current = goal.computedValue != null ? goal.computedValue : parseFloat(goal.currentValue || "0");
-                        const pct = target > 0 ? Math.min(Math.round((current / target) * 100), 100) : 0;
-                        return (
-                          <div className="space-y-0.5 mt-0.5" data-testid="am-touches-goal-progress">
-                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                              <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-green-500" : "bg-amber-500"}`} style={{ width: `${pct}%` }} />
-                            </div>
-                            <div className="flex justify-between text-xs text-muted-foreground">
-                              <span>{Math.round(current)} / {Math.round(target)} this month</span>
-                              <span>{pct}%</span>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-        </>
+      {/* ── AM Phase 2: Relationship Advancement Candidates ─────────────────── */}
+      {isAm && contacts !== undefined && companies !== undefined && (
+        <PortletErrorBoundary label="Relationship Advancement">
+          <RelationshipAdvancementPortlet
+            contacts={contacts}
+            companies={companies}
+            coldContacts={coldContacts}
+            meaningfulOverdue={meaningfulOverdue}
+            collapsed={relationshipAdvancementCollapsed}
+            onToggle={() => {
+              const next = !relationshipAdvancementCollapsed;
+              setRelationshipAdvancementCollapsed(next);
+              localStorage.setItem("dash_rel_advancement_collapsed", String(next));
+            }}
+            onCommit={setCommitPayload}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── AM Phase 2: Top Growth Calls This Week ──────────────────────────── */}
+      {isAm && (
+        <PortletErrorBoundary label="Growth Calls">
+          <GrowthCallsPortlet
+            opportunityLeaderboard={opportunityLeaderboard}
+            collapsed={growthCallsCollapsed}
+            onToggle={() => {
+              const next = !growthCallsCollapsed;
+              setGrowthCallsCollapsed(next);
+              localStorage.setItem("dash_growth_calls_collapsed", String(next));
+            }}
+            onCommit={setCommitPayload}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── Manager Phase 3: Team Commitment Follow-Through ─────────────────── */}
+      {canSeeTeam && !isAm && (
+        <PortletErrorBoundary label="Team Commitments">
+          <TeamCommitmentsPortlet
+            collapsed={teamCommitmentsCollapsed}
+            onToggle={() => {
+              const next = !teamCommitmentsCollapsed;
+              setTeamCommitmentsCollapsed(next);
+              localStorage.setItem("dash_team_commitments_collapsed", String(next));
+            }}
+            onAssignForcedFocus={canAssignForcedFocus ? (userId, _userName) => {
+              setForcedFocusEditId(undefined);
+              setForcedFocusPrefill({ assignedToUserId: userId });
+              setForcedFocusDialogOpen(true);
+            } : undefined}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── AM Dashboard Portlets (Trending + Activity — running context) ──── */}
+      {isAm && (
+        <PortletErrorBoundary label="AM Portlets">
+          <AmPortlets
+            setLocation={setLocation}
+            amTrendingAccounts={amTrendingAccounts}
+            amTrendingLoading={amTrendingLoading}
+            amTrendingUpCollapsed={amTrendingUpCollapsed}
+            setAmTrendingUpCollapsed={(v) => {
+              setAmTrendingUpCollapsed(v);
+              localStorage.setItem("dash_am_trending_up_collapsed", String(v));
+            }}
+            amTrendingDownCollapsed={amTrendingDownCollapsed}
+            setAmTrendingDownCollapsed={(v) => {
+              setAmTrendingDownCollapsed(v);
+              localStorage.setItem("dash_am_trending_down_collapsed", String(v));
+            }}
+            personalMetrics={personalMetrics}
+            personalMetricsLoading={personalMetricsLoading}
+            personalMetricsCollapsed={personalMetricsCollapsed}
+            onTogglePersonalMetrics={() => {
+              const next = !personalMetricsCollapsed;
+              setPersonalMetricsCollapsed(next);
+              localStorage.setItem("dash_personal_metrics_collapsed", String(next));
+            }}
+            myGoals={myGoals}
+            todayStr={todayStr}
+            setActivePortlet={setActivePortlet}
+            waitingOnMeCollapsed={waitingOnMeCollapsed}
+            setWaitingOnMeCollapsed={(v) => { setWaitingOnMeCollapsed(v); localStorage.setItem("dash_waiting_on_me_collapsed", String(v)); }}
+            nbaImpactCollapsed={nbaImpactCollapsed}
+            onToggleNbaImpact={toggleNbaImpact}
+          />
+        </PortletErrorBoundary>
       )}
 
       {/* LM Career Panel — operational stats + path-to-AM progress */}
-      {currentUser?.role === "logistics_manager" && <LmCareerPanel />}
-
-      {/* LM Daily Check-In Portlets */}
-      {currentUser?.role === "logistics_manager" && currentUser.id && (
-        <LmDailyCheckInPortlets lmUserId={currentUser.id} canEdit={false} />
+      {currentUser?.role === "logistics_manager" && (
+        <>
+          <SonarMarketPulsePortlet role="logistics_manager" />
+          <LmCareerPanel />
+        </>
       )}
 
-      {/* LM Daily Check-In Portlets for managers — hidden for directors */}
+      {/* ── LM Check-In Banner ───────────────────────────────────────────────
+           Timed alert for managers with direct LM/LC reports.
+           Morning window (7:00 AM–12:00 PM CT) and afternoon (3:30–11:59 PM CT).
+           Server provides activeWindow — no client-side clock detection.
+           Dismiss stored in localStorage (date-scoped, auto-clears next day).
+      ──────────────────────────────────────────────────────────────────────── */}
+      {!isLmRole && (
+        <PortletErrorBoundary label="LM Check-In Banner">
+          <LmCheckinBanner />
+        </PortletErrorBoundary>
+      )}
+
+      {/* LM Daily Check-In Portlets — read-only history for LMs themselves */}
+      {currentUser?.role === "logistics_manager" && currentUser.id && (
+        <PortletErrorBoundary label="LM Check-In History">
+          <LmDailyCheckInPortlets lmUserId={currentUser.id} canEdit={false} />
+        </PortletErrorBoundary>
+      )}
+
+      {/* LM Daily Check-In Portlets for managers — read-only history view */}
       {(() => {
-        if (!currentUser || currentUser.role === "logistics_manager" || currentUser.role === "director" || currentUser.role === "sales_director") return null;
-        const directReportIds = new Set(lmDirectReports.map(lm => lm.id));
-        const chainLms = teamMembers.filter(m => m.role === "logistics_manager" && !directReportIds.has(m.id));
-        const allLms = [
-          ...lmDirectReports.map(lm => ({ lm, canEdit: true })),
-          ...chainLms.map(lm => ({ lm, canEdit: false })),
-        ];
+        if (!currentUser || currentUser.role === "logistics_manager") return null;
+        const allLms = lmDirectReports.map(lm => lm);
         if (allLms.length === 0) return null;
         return (
           <Card data-testid="card-lm-daily-checkins-group">
@@ -2052,16 +1485,16 @@ export default function Dashboard() {
                 onClick={toggleLmCheckInsGroup}
                 data-testid="button-toggle-lm-checkins-group"
               >
-                <CardTitle className="text-base">LM Daily Check-Ins</CardTitle>
+                <CardTitle className="text-base">LM Daily Check-In History</CardTitle>
                 {lmCheckInsGroupCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground ml-auto" /> : <ChevronDown className="h-4 w-4 text-muted-foreground ml-auto" />}
               </button>
             </CardHeader>
             {!lmCheckInsGroupCollapsed && (
               <CardContent className="space-y-6 pt-0">
-                {allLms.map(({ lm, canEdit }) => (
+                {allLms.map((lm) => (
                   <div key={lm.id} className="space-y-2" data-testid={`section-lm-checkin-${lm.id}`}>
                     <h3 className="text-sm font-semibold text-muted-foreground">{lm.name}</h3>
-                    <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={canEdit} />
+                    <LmDailyCheckInPortlets lmUserId={lm.id} canEdit={false} />
                   </div>
                 ))}
               </CardContent>
@@ -2136,7 +1569,7 @@ export default function Dashboard() {
                       <Badge className={`text-xs font-normal border ${priorityColors[item.priority] ?? priorityColors.medium}`}>
                         {item.priority === "high" ? "🔴" : item.priority === "low" ? "🟢" : "🟡"} {item.priority}
                       </Badge>
-                      <span className="font-medium text-sm">{item.companyName ?? "Account"}</span>
+                      <span className="font-medium text-sm">{item.companyName ? formatCustomerName(item.companyName) : "Account"}</span>
                       {item.acknowledged && (
                         <Badge variant="secondary" className="text-xs font-normal ml-auto">
                           <CheckCircle2 className="h-3 w-3 mr-1 text-green-500" />Acknowledged
@@ -2194,228 +1627,44 @@ export default function Dashboard() {
         );
       })}
 
-      <div style={{ order: getOrder("tasks") }} className={!isVisible("tasks") ? "hidden" : ""}>
-      <Card data-testid="card-my-tasks">
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <button
-              className="flex items-center gap-2 text-left"
-              onClick={() => { const next = !tasksCollapsed; setTasksCollapsed(next); localStorage.setItem("dash_tasks_collapsed", String(next)); }}
-              data-testid="button-toggle-tasks-section"
-            >
-              <CardTitle className="text-base flex items-center gap-2">
-                <ClipboardList className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                My Tasks
-                {!tasksLoading && openTasks.length > 0 && (
-                  <Badge variant="secondary" className="ml-1 font-normal">{openTasks.length}</Badge>
-                )}
-                {unread.tasks > 0 && (
-                  <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 dark:bg-amber-900/40 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:text-amber-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
-                    {unread.tasks} new
-                  </span>
-                )}
-              </CardTitle>
-              {tasksCollapsed ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
-            </button>
-            <div className="flex items-center gap-2">
-              <Link href="/tasks">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="gap-1 text-muted-foreground"
-                  data-testid="button-open-tasks"
-                >
-                  <ListTodo className="h-3 w-3" /> Open Tasks
-                </Button>
-              </Link>
-              <Link href="/tasks#completed">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="gap-1 text-muted-foreground"
-                  data-testid="button-completed-tasks"
-                >
-                  <CheckCircle2 className="h-3 w-3" /> Completed
-                </Button>
-              </Link>
-              <Button
-                size="sm"
-                variant="outline"
-                className="gap-1"
-                onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
-                data-testid="button-add-task"
-              >
-                <Plus className="h-3 w-3" /> Add Task
-              </Button>
-            </div>
-          </div>
-        </CardHeader>
-        {!tasksCollapsed && (
-        <CardContent>
-          {tasksLoading ? (
-            <div className="space-y-3">
-              {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}
-            </div>
-          ) : (
-            <>
-              {incomingTasks.length > 0 && (
-                <div className="mb-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide mb-1.5 flex items-center gap-1.5 px-1"
-                     style={{ color: "#ffb400" }}>
-                    <Bell className="h-3 w-3" />
-                    Incoming — needs acknowledgment
-                  </p>
-                  <div className="space-y-1">
-                    {incomingTasks.map(task => {
-                      const companyName = getCompanyName(task.companyId);
-                      const assignerName = getUserName(task.assignedBy);
-                      const hasNewComment = taskCommentNotifIds.has(task.id);
-                      const assignedNotif = taskAssignedNotifMap.get(task.id);
-                      return (
-                        <div
-                          key={task.id}
-                          className={`flex items-center gap-3 p-3 rounded-lg border transition-all group cursor-pointer border-amber-400/40 bg-amber-500/5 hover:bg-amber-500/10 ${task.status === "completed" ? "opacity-50" : ""}`}
-                          data-testid={`task-row-${task.id}`}
-                          onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
-                        >
-                          <button onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }} className="shrink-0 hover:scale-110 transition-transform" title={`Status: ${task.status}`} data-testid={`button-toggle-status-${task.id}`}>{statusIcon(task.status)}</button>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`} data-testid={`text-task-title-${task.id}`}>{task.title}</p>
-                              {hasNewComment && (
-                                <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-semibold shrink-0" style={{ background: "rgba(255,180,0,0.15)", color: "#ffb400", border: "1px solid rgba(255,180,0,0.3)" }} data-testid={`badge-new-comment-${task.id}`}>
-                                  <MessageCircle className="h-2.5 w-2.5" /> reply
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex items-center gap-2 flex-wrap mt-0.5">
-                              {companyName && <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`} onClick={(e) => e.stopPropagation()}>{companyName}</Link>}
-                              {assignerName && <span className="text-xs text-muted-foreground">from {assignerName}</span>}
-                            </div>
-                          </div>
-                          {dueDateBadge(task.dueDate)}
-                          {assignedNotif && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); markNotifReadMutation.mutate(assignedNotif.id.toString()); }}
-                              className="shrink-0 px-2 py-1 rounded text-xs font-medium"
-                              style={{ background: "rgba(255,180,0,0.15)", color: "#ffb400", border: "1px solid rgba(255,180,0,0.25)" }}
-                              title="Acknowledge — keeps task in open tasks"
-                              data-testid={`button-acknowledge-task-${task.id}`}
-                            >
-                              <Bell className="h-3 w-3" />
-                            </button>
-                          )}
-                          <button onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {regularTasks.length > 0 && <div className="border-t border-border mt-3 mb-2" />}
-                </div>
-              )}
-              {regularTasks.length > 0 && (
-                <div className="space-y-1">
-                  {regularTasks.map(task => {
-                    const companyName = getCompanyName(task.companyId);
-                    const assignerName = getUserName(task.assignedBy);
-                    const hasNewComment = taskCommentNotifIds.has(task.id);
-                    return (
-                      <div
-                        key={task.id}
-                        className={`flex items-center gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all group cursor-pointer ${task.status === "completed" ? "opacity-50" : ""}`}
-                        data-testid={`task-row-${task.id}`}
-                        onClick={() => { setEditingTask(task); setTaskDialogOpen(true); }}
-                      >
-                        <button onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }} className="shrink-0 hover:scale-110 transition-transform" title={`Status: ${task.status}`} data-testid={`button-toggle-status-${task.id}`}>{statusIcon(task.status)}</button>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <p className={`text-sm font-medium truncate ${task.status === "completed" ? "line-through text-muted-foreground" : ""}`} data-testid={`text-task-title-${task.id}`}>{task.title}</p>
-                            {hasNewComment && (
-                              <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full font-semibold shrink-0" style={{ background: "rgba(255,180,0,0.15)", color: "#ffb400", border: "1px solid rgba(255,180,0,0.3)" }} data-testid={`badge-new-comment-${task.id}`}>
-                                <MessageCircle className="h-2.5 w-2.5" /> reply
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 flex-wrap mt-0.5">
-                            {companyName && <Link href={`/companies/${task.companyId}`} className="text-xs text-primary hover:underline" data-testid={`link-task-company-${task.id}`} onClick={(e) => e.stopPropagation()}>{companyName}</Link>}
-                            {assignerName && task.assignedBy !== currentUser?.id && <span className="text-xs text-muted-foreground">from {assignerName}</span>}
-                          </div>
-                        </div>
-                        {dueDateBadge(task.dueDate)}
-                        <button onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(task.id); }} className="shrink-0 text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity" data-testid={`button-delete-task-${task.id}`}><Trash2 className="h-3.5 w-3.5" /></button>
-                      </div>
-                    );
-                  })}
-                  {completedCount > 0 && (
-                    <p className="text-xs text-muted-foreground pt-2 pl-3" data-testid="text-completed-count">
-                      {completedCount} completed task{completedCount !== 1 ? "s" : ""}
-                    </p>
-                  )}
-                </div>
-              )}
+      <PortletErrorBoundary label="Tasks">
+        <TasksSection
+          isVisible={isVisible}
+          getOrder={getOrder}
+          tasksCollapsed={tasksCollapsed}
+          setTasksCollapsed={setTasksCollapsed}
+          tasksLoading={tasksLoading}
+          openTasks={openTasks}
+          unreadTasks={unread.tasks}
+          incomingTasks={incomingTasks}
+          regularTasks={regularTasks}
+          displayTasks={displayTasks}
+          completedCount={completedCount}
+          actionItems={actionItems}
+          getCompanyName={getCompanyName}
+          getUserName={getUserName}
+          taskCommentNotifIds={taskCommentNotifIds}
+          taskAssignedNotifMap={taskAssignedNotifMap}
+          markNotifRead={(notifId) => markNotifReadMutation.mutate(notifId)}
+          toggleStatus={(id, status) => toggleStatusMutation.mutate({ id, status })}
+          deleteTask={(id) => deleteMutation.mutate(id)}
+          currentUser={currentUser as SafeUser}
+          onEditTask={(task) => setEditingTask(task)}
+          onOpenTaskDialog={() => setTaskDialogOpen(true)}
+          teamMembers={teamMembers as SafeUser[]}
+        />
+      </PortletErrorBoundary>
 
-              {actionItems.length > 0 && (
-                <div className={displayTasks.length > 0 ? "mt-3 pt-3 border-t border-border" : ""} data-testid="section-action-items">
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1.5 px-1">
-                    <Users className="h-3 w-3" />
-                    1:1 Action Items
-                  </p>
-                  <div className="space-y-1">
-                    {actionItems.map(item => (
-                      <Link key={item.id} href="/one-on-one">
-                        <div
-                          className="flex items-start gap-3 p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all cursor-pointer"
-                          data-testid={`action-item-row-${item.id}`}
-                        >
-                          <div className="shrink-0 mt-0.5">
-                            <div className="h-4 w-4 rounded-full border-2 border-violet-400 dark:border-violet-500" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm font-medium truncate" data-testid={`text-action-item-${item.id}`}>
-                              {item.text}
-                            </p>
-                            <p className="text-xs text-muted-foreground mt-0.5">
-                              with {item.withUserName}
-                              {item.addedById !== currentUser?.id && ` · added by ${item.addedByName}`}
-                            </p>
-                          </div>
-                          <Badge variant="outline" className="shrink-0 text-[10px] px-1.5 py-0 h-5 border-violet-300 text-violet-600 dark:border-violet-600 dark:text-violet-400 font-medium">
-                            1:1
-                          </Badge>
-                        </div>
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              )}
+      <div style={{ order: getOrder("missed-inbound") }} className={!isVisible("missed-inbound") ? "hidden" : ""}>
+        <PortletErrorBoundary label="Missed Inbound Calls">
+          <MissedInboundPortlet />
+        </PortletErrorBoundary>
+      </div>
 
-              {displayTasks.length === 0 && actionItems.length === 0 && (
-                <div className="text-center py-6 text-muted-foreground">
-                  <ClipboardList className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm mb-3">No tasks yet</p>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="gap-1.5"
-                    onClick={() => { setEditingTask(undefined); setTaskDialogOpen(true); }}
-                    data-testid="button-create-first-task"
-                  >
-                    <Plus className="h-3.5 w-3.5" /> Create a task
-                  </Button>
-                </div>
-              )}
-            </>
-          )}
-        </CardContent>
-        )}
-      </Card>
-      </div>{/* end tasks */}
-
-      <div style={{ order: getOrder("cold-contacts") }} className={!isVisible("cold-contacts") ? "hidden" : ""}>
+      <div style={{ order: getOrder("cold-contacts") }} className={(!isVisible("cold-contacts") || isAm) ? "hidden" : ""} data-tour="tour-contacts-attention">
       {coldContacts.length > 0 && (
         <Card data-testid="card-cold-contacts">
-          <CardHeader className="pb-3">
+          <CardHeader className={coldContactsCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_cold_contacts_collapsed", !coldContactsCollapsed, setColdContactsCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-cold-contacts">
               {coldContactsCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base">
@@ -2453,6 +1702,21 @@ export default function Dashboard() {
                           : <p className="text-xs font-medium">Never</p>
                         }
                       </div>
+                      {contact.email && (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40"
+                          title="Send email via Outlook"
+                          data-testid={`button-email-cold-${contact.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setComposeContact({ email: contact.email!, name: contact.name, companyName: company.name, contactId: contact.id, companyId: company.id });
+                          }}
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                       <Button
                         size="icon"
                         variant="ghost"
@@ -2477,10 +1741,10 @@ export default function Dashboard() {
       )}
       </div>{/* end cold-contacts */}
 
-      <div style={{ order: getOrder("meaningful-overdue") }} className={!isVisible("meaningful-overdue") ? "hidden" : ""}>
+      <div style={{ order: getOrder("meaningful-overdue") }} className={(!isVisible("meaningful-overdue") || isAm) ? "hidden" : ""}>
       {meaningfulOverdue.length > 0 && (
         <Card data-testid="card-meaningful-overdue">
-          <CardHeader className="pb-3">
+          <CardHeader className={meaningfulOverdueCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_meaningful_overdue_collapsed", !meaningfulOverdueCollapsed, setMeaningfulOverdueCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-meaningful-overdue">
               {meaningfulOverdueCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base">
@@ -2517,10 +1781,10 @@ export default function Dashboard() {
       )}
       </div>{/* end meaningful-overdue */}
 
-      <div style={{ order: getOrder("top-opportunities") }} className={!isVisible("top-opportunities") ? "hidden" : ""}>
+      <div style={{ order: getOrder("top-opportunities") }} className={(!isVisible("top-opportunities") || isAm) ? "hidden" : ""}>
       {opportunityLeaderboard.length > 0 && (
         <Card data-testid="card-opportunity-leaderboard">
-          <CardHeader className="pb-3">
+          <CardHeader className={topOppsCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_top_opps_collapsed", !topOppsCollapsed, setTopOppsCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-top-opps">
               {topOppsCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base">
@@ -2538,7 +1802,7 @@ export default function Dashboard() {
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="text-xs font-bold text-muted-foreground w-5 shrink-0">#{idx + 1}</span>
                     <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{item.companyName}</p>
+                      <p className="text-sm font-medium truncate">{formatCustomerName(item.companyName)}</p>
                       <p className="text-xs text-muted-foreground">
                         {item.hasRfp
                           ? `${item.currentLoads.toLocaleString()} of ${item.rfpVolume!.toLocaleString()} RFP loads captured`
@@ -2560,8 +1824,8 @@ export default function Dashboard() {
 
       <div style={{ order: getOrder("churn-risk") }} className={!isVisible("churn-risk") ? "hidden" : ""}>
       {churnRisk.length > 0 && !isLmRole && (
-        <Card className="border-orange-300 dark:border-orange-700" data-testid="card-churn-risk">
-          <CardHeader className="pb-3">
+        <Card className="border-l-4 border-l-orange-500 dark:border-l-orange-500 bg-orange-50/30 dark:bg-orange-950/20" data-testid="card-churn-risk">
+          <CardHeader className={churnRiskCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_churn_risk_collapsed", !churnRiskCollapsed, setChurnRiskCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-churn-risk">
               {churnRiskCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base text-orange-700 dark:text-orange-400">
@@ -2580,7 +1844,7 @@ export default function Dashboard() {
               <Link key={item.companyId} href={`/companies/${item.companyId}`}>
                 <div className="flex items-center justify-between gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer" data-testid={`churn-risk-row-${item.companyId}`}>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{item.companyName}</p>
+                    <p className="text-sm font-medium truncate">{formatCustomerName(item.companyName)}</p>
                     <p className="text-xs text-muted-foreground">
                       {item.curLoads} loads this month vs {item.priorLoads} last month
                       {item.repName ? ` · ${item.repName}` : ""}
@@ -2598,8 +1862,8 @@ export default function Dashboard() {
       </div>{/* end churn-risk */}
 
       {urgentRfps.length > 0 && (
-        <Card className="border-red-300 dark:border-red-700" data-testid="card-rfp-deadline-alert">
-          <CardHeader className="pb-3">
+        <Card className="border-l-4 border-l-red-500 dark:border-l-red-500 bg-red-50/30 dark:bg-red-950/20" data-testid="card-rfp-deadline-alert">
+          <CardHeader className={rfpDeadlineCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_rfp_deadline_collapsed", !rfpDeadlineCollapsed, setRfpDeadlineCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-rfp-deadline">
               {rfpDeadlineCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base text-red-700 dark:text-red-400">
@@ -2638,9 +1902,43 @@ export default function Dashboard() {
         </Card>
       )}
 
-      {behindGoals.length > 0 && !isLmRole && (
-        <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goals-nudge">
+      {laneProcurementTasks.length > 0 && (
+        <Card className="border-l-4 border-l-teal-500 dark:border-l-teal-500 bg-teal-50/30 dark:bg-teal-950/20" data-testid="card-lane-assigned-alert">
           <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base text-teal-700 dark:text-teal-400">
+              <Truck className="h-4 w-4" />
+              Lane{laneProcurementTasks.length !== 1 ? "s" : ""} Assigned — Ready to Work
+              <Badge className="ml-auto bg-teal-100 text-teal-800 dark:bg-teal-900 dark:text-teal-300 font-normal border-teal-300">
+                {laneProcurementTasks.length} lane{laneProcurementTasks.length !== 1 ? "s" : ""}
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-2">
+            {laneProcurementTasks.map(task => {
+              const corridor = task.title.replace(/^Work assigned lane:\s*/i, "").replace(/^Unknown Customer\s*—\s*/i, "");
+              return (
+                <Link key={task.id} href="/lanes/work-queue">
+                  <div className="flex items-center justify-between gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors cursor-pointer" data-testid={`lane-assigned-row-${task.id}`}>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{corridor}</p>
+                      {task.description && (
+                        <p className="text-xs text-muted-foreground truncate">{task.description.split("\n")[0]}</p>
+                      )}
+                    </div>
+                    <span className="text-xs px-2 py-0.5 rounded-full font-medium shrink-0 bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400">
+                      Work queue →
+                    </span>
+                  </div>
+                </Link>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {behindGoals.length > 0 && !isLmRole && (
+        <Card className="border-l-4 border-l-amber-500 dark:border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/20" data-testid="card-goals-nudge">
+          <CardHeader className={goalsNudgeCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_goals_nudge_collapsed", !goalsNudgeCollapsed, setGoalsNudgeCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-goals-nudge">
               {goalsNudgeCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
@@ -2692,6 +1990,7 @@ export default function Dashboard() {
       )}
 
       <div style={{ order: getOrder("one-on-one") }} className={!isVisible("one-on-one") ? "hidden" : ""}>
+      <PortletErrorBoundary label="1:1 Sessions">
       <div className="relative">
         {pendingTopicsCount > 0 && (
           <div className="absolute -top-2 -right-2 z-10">
@@ -2702,6 +2001,7 @@ export default function Dashboard() {
         )}
         <OneOnOnePortlet />
       </div>
+      </PortletErrorBoundary>
       </div>{/* end one-on-one */}
 
       <div style={{ order: getOrder("feed") }} className={!isVisible("feed") ? "hidden" : ""}>
@@ -2709,8 +2009,8 @@ export default function Dashboard() {
       </div>{/* end feed (comms) */}
 
       {canSeeTeam && missingMonthlyGoals.length > 0 && (
-        <Card className="border-amber-300 dark:border-amber-700" data-testid="card-goal-alert">
-          <CardHeader className="pb-3">
+        <Card className="border-l-4 border-l-amber-500 dark:border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/20" data-testid="card-goal-alert">
+          <CardHeader className={goalsAlertCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_goals_alert_collapsed", !goalsAlertCollapsed, setGoalsAlertCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-goals-alert">
               {goalsAlertCollapsed ? <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" /> : <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />}
               <CardTitle className="flex items-center gap-2 text-base text-amber-700 dark:text-amber-400">
@@ -2756,7 +2056,7 @@ export default function Dashboard() {
             >
               <CardTitle className="text-base flex items-center gap-2">
                 <Lightbulb className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                Trends / Growth / Ideas / Celebrate
+                Team Feed
                 {!feedLoading && feedPosts.length > 0 && (
                   <Badge variant="secondary" className="ml-1 font-normal">{feedPosts.length}</Badge>
                 )}
@@ -3116,184 +2416,24 @@ export default function Dashboard() {
       </Card>
       </div>{/* end feed */}
 
-      <div style={{ order: getOrder("team-directory") }} className={!isVisible("team-directory") ? "hidden" : ""}>
-      {canSeeTeam && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-                National Account Managers
-                {!usersLoading && (
-                  <Badge variant="secondary" className="ml-auto font-normal">{nams.length}</Badge>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {usersLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
-                </div>
-              ) : nams.length > 0 ? (
-                <div className="space-y-1 max-h-72 overflow-y-auto">
-                  {nams.map((u) => <UserRow key={u.id} user={u} />)}
-                </div>
-              ) : (
-                <div className="text-center py-8 text-muted-foreground">
-                  <ShieldCheck className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No national account managers</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+      <TeamDirectorySection
+        isVisible={isVisible}
+        getOrder={getOrder}
+        canSeeTeam={canSeeTeam}
+        nams={nams as SafeUser[]}
+        ams={ams as SafeUser[]}
+        usersLoading={usersLoading}
+        isLoading={isLoading}
+        companies={companies}
+        contacts={contacts}
+        allUsers={allUsers as SafeUser[]}
+      />
 
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <UserCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
-                Account Managers
-                {!usersLoading && (
-                  <Badge variant="secondary" className="ml-auto font-normal">{ams.length}</Badge>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {usersLoading ? (
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
-                </div>
-              ) : ams.length > 0 ? (
-                <div className="space-y-1 max-h-72 overflow-y-auto">
-                  {ams.map((u) => <UserRow key={u.id} user={u} />)}
-                </div>
-              ) : (
-                <div className="text-center py-8 text-muted-foreground">
-                  <UserCircle className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                  <p className="text-sm">No account managers</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Building2 className="h-4 w-4 text-blue-600 dark:text-blue-400" />
-              My Customers
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="space-y-3">
-                {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : companies && companies.length > 0 ? (
-              <div className="space-y-2">
-                {companies.slice().sort((a, b) => a.name.localeCompare(b.name)).slice(0, 5).map((company) => {
-                  const companyContacts = contacts?.filter((c) => c.companyId === company.id) || [];
-                  return (
-                    <Link
-                      key={company.id}
-                      href={`/companies/${company.id}`}
-                      className="flex items-center justify-between p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all cursor-pointer group"
-                      data-testid={`card-company-${company.id}`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-semibold text-sm">
-                          {company.name.charAt(0)}
-                        </div>
-                        <div>
-                          <p className="font-medium text-sm">{company.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {company.industry || "No industry"} · {companyContacts.length} contacts
-                          </p>
-                        </div>
-                      </div>
-                      <ChevronRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors" />
-                    </Link>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-muted-foreground">
-                <Building2 className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                <p className="text-sm">No customers yet</p>
-                <p className="text-xs">Add your first company to get started</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <DollarSign className="h-4 w-4 text-green-600 dark:text-green-400" />
-              Top Contacts by Freight Spend
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <div className="space-y-3">
-                {[1, 2, 3].map((i) => (
-                  <Skeleton key={i} className="h-12 w-full" />
-                ))}
-              </div>
-            ) : contacts && contacts.length > 0 ? (
-              <div className="space-y-2">
-                {[...contacts]
-                  .sort((a, b) => parseFloat(b.freightSpend || "0") - parseFloat(a.freightSpend || "0"))
-                  .slice(0, 5)
-                  .map((contact, index) => (
-                    <div
-                      key={contact.id}
-                      className="flex items-center justify-between p-3 rounded-lg border border-transparent hover:border-border hover:bg-muted/50 transition-all"
-                      data-testid={`card-contact-${contact.id}`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`flex h-9 w-9 items-center justify-center rounded-full font-semibold text-sm ${
-                          index === 0 ? "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400" :
-                          index === 1 ? "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400" :
-                          "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
-                        }`}>
-                          {contact.name.split(" ").map((n) => n[0]).join("").slice(0, 2)}
-                        </div>
-                        <div>
-                          <p className="font-medium text-sm">{contact.name}</p>
-                          <p className="text-xs text-muted-foreground">{contact.title || "No title"}</p>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <p className="text-sm font-semibold text-green-600 dark:text-green-400">
-                          ${contact.freightSpend ? Number(contact.freightSpend).toLocaleString() : "0"}
-                        </p>
-                        <p className="text-xs text-muted-foreground">Annual</p>
-                      </div>
-                    </div>
-                  ))}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-muted-foreground">
-                <Users className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                <p className="text-sm">No contacts yet</p>
-                <p className="text-xs">Add contacts to companies to see them here</p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-      </div>{/* end team-directory */}
-
-      <div style={{ order: getOrder("market-share") }} className={!isVisible("market-share") ? "hidden" : ""}>
-      {canSeeTeam && <MarketSharePortlet />}
-      </div>{/* end market-share */}
 
       <div style={{ order: getOrder("relationship") }} className={!isVisible("relationship") ? "hidden" : ""}>
+      <PortletErrorBoundary label="Relationship Intel">
       <RelationshipDashboardSection />
+      </PortletErrorBoundary>
       </div>{/* end relationship */}
 
       <div style={{ order: getOrder("goals-leaderboard") }} className={!isVisible("goals-leaderboard") ? "hidden" : ""}>
@@ -3413,6 +2553,65 @@ export default function Dashboard() {
         </Card>
       )}
 
+      {/* ── Leadership Priority — Team Overview (directors/NAMs only) ──────── */}
+      {canAssignForcedFocus && activeTeamFf.length > 0 && (
+        <Card data-testid="card-team-forced-focus">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Crown className="h-4 w-4 text-purple-500" />
+              Leadership Priorities — Active
+              <span className="ml-auto text-xs font-normal text-muted-foreground">{activeTeamFf.length} active</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {activeTeamFf.map((ff) => (
+                <div key={ff.id} className="flex items-start gap-2 py-2 border-b last:border-0" data-testid={`team-ff-row-${ff.id}`}>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-xs font-semibold text-purple-700 dark:text-purple-300">
+                        {ff.assignedToName ?? ff.assignedToUserId}
+                      </span>
+                      {ff.companyName && (
+                        <span className="text-xs text-muted-foreground">· {formatCustomerName(ff.companyName)}</span>
+                      )}
+                      {ff.lever && (
+                        <span className="text-[10px] font-medium px-1 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                          {ff.lever}
+                        </span>
+                      )}
+                      {ff.dueDate && (
+                        <span className="text-[10px] text-muted-foreground ml-auto">
+                          Due {new Date(ff.dueDate + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-foreground/80 truncate mt-0.5">{ff.actionText}</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs px-1.5 py-0.5 rounded border border-purple-300 dark:border-purple-700 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-900/20 transition-colors"
+                    onClick={() => {
+                      setForcedFocusEditId(ff.id);
+                      setForcedFocusPrefill({
+                        companyName: ff.companyName ?? undefined,
+                        lever: ff.lever ?? undefined,
+                        actionText: ff.actionText,
+                        dueDate: ff.dueDate ?? undefined,
+                      });
+                      setForcedFocusDialogOpen(true);
+                    }}
+                    data-testid={`button-team-ff-edit-${ff.id}`}
+                  >
+                    Edit
+                  </button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <TaskDialog
         open={taskDialogOpen}
         onOpenChange={setTaskDialogOpen}
@@ -3423,7 +2622,7 @@ export default function Dashboard() {
         open={prefillDialogOpen}
         onOpenChange={(open) => { setPrefillDialogOpen(open); if (!open) setTaskPrefill(undefined); }}
         companyId={taskPrefill?.companyId}
-        prefillData={taskPrefill?.title ? { title: taskPrefill.title } : undefined}
+        prefillData={taskPrefill?.title ? { title: taskPrefill.title, notes: taskPrefill.notes } : undefined}
       />
 
       <ContactDetailSheet
@@ -3438,6 +2637,91 @@ export default function Dashboard() {
         directorId={selectedDirectorId ?? undefined}
       />
 
+      <OutlookComposeDialog
+        open={!!composeContact}
+        onClose={() => setComposeContact(null)}
+        toEmail={composeContact?.email || ""}
+        toName={composeContact?.name || ""}
+        companyName={composeContact?.companyName || ""}
+        contactId={composeContact?.contactId}
+        companyId={composeContact?.companyId}
+      />
+
+      <CommitDialog
+        payload={commitPayload}
+        onClose={() => setCommitPayload(null)}
+      />
+
+      <ForcedFocusDialog
+        open={forcedFocusDialogOpen}
+        editId={forcedFocusEditId}
+        onClose={() => { setForcedFocusDialogOpen(false); setForcedFocusPrefill(undefined); setForcedFocusEditId(undefined); }}
+        prefill={forcedFocusPrefill}
+      />
+
+    </div>
+  );
+}
+
+// Task #639 — invitation banner shown on the classic dashboard. Lets reps
+// switch their landing page to the new Today queue without leaving the page.
+function TryTodayQueueBanner(): JSX.Element | null {
+  const { data, isLoading } = useQuery<{ defaultToTodayQueue: boolean }>({
+    queryKey: ["/api/users/me/landing-preference"],
+    staleTime: 60_000,
+  });
+  const { toast } = useToast();
+  const [, navigate] = useLocation();
+
+  const setPref = useMutation({
+    mutationFn: async (next: boolean) =>
+      apiRequest("PATCH", "/api/users/me/landing-preference", { defaultToTodayQueue: next }),
+    onSuccess: (_d, next) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/users/me/landing-preference"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({
+        title: next ? "Today is now your home" : "Classic dashboard restored",
+      });
+      if (next) navigate("/today");
+    },
+  });
+
+  if (isLoading || !data) return null;
+  // Don't nag reps who have already opted in — they only see this banner
+  // when they're on the classic dashboard with the old preference.
+  if (data.defaultToTodayQueue === true) return null;
+
+  // Task #773 — render as a quiet, dark-themed callout that sits flush with
+  // the rest of the dashboard portlets instead of a bright amber alert.
+  return (
+    <div
+      className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card text-card-foreground px-4 py-2.5"
+      data-testid="banner-try-today-queue"
+    >
+      <div className="flex items-center gap-2 text-sm">
+        <span className="font-medium text-foreground">Try the new Today queue</span>
+        <span className="text-xs text-muted-foreground">
+          One prioritized list — replies, hot LWQ lanes, urgent freight, SLA quotes.
+        </span>
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <Link
+          href="/today"
+          className="text-xs underline text-muted-foreground hover:text-foreground"
+          data-testid="link-preview-today"
+        >
+          Preview
+        </Link>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setPref.mutate(true)}
+          disabled={setPref.isPending}
+          data-testid="button-make-today-home"
+        >
+          Make Today my home
+        </Button>
+      </div>
     </div>
   );
 }

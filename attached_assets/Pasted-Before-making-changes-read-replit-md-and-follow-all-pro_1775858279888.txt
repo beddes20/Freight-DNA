@@ -1,0 +1,193 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+Context:
+We now have:
+- HF-aware carrier ranking & “Why this carrier” explanations
+- Email Intelligence signals (including carrier-side intents)
+- Market-signal-driven carrier NBAs
+- carrier_intel_suggestions (or equivalent) from Email Consumers v1
+
+But Carrier Hub UI does not yet provide a unified “Intelligence” view that brings history, preferences, NBAs, and suggestions together.
+
+Goal:
+Build Carrier Hub Intelligence v1:
+- backend: carrier intelligence summary + suggestion accept/reject endpoints
+- frontend: a new “Intelligence” tab in Carrier Hub
+
+No auto-mutation of core carrier profile yet — suggestions remain staged.
+
+--------------------------------------------------
+1. BACKEND – CARRIER INTELLIGENCE SUMMARY
+--------------------------------------------------
+
+Add an internal API:
+
+GET /api/internal/carriers/:carrierId/intelligence
+
+Response shape:
+
+{
+  carrier: {
+    id,
+    name,
+    mcNumber,
+    dotNumber,
+    primaryEquipment,
+    homeRegions,
+    ... // existing profile fields
+  },
+  history: {
+    topLanes: [ { origin, destination, loadsCount }, ... ],
+    topRegions: [ { region, loadsCount }, ... ],
+    equipmentMix: [ { equipmentType, loadsCount }, ... ]
+  },
+  declaredPreferences: {
+    lanes: [ ... ],
+    regions: [ ... ],
+    equipment: [ ... ]
+  },
+  marketSignals: [
+    { id, type, scope, severity, createdAt, description }
+  ],
+  suggestions: {
+    pending: [ ... ],
+    accepted: [ ... ],
+    rejected: [ ... ]
+  }
+}
+
+Implementation details:
+- history.* from TMS/lane history tables.
+- declaredPreferences.* from existing carrier preference/profile fields.
+- marketSignals from carrier_market_nbas or equivalent.
+- suggestions.* from carrier_intel_suggestions.
+
+Apply org/permission guards consistent with other Carrier Hub endpoints.
+
+--------------------------------------------------
+2. BACKEND – SUGGESTION MUTATION ENDPOINTS
+--------------------------------------------------
+
+Add:
+
+POST /api/internal/carriers/:carrierId/intelligence/suggestions/:suggestionId/accept
+POST /api/internal/carriers/:carrierId/intelligence/suggestions/:suggestionId/reject
+
+Behavior:
+- Validate carrierId/org.
+- Update suggestion.status, acceptedAt/rejectedAt, acceptedByUserId/rejectedByUserId.
+- Optional comment in request body, saved to suggestion.comment.
+- Return updated suggestion.
+
+No changes to core carrier profile in this task.
+
+--------------------------------------------------
+3. FRONTEND – INTELLIGENCE TAB
+--------------------------------------------------
+
+In the Carrier Hub UI (carrier detail view):
+
+A) Add a new tab “Intelligence”.
+
+When selected:
+- call the intelligence API.
+- show skeletons while loading.
+
+B) Layout:
+
+Section 1 – “Lane & Region History”
+- small table/chips of top lanes: “Phoenix → Kent (16 loads)”
+- top regions: “PNW (24 loads)”
+- equipment mix: “Dry Van 70%, Reefer 30%”
+
+Section 2 – “Declared Preferences”
+- list lanes/regions/equipment that are canonical today.
+
+Section 3 – “Suggested Intelligence” (pending)
+- for each pending suggestion:
+  - type badge (Lane Preference, Capacity, Region, Equipment, Price, Risk)
+  - concise text: e.g. “AZ → PNW, Reefer, weekly”
+  - source:
+    - “From email reply on 2026-04-10 (thread #…)”
+    - “From market signal: Southeast van demand_surge”
+  - confidence indicator (chip/label, not necessarily raw number)
+  - createdAt (relative)
+  - Accept / Reject buttons (inline)
+  - optional comment entry (small textarea in a modal or inline)
+
+Section 4 – “History & Decisions”
+- collapsible section listing:
+  - accepted suggestions with when/who
+  - rejected suggestions with when/who
+- primarily for audit.
+
+C) UX expectations:
+- Accept/Reject updates UI instantly (optimistic or post-response).
+- If there are no suggestions, show a friendly “No suggested intelligence yet” state.
+
+--------------------------------------------------
+4. WIRES FOR FUTURE USE
+--------------------------------------------------
+
+Implement helper functions in storage/services:
+
+- getAcceptedLanePreferencesForCarrier(carrierId)
+- getAcceptedRegionPreferencesForCarrier(carrierId)
+- getAcceptedEquipmentCapabilitiesForCarrier(carrierId)
+
+These will be used later by ranking/NBAs.
+
+No ranking changes in this task.
+
+--------------------------------------------------
+5. DEDUPE & PRESENTATION
+--------------------------------------------------
+
+Backend dedupe is handled by carrier_intel_suggestions.
+
+Frontend should:
+- avoid visually duplicating very similar suggestions where possible.
+- group similar suggestions by corridor or equipment when it improves readability.
+
+A simple v1 is acceptable:
+- show each suggestion row as-is, as long as backend dedupe is working.
+
+--------------------------------------------------
+6. TESTS
+--------------------------------------------------
+
+Backend:
+- intelligence summary:
+  - returns expected structure for carrier with history, signals, suggestions.
+- accept/reject:
+  - updates status and audit fields correctly.
+  - enforces carrierId/org constraints.
+
+Frontend:
+- Intelligence tab:
+  - fetches and renders data successfully.
+  - Accept/Reject triggers backend and updates local state.
+  - handles empty states (no history / no suggestions) without errors.
+
+Integration:
+- creating a suggestion row in DB makes it appear in the Intelligence tab’s pending section.
+- accepting/rejecting moves it out of pending.
+
+--------------------------------------------------
+7. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1) summary of changes
+2) files changed
+3) intelligence summary API response example (for a real-ish carrier)
+4) description or screenshots of Intelligence tab
+5) how Accept/Reject flows work
+6) tests added/updated
+7) known limitations / ideas for v2
+
+Success criteria:
+- Carrier Hub exposes a clear “Intelligence” view per carrier.
+- Pending suggestions are actionable with clear provenance.
+- Accepted intelligence is persisted for later use by ranking/NBAs.
+- No unsafe automatic profile mutations yet; everything is staged and auditable.

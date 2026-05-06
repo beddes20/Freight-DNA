@@ -1,0 +1,143 @@
+I want to make Customer Quotes a customer-only workspace with the smallest, safest possible change surface.
+
+Most important constraint
+
+I do not want to risk breaking the email flow again.
+
+This task should not reopen or redesign:
+
+Graph / webhook ingestion
+
+capture-first behavior
+
+routing_status semantics
+
+classifier prompts or thresholds
+
+delta sync
+
+backfill / repair scripts
+
+quote_pipeline_drops behavior
+
+Assume the email plumbing is frozen unless you prove there is no other way.
+
+Product goal
+
+Customer Quotes should show customer-side quote work only.
+
+I do not want the main Customer Quotes queue populated with:
+
+LM/internal emails
+
+carrier emails
+
+procurement-side communication
+
+or other non-customer traffic
+
+The only acceptable exception is Needs Routing, where ambiguous items can appear temporarily until they are resolved.
+
+Safe implementation approach
+
+I want you to solve this at the read/filter/presentation boundary first, not by changing ingestion.
+
+In other words:
+
+prefer tightening what the Customer Quotes list returns/displays
+
+prefer tightening queue inclusion filters
+
+prefer using existing routing/account/customer signals
+
+do not start by changing how emails are ingested or written
+
+If the customer-only behavior can be achieved entirely in:
+
+list queries
+
+queue filters
+
+UI tabs
+
+route-level inclusion logic
+
+then do it there.
+
+Desired product rule
+
+Main Customer Quotes views should include only:
+
+quote opportunities matched to a known customer account
+
+quote opportunities confidently classified as customer-side
+
+Needs Routing items only if they are still unresolved and could reasonably be customer-related
+
+Main Customer Quotes views should exclude:
+
+carrier-side items
+
+internal/LM-side items
+
+clearly non-customer traffic
+
+Ownership rule
+
+For known customer accounts, keep the new Account Owner fallback behavior intact.
+Do not disturb that work.
+
+What I need you to do
+
+Inspect the current read path for Customer Quotes:
+
+list endpoint / service
+
+status filters
+
+needs_routing inclusion
+
+customer/account match logic already available at read time
+
+Identify the smallest safe place to enforce customer-only behavior without touching ingestion.
+
+Implement customer-only filtering in the main queue views, while preserving:
+
+Needs Routing for unresolved ambiguous items
+
+Account Owner fallback for known customer accounts
+
+existing explicit quote owner behavior
+
+Only if absolutely necessary, propose a minimal secondary change — but do not make any ingestion/plumbing changes without stopping and explaining why the read-layer fix is insufficient.
+
+Validation I want
+
+Prove with real examples:
+
+one real customer quote email/opportunity that still appears correctly
+
+one carrier-side item that no longer appears in the main Customer Quotes queue
+
+one internal/LM-side item that no longer appears in the main Customer Quotes queue
+
+one ambiguous item that still appears in Needs Routing until resolved
+
+Deliverables back
+
+Current behavior in plain English
+
+The exact read-layer/filter-layer change you made
+
+Why this was the safest place to make the fix
+
+Files changed
+
+Before/after proof that the main queue is now customer-only without disturbing the email pipeline
+
+Standard
+
+I want the lowest-risk fix that improves queue correctness without creating another email incident.
+
+Desired outcome:
+Customer Quotes becomes customer-only in practice, using the smallest safe read/filter change possible, while leaving the underlying email plumbing untouched.

@@ -1,0 +1,109 @@
+I want to tighten Lane Carrier Outreach so it becomes an actual lane-ownership workflow, not just a data feature.
+
+Vision:
+We now have:
+1) recurring/consistent lanes identified from live freight history,
+2) a carrier catalog enriched from the carrier rolodex,
+3) carrier outreach tracking.
+
+What is still missing is the operational workflow that connects all three:
+- identify recurring freight,
+- match carriers we already use or should use,
+- assign lane ownership to an LM or AM,
+- make that person procure/build carrier depth on that lane,
+- track completion and follow-up.
+
+I want you to improve the workflow around recurring lanes so the product answers this question clearly:
+“Who owns this recurring lane, which carriers are attached to it, which ones are contactable, and what work still needs to be done?”
+
+Please inspect the current code and implement the safest low-risk V1.5 version of this workflow.
+
+1) Carrier-to-lane connection logic
+For every recurring/consistent lane:
+- attach carriers from actual historical freight usage on that lane first
+- then enrich those carriers from the rolodex/carrier catalog using Payee code, MC number, or normalized name
+- surface contactability fields clearly:
+  - phone
+  - contact email
+  - MC number
+  - city/state
+  - primary equipment type
+- add clear buckets per lane:
+  - historical carriers on this lane
+  - matched/enriched carriers
+  - carriers missing contact info
+  - suggested carriers not yet used on this lane
+
+2) Lane ownership / assignment
+I want recurring lanes to have an explicit owner workflow.
+For each recurring lane:
+- support assignment to an LM or AM
+- show current owner clearly in the UI
+- allow reassignment only within the same org
+- track assignment date and assigned-by user
+- default assignment logic:
+  - if a lane already has an owner/overseer, use that
+  - otherwise leave unassigned and surface it in an “Unassigned recurring lanes” queue
+
+3) Work queue / task behavior
+Create a simple recurring lane work queue that answers:
+- Unassigned recurring lanes
+- Assigned lanes with fewer than 3 contacted carriers
+- Assigned lanes with 0 contactable carriers
+- Assigned lanes missing phone/email on matched carriers
+- Recently completed lanes in snooze window
+
+This does NOT need a full new task system if that is too big.
+A safe V1.5 version can use recurring lane records + outreach state + assignment metadata to power queue views.
+
+4) LM/AM action flow
+When an LM/AM opens a recurring lane, they should be able to:
+- see lane stats (loads/week, weeks active)
+- see current historical carriers on that lane
+- see which of those carriers have contact info from the rolodex
+- see which carriers are missing phone/email
+- log outreach
+- add a new carrier if needed
+- mark notes/status on the lane bench
+- understand exactly how far they are from the completion threshold
+
+5) Completion definition
+Keep the current completion standard for V1:
+- lane is complete when 3 distinct carriers have been contacted
+- then resolve/snooze for 30 days
+
+But add better visibility:
+- progress bar
+- “1 of 3 contacted”, “2 of 3 contacted”, etc.
+- warning when all matched carriers lack contact info
+- warning when lane is high-volume but unassigned
+
+6) Leadership visibility
+I want managers/admins to be able to answer:
+- Which recurring lanes are unassigned?
+- Which recurring lanes have no contactable carriers?
+- Which recurring lanes are assigned but untouched?
+- Which LMs/AMs are closing lane bench work consistently?
+- Which recurring lanes are active but still have weak carrier depth?
+
+7) Guardrails
+- everything org-scoped
+- no cross-org assignment or mutation
+- feature-flag gated under lane_carrier_outreach_v1
+- do not redesign unrelated UI
+- do not build a giant task framework unless clearly required
+- prefer extending recurring lanes + outreach state + assignment metadata over inventing new entities
+
+8) Deliverables
+Please:
+- inspect the current recurring lane / carrier outreach / rolodex import flow
+- implement safe, low-risk improvements that create a real assignable lane workflow
+- add/update tests where needed
+- output:
+  - changes made
+  - what the user flow is now
+  - any remaining phase-2 gaps
+
+Most important outcome:
+I want a manager to be able to say:
+“This lane is recurring. John owns it. We have 2 of 3 carriers contacted. One matched carrier still has no email. This is the next lane he needs to work.”

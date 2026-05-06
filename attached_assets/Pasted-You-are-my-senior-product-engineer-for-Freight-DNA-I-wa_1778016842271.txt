@@ -1,0 +1,187 @@
+You are my senior product engineer for Freight-DNA.
+
+I want you to implement the next phase of EMAIL → EXECUTION automation in one coordinated task, but you must break it into 5 smaller sub-tasks and execute them in order with clear boundaries, tests, and checkpoints.
+
+Important constraints:
+- Dev-only from this workspace. Do NOT use or fabricate any production DATABASE_URL.
+- Do NOT run any scripts or commands against production.
+- If you need to inspect data, use dev-only read paths.
+- Keep scope tight: build the 5 sub-tasks below, do not expand into unrelated cleanup.
+- Prefer small, reviewable changes with tests after each sub-task.
+- Before coding, create a short session plan that lists the 5 sub-tasks, likely files, risks, and validation for each.
+- After each sub-task, run targeted validation and report PASS/FAIL before moving on.
+- At the end, give me:
+  1) what changed,
+  2) tests added/updated,
+  3) any remaining gaps,
+  4) recommended next prompt.
+
+Goal:
+Turn more of what we learn from emails into real execution inside Freight-DNA, especially across Customer Quotes and Available Freight.
+
+Context:
+We already mapped the current email intelligence architecture. We know:
+- email_messages is the raw email store,
+- quote_opportunities is created from email quote requests,
+- there are AI/extraction paths already,
+- Customer Quotes already has a Won Load Autopilot/manual confirm path,
+- Available Freight is still only indirectly fed by email,
+- we want to close the gap between “we learned something important from the email” and “the platform actually did something useful with it.”
+
+Build these 5 sub-tasks in one coordinated task:
+
+SUB-TASK 1 — First-touch tender → freight opportunity creation
+Objective:
+If an inbound customer email is clearly a first-touch tender / load offer (not just a quote request), create a freight opportunity record automatically in a safe status like pending_approval or needs_review, linked back to the source email.
+
+Requirements:
+- Reuse existing email ingestion/classification infrastructure where possible.
+- Detect obvious tender/load-offer signals from email text and/or existing extracted signals.
+- Create a freight_opportunities row with:
+  - orgId
+  - source='email'
+  - sourceReference=providerMessageId (or equivalent)
+  - customer/account if known
+  - lane/equipment/date placeholders if partially known
+  - a safe initial status such as pending_approval or needs_review
+- Do NOT auto-book or auto-dispatch.
+- Add a source badge / explanation in the freight opportunity UI so the user knows this came from email.
+- Preserve idempotency: the same message cannot create duplicate freight opportunities.
+
+Acceptance test:
+A clear inbound tender email like “Please cover ATL to DAL, reefer, pickup Tuesday, PO attached” creates exactly one linked freight opportunity within the existing ingestion flow.
+
+Likely files:
+- server/emailIntelligenceService.ts
+- server/services/quoteEmailIngestion.ts
+- server/routes/customerQuotes.ts
+- server/routes/freightOpportunityCockpit.ts
+- shared/schema.ts
+
+SUB-TASK 2 — Needs Routing should carry email hints
+Objective:
+When an email is quote-related but not confident enough to auto-create a clean quote, preserve extracted hints so the user does not have to retype everything.
+
+Requirements:
+- Pass regex and/or AI-extracted hints into Needs Routing / manual review rows.
+- Include things like:
+  - pickup city/state
+  - delivery city/state
+  - equipment
+  - quoted rate if present
+  - customer/contact hints
+- Show these hints in the Needs Routing drawer or equivalent review UI.
+- Add a one-click confirm action that turns the hinted review item into the appropriate quote_opportunity or freight record without retyping.
+- Keep confidence thresholds conservative; uncertain emails should still require human confirmation.
+
+Acceptance test:
+An inbound email with medium confidence lands in Needs Routing with pre-filled lane/equipment/rate hints visible and confirmable in one click.
+
+Likely files:
+- server/services/inlineEmailClassifier.ts
+- server/services/quoteEmailIngestion.ts
+- client route/component for quote requests / needs routing drawer
+- shared/schema.ts
+
+SUB-TASK 3 — Carrier quote ingestion branch
+Objective:
+Capture carrier-side pricing intelligence from email replies without polluting customer quote opportunities.
+
+Requirements:
+- Add a carrier-quote event path when an inbound or reply email from a carrier clearly contains a rate offer like “we can do it for $1850”.
+- Store the carrier quote as a structured event or related record, linked to:
+  - carrier/contact
+  - lane if known
+  - amount
+  - email source reference
+- Do NOT create a customer quote_opportunity from carrier quotes.
+- Make this data available to procurement / rate intelligence / copilot surfaces if those hooks already exist.
+- Keep this schema minimal and aligned with current architecture.
+
+Acceptance test:
+A carrier reply containing a rate offer creates one structured carrier-quote record/event and does not create a quote_opportunity.
+
+Likely files:
+- server/services/quoteEmailIngestion.ts
+- server/emailIntelligenceService.ts
+- shared/schema.ts
+- any procurement/rate-intel reader service already consuming related events
+
+SUB-TASK 4 — Signature-derived contact + rep link sweep
+Objective:
+Use email signatures and sender metadata to improve contact linkage, customer association, and rep attribution.
+
+Requirements:
+- When an inbound email is from a sender not yet fully known, parse signature/contact clues safely:
+  - name
+  - title
+  - phone
+  - company name
+- If the account/customer is already known, upsert or enrich the contact under the correct organization only.
+- Never allow cross-tenant joins or cross-org contact leakage.
+- If the sender should map to an existing customer/account, strengthen rep attribution and ownership linkage.
+- If helpful, queue existing enrichment hooks rather than inventing new infrastructure.
+
+Acceptance test:
+An inbound email from a new contact on a known customer account creates or enriches the correct contact under the same org and improves quote ownership linkage.
+
+Likely files:
+- server/services/quoteEmailIngestion.ts
+- any contact suggestion/contact enrichment services
+- shared/schema.ts
+- attribution/owner resolution code paths
+
+SUB-TASK 5 — Free-mail attribution recovery
+Objective:
+Improve attribution for Gmail/Outlook/free-mail senders so meaningful customer emails are less likely to fall into Unknown/Unlinked buckets.
+
+Requirements:
+- Use thread context, prior messages, signature/company text, and known account context to infer the likely customer/account for free-mail senders.
+- Keep this tiered and safe:
+  - strongest = thread/account continuity
+  - next = known signature/company text
+  - weakest = suggestion only, not hard attach
+- Never create cross-org leaks.
+- If confidence is low, surface as a suggestion rather than silently attaching.
+- Make sure this improves routing and visibility without creating false certainty.
+
+Acceptance test:
+A Gmail reply on an existing customer thread attaches to the correct customer context; a brand-new Gmail with weak evidence becomes a suggestion, not a hard link.
+
+Likely files:
+- server/services/quoteEmailIngestion.ts
+- server/emailIntelligenceService.ts
+- attribution/customer matching helpers
+- shared/schema.ts
+
+Implementation rules:
+- Reuse existing patterns instead of inventing parallel pipelines.
+- Prefer extending current quote/email intelligence services over creating new disconnected services.
+- Keep all new writes idempotent and tied to sourceReference/messageId where appropriate.
+- Keep all new UI changes explainable: show why something was created from email.
+- Any AI usage must degrade gracefully; deterministic parsing should still work when AI is unavailable.
+- Do not break current Customer Quotes or Available Freight flows.
+- If ingestion issues from the Value Truck incident block a path, call that out explicitly but still implement the code path in dev.
+
+Validation requirements:
+After each sub-task:
+- run targeted tests,
+- add/update tests for the new behavior,
+- report exactly what passed.
+
+At the end run:
+- typecheck
+- relevant targeted suites
+- any guardrail tests touching the new contracts
+
+Final output format:
+1. Session plan with the 5 sub-tasks
+2. Implementation progress by sub-task
+3. Files changed by sub-task
+4. Tests added/updated by sub-task
+5. Final validation summary
+6. Remaining risks / what still depends on production ingestion health
+7. Recommended follow-up prompt for the next phase
+
+Important:
+Do not stop after analysis. Actually implement the 5 sub-tasks in this dev project unless a blocker is truly hard. If blocked, state the blocker precisely, complete the unblocked sub-tasks, and leave the blocked one with exact next steps.

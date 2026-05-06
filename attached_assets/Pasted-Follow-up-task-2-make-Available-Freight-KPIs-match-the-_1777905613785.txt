@@ -1,0 +1,40 @@
+Follow‑up task #2: make Available Freight KPIs match the filtered dataset.
+
+Product decision:
+For the Available Freight cockpit, we want the top KPI tiles to reflect **what the rep is actually looking at after client filters**, not the queue‑wide server scope. That means:
+- If I type a search query, change status, owner, or bucket, the KPIs should update to match the filtered collection.
+- Counts in the tiles should match the visible rows and bucket strip for the current scope.
+
+Implementation requests:
+1) Define KPI scope explicitly
+- Adopt this rule: “KPI tiles reflect applyCockpitFilters(filtered) at the current client filter state.”
+- Keep the existing server kpis for future reporting, but the tiles on this page should be derived from the client pipeline.
+
+2) Implementation plan
+- In client/src/pages/available-freight.tsx:
+  - Use the same post-pipeline collection that drives visible rows and bucketCounts as the source for KPIs.
+  - Either:
+    - compute kpisFromFiltered(filtered) on the client, or
+    - call a shared helper that takes filtered rows and returns the same fields as feed.kpis.
+- Ensure that:
+  - total == filtered.length
+  - readyToSend == number of filtered rows where status == ready_to_send
+  - atRiskPickup24h, coveredToday, etc., are computed from the same predicates as bucketsForRow in shared/cockpitBuckets.ts, so bucket counts and KPIs stay consistent.
+- Optionally keep a small “Queue total: N (all items)” label somewhere if we still want the queue-wide view.
+
+3) Tests
+- Extend cockpitBuckets / cockpitFilters tests and tests/cockpit-hardening.test.ts to assert:
+  - KPIs computed from filtered rows match the bucket counts and filtered length.
+  - When a client-only filter (search, status, bucket) changes, KPI totals change accordingly.
+- Explicitly test at least:
+  - Filter by owner so that only that owner’s rows remain; KPIs match their slice.
+  - Filter by a single bucket (e.g., at_risk_24h); KPIs only count those rows.
+
+4) Verification
+- Update the verification report section for Rule 6 to PASS, explaining:
+  - which function now computes KPIs,
+  - which input it takes (filtered rows),
+  - how you ensured no divergence from bucketsForRow.
+
+Important:
+Do not change the server route behavior beyond what is needed to avoid unused fields. The goal is: “one shared source-of-truth filtered collection powers KPIs, rows, bucket strip, and hidden-state diagnostics” for the Available Freight tab.

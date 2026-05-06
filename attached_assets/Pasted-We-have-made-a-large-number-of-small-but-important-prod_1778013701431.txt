@@ -1,0 +1,157 @@
+We have made a large number of small but important production fixes over the last few days, and I need to lock them in so they do not get accidentally erased, bypassed, or regressed by upcoming work.
+
+Goal
+
+Create a stabilization / regression-protection pass for all recently shipped behavior in Customer Quotes, account ownership, and related queue logic.
+
+I expect more changes over the next few days, but I do not want the work from the last few days to be silently undone by future edits.
+
+What I want you to do
+1. Audit the recently changed contracts
+
+Identify and document the exact intended behavior for the key fixes we just shipped.
+
+At minimum, include:
+
+Customer Quotes trust + filtering
+
+Mine Only with no rep mapping does not silently return fake zero rows
+
+UI explains the condition honestly instead of generic “No matches”
+
+main Customer Quotes queue is customer-only
+
+auto_carrier rows do not appear in the main customer queue
+
+ambiguous items can appear only in Needs Routing until resolved
+
+Needs Routing uses the dedicated path and remains consistent with visible counts
+
+Ownership
+
+canonical account owner source of truth is the CRM/company owner field
+
+Quote Requests rep fallback reads from the canonical account owner source
+
+deprecated owner copy fields are no longer relied on for display logic
+
+Intel tab / Customers surfaces show Account Owner correctly
+
+Email / quote safety
+
+no silent “Mine only” lies
+
+no regression of capture-first assumptions
+
+no accidental reintroduction of old blank/skinny-row behavior
+
+no broad reopening of routing_status / classifier / webhook behavior from unrelated tasks
+
+Response-time visibility
+
+Response column remains read-only derived behavior
+
+KPI tiles / response-time metrics are computed from current approved sources only
+
+no new hidden write-paths are introduced through that work
+
+2. Create a regression checklist / contract file
+
+I want a durable internal artifact in the repo that captures these recent contracts in plain English.
+
+It can be something like:
+
+docs/customer-quotes-stability-contract.md
+
+or similar
+
+It should describe:
+
+what behaviors are now intentional
+
+what source of truth each behavior depends on
+
+what must not be changed casually
+
+and what tests/guardrails enforce each one
+
+This is not just documentation — it is a “don’t break this” contract for future work.
+
+3. Add/expand guardrails and tests
+
+I want regression protection at the test/guardrail level for the critical behaviors above.
+
+Add or confirm guardrails for:
+
+customer-only main queue behavior
+
+Needs Routing isolation behavior
+
+Mine Only honest behavior when no rep mapping exists
+
+Account Owner as canonical owner fallback
+
+Quote Requests rep fallback reading from the CRM/company owner source
+
+response-time feature staying read-only
+
+no accidental writes / alternate owner source paths / old copy-field reliance reappearing
+
+Where possible, prefer tests that fail loudly if someone later:
+
+switches back to the deprecated owner copy field
+
+broadens Customer Quotes to include carrier/internal rows again
+
+reintroduces fake empty states
+
+or touches the email/quote read path in a way that violates the current contract
+
+4. Identify fragile areas
+
+I want you to explicitly call out:
+
+which of these recent fixes are most likely to be accidentally broken by future work
+
+where there are duplicate concepts / deprecated fields / multiple possible code paths
+
+and what future developers should be most careful not to “clean up” incorrectly
+
+5. Make future work safer
+
+Recommend a lightweight process for the next few days of changes, such as:
+
+areas that should be treated as frozen
+
+files/services that need extra caution
+
+whether future tasks should explicitly state “do not touch Customer Quotes contracts”
+
+and whether any follow-up cleanup tasks should be split out instead of mixed into product work
+
+Deliverables back
+
+I want:
+
+A concise audit of the recently shipped contracts
+
+A new repo artifact documenting those contracts
+
+The added/updated tests and guardrails
+
+A list of the most fragile areas
+
+Recommended rules for safely making additional changes this week
+
+Constraints
+
+Do not do a broad refactor
+
+Do not reopen email plumbing
+
+Focus on regression prevention, documentation, and guardrails
+
+Keep source-of-truth decisions consistent with what was already shipped
+
+Desired outcome:
+The fixes from the last few days are documented, tested, and hard to accidentally undo while we continue building.

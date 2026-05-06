@@ -1,0 +1,134 @@
+I want to move beyond “today only” and make the quote/customer ownership model usable going forward.
+
+Goals
+
+Bring in and make usable at least the last 14 days of email/quote data so we can work from meaningful recent history.
+
+Make distribution/shared customer email addresses map cleanly to the correct account owner / rep without breaking the email pipeline.
+
+Add a clear owner rep concept to the customer profile so quote routing has a reliable fallback.
+
+Part 1 — 14-day data pull / recovery
+
+I want a dedicated recovery pass for the last 14 days, using the current capture-first contract and current routing logic.
+
+Please:
+
+Identify the exact source of truth for the last 14 days of inbound/outbound email activity already available to the system.
+
+Reprocess or import the last 14 days so the system has:
+
+email_messages present where recoverable,
+
+conversations linked where applicable,
+
+quote_opportunities created under the current routing model,
+
+and quote_pipeline_drops populated with explicit reasons for anything that does not become a quote.
+
+Do this idempotently:
+
+no duplicate email_messages,
+
+no duplicate quote_opportunities,
+
+safe to re-run if interrupted.
+
+Deliver a summary:
+
+counts by day,
+
+new auto_customer / needs_routing / auto_carrier counts,
+
+drops by reason code,
+
+and 5 concrete examples from the last 14 days that are now usable in the platform.
+
+Part 2 — Customer ownership model
+
+I want a permanent ownership model so customer/distribution inboxes don’t create assignment ambiguity.
+
+Please add or formalize this in the customer profile:
+
+Customer owner rep
+
+Every customer should have a single primary owner rep/user.
+
+This owner is the default fallback for quote assignment when an inbound email clearly belongs to that customer but does not match a specific contact.
+
+Customer email identities
+
+Support multiple email identities on the customer:
+
+primary domain(s),
+
+named contact emails,
+
+shared/distribution emails (examples: quotes@, shipping@, traffic@, logistics@, etc.).
+
+These should be stored as explicit customer-linked email identities, not left to fuzzy matching only.
+
+Assignment precedence
+When an inbound quote-related email is matched to a customer, assign the rep in this order:
+
+exact contact email match with known owner if one exists,
+
+exact customer-linked shared/distribution email match,
+
+known customer domain match,
+
+customer owner rep fallback,
+
+Needs Routing only if still ambiguous.
+
+UI
+In the customer profile, add fields/sections for:
+
+Owner rep
+
+Allowed customer domains
+
+Shared/distribution customer emails
+
+Key contact emails
+
+Quote Requests UI
+Once a quote is linked to a customer, the Rep column should show:
+
+the explicit matched owner when known,
+
+otherwise the customer owner fallback,
+
+and only show a blank/unknown state if the customer itself truly has no owner configured.
+
+Constraints
+
+Do not reopen or rework the email plumbing contract unless absolutely required. Use the current capture-first / routing_status system as the foundation.
+
+Keep all recovery work idempotent and safe.
+
+Prefer explicit account/customer ownership over fuzzy heuristics.
+
+Deliverables back
+
+The proposed schema/field changes for customer owner + customer email identities.
+
+The assignment precedence logic in plain English and where it will live in code.
+
+The 14-day recovery plan and whether it can reuse the current backfill tooling.
+
+A concrete proof example where:
+
+a quote comes from a shared/distribution customer email,
+
+it maps to the correct customer,
+
+and the correct rep owner shows in Quote Requests.
+
+The desired outcome is:
+
+we have 14 days of usable quote/email history,
+
+shared customer email addresses don’t break assignment,
+
+and every customer can have a clearly defined owner rep so the Rep column is trustworthy.

@@ -41,6 +41,10 @@ const companySchema = z.object({
   estimatedFreightSpend: z.string().optional(),
   financialAlias: z.string().optional(),
   salesPersonId: z.string().optional(),
+  // Account Owner (companies.ownerRepId) is intentionally NOT editable
+  // from this generic dialog — it has stricter RBAC than the rest of
+  // the company form and is edited from the company-detail page Intel
+  // tab → Account Information portlet via PATCH /api/companies/:id/owner.
 });
 
 type CompanyFormData = z.infer<typeof companySchema>;
@@ -308,6 +312,10 @@ export function CompanyDialog({ open, onOpenChange, company }: CompanyDialogProp
                 </FormItem>
               )}
             />
+            {/* Account Owner (companies.ownerRepId) is edited from
+                the company-detail Intel tab → Account Information
+                portlet, not from this generic dialog. See PATCH
+                /api/companies/:id/owner for the RBAC-gated path. */}
             {canEditSalesPerson && (
               <FormField
                 control={form.control}

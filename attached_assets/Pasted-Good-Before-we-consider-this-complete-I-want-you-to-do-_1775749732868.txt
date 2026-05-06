@@ -1,0 +1,160 @@
+Good. Before we consider this complete, I want you to do one final verification and hardening pass on the lane work queue ranking changes.
+
+Context
+You already:
+
+updated carrierRankingService.ts
+
+added recency decay based on last executed usage
+
+adjusted signal weights
+
+removed/reduced weak-signal influence
+
+updated explanation strings
+
+added unit tests
+
+confirmed the new tests pass
+
+confirmed the existing carrier ranking tests still pass
+
+That is a strong start, but I want a final pass focused on behavioral correctness, not just green tests.
+
+Objective
+Verify that the ranking now behaves correctly in real lane-work-queue scenarios and that we did not leave any hidden issues in:
+
+fallback ordering
+
+stale-history explanation
+
+history-only carriers
+
+exact lane vs customer vs region precedence
+
+top-20 suggestion credibility
+
+any code paths outside the main catalog scoring branch
+
+What I want you to do
+1) Re-read the full carrier ranking service end-to-end
+Do one clean pass over the full file and confirm there are no remaining branches where stale carriers can still float to the top due to:
+
+default score behavior
+
+fallback score behavior
+
+history-only path
+
+missing recency penalty in one branch
+
+explanation logic not matching score logic
+
+sorting tie-breakers that accidentally favor stale carriers
+
+I want you to explicitly confirm that all ranking paths now handle staleness appropriately.
+
+2) Verify ordering precedence is actually correct
+I want you to validate the intended ranking precedence now looks like this:
+
+recent exact lane history
+
+recent customer history
+
+recent overall executed-load recency
+
+equipment/service compatibility
+
+regional fit
+
+contactability / weaker support signals
+
+If the code does not actually behave in this order, fix it.
+
+3) Verify active status is truly only a gate
+You already said active status is only being used as a gate/suppression control.
+
+Please confirm there is:
+
+no direct positive score for active
+
+no indirect branch where being active causes a major default boost
+
+no explanation text that implies active status is a ranking reason by itself
+
+If “active” still shows up as a major explanation reason without stronger proof signals, tighten that.
+
+4) Verify stale carriers are demoted in both score and explanation
+For carriers with no executed loads in 365+ days, confirm:
+
+they get meaningfully penalized
+
+they do not surface first by default
+
+the reason text clearly reflects stale history
+
+they can still appear deeper as fallback if otherwise eligible
+
+I do not want stale carriers to be silently demoted with vague UI copy.
+The explanation needs to match the reality.
+
+5) Sanity-check top-20 behavior
+The lane work queue shows a top slice of carriers first.
+
+I want you to verify that after this change:
+
+top results are mostly credible recent/proven candidates
+
+stale carriers do not occupy premium slots unless there is a very strong reason
+
+generic catalog carriers no longer crowd out proven incumbents
+
+If needed, add one or two tests specifically around top-ranked ordering outcomes.
+
+Add or improve tests if needed
+If the current tests do not cover these, add them:
+
+A. Stale active carrier suppression
+active + contactable + region fit + no loads in 365+ days
+
+should rank below recent proven carriers
+
+B. Exact lane over generic fit
+recent exact-lane incumbent outranks generic active region-fit carrier
+
+C. Customer history over generic fit
+recent customer-history carrier outranks carrier with only broad match
+
+D. History-only branch parity
+ensure the history-only branch uses the same recency penalty logic as the main branch
+
+E. Explanation correctness
+stale carrier explanation includes stale-history language
+
+recent incumbent explanation includes exact-lane/customer-history language
+
+F. No weak-signal winner
+email/contactability/region catalog alone cannot create top-rank result
+
+I also want a concise review summary
+When done, return:
+
+whether the implementation is now behaviorally correct end-to-end
+
+whether every ranking path applies recency/staleness consistently
+
+any remaining weak spots or edge cases
+
+any extra tests you added in this hardening pass
+
+one concrete before/after example showing how a stale carrier like 1 61 INC would now move down relative to stronger recent carriers
+
+Important:
+
+do not just tell me tests are green
+
+tell me whether the actual ranking behavior now matches the product intent
+
+if any branch still violates the intent, fix it before responding
+
+If there is any ambiguity, prefer the version that makes the top of the lane suggestion list feel trustworthy to a human operator reviewing a live lane.

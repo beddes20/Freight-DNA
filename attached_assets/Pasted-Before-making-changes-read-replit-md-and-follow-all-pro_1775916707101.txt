@@ -1,0 +1,254 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+Context:
+We already have:
+- Email Intelligence Layer v1
+- email_messages / email_signals
+- account + carrier associations to email threads
+- early Next Best Actions (NBAs) based on email signals
+- work in flight on contact capture from email (carrier + customer)
+
+We now want to add a thin but opinionated layer of:
+- conversation ownership, and
+- “waiting state” tracking (who is the ball with?)
+across both customer and carrier threads.
+
+Goal:
+Build **Conversation Ownership & Waiting State v1**.
+
+High-level behavior:
+For any email thread linked to an account or carrier:
+- Assign a clear owner on our side (or explicitly mark unowned).
+- Track who the conversation is currently waiting on (us vs them).
+- Expose this in UI and NBAs so nothing falls through the cracks.
+
+--------------------------------------------------
+1. DATA MODEL
+--------------------------------------------------
+
+If suitable tables/fields already exist, extend them; otherwise add minimal new fields.
+
+A) Conversation / thread metadata
+Add fields on the thread-level object (or a new table) such as:
+- id
+- orgId
+- accountId / carrierId (nullable, one or both)
+- ownerUserId (nullable)
+- waitingState (enum: waiting_on_us, waiting_on_them, idle, resolved)
+- lastMessageId
+- lastIncomingAt (from external party)
+- lastOutgoingAt (from us)
+- lastStateChangeAt
+- importanceScore (optional, future use)
+- createdAt / updatedAt
+
+B) Ownership history (optional but nice)
+If you need historical tracking:
+- thread_ownership_events:
+  - id
+  - threadId
+  - previousOwnerUserId
+  - newOwnerUserId
+  - changeReason (auto_rule, manual_assign, reassign, fallback)
+  - createdAt
+  - createdByUserId (nullable for auto)
+
+Keep v1 as simple as possible, but prepare for evolution.
+
+--------------------------------------------------
+2. OWNERSHIP LOGIC
+--------------------------------------------------
+
+Implement a service, e.g.:
+conversationOwnershipService.ts
+
+Responsibilities:
+- determine initial owner for a thread
+- suggest owner changes over time
+- expose lightweight APIs for manual assignment
+
+Ownership heuristics (v1):
+
+1) If the thread is linked to a customer account:
+   - Prefer the account owner (sales or CSM) as default.
+   - If there is a primary ops contact for that account internally, optionally prefer that for ops-type threads.
+
+2) If the thread is linked to a carrier:
+   - Prefer the internal “carrier owner” / point of contact if that exists.
+   - Otherwise, use whoever initiated the first outbound email from our side.
+
+3) If the thread is initiated by one of our users:
+   - Default owner to that user.
+
+4) If we can’t determine a clear owner:
+   - Leave ownerUserId null but mark the thread as “unowned” so it surfaces in an “Unowned conversations” view/NBA.
+
+Reassignment heuristics (v1, conservative):
+
+- Do NOT auto-reassign frequently; noisy reassignment is worse than no ownership.
+- Only auto-reassign if:
+  - current owner is deactivated or left the org, OR
+  - there is a clear, org-level mapping (e.g. account reassigned to a new owner).
+- Manual reassignment should be easy from the UI.
+
+--------------------------------------------------
+3. WAITING STATE LOGIC
+--------------------------------------------------
+
+Implement a service, e.g.:
+conversationWaitingStateService.ts
+
+Responsibilities:
+- determine who the conversation is currently waiting on
+- update waitingState when new messages arrive or when we manually mark resolved
+
+States:
+- waiting_on_us
+- waiting_on_them
+- idle (no clear expectation)
+- resolved (thread done/archived)
+
+Rules:
+- When the last message in the thread is from an external contact (customer or carrier):
+  - waiting_on_us (we owe a response).
+- When the last message is from our side:
+  - waiting_on_them (we’re waiting for them).
+- Allow manual override from UI for edge cases (e.g. “mark as resolved”).
+
+Additional nuance (optional for v1, but design for it):
+- If there has been no activity for a long time (e.g. 30+ days), move to idle unless explicitly pinned.
+- If an external reply is clearly a “thanks / closed” style message, allow a quick “Mark resolved” action (manual in v1).
+
+--------------------------------------------------
+4. INTEGRATION WITH EMAIL PIPELINE
+--------------------------------------------------
+
+Wire both ownership and waitingState into the existing email processing flow.
+
+When a new message is ingested:
+- Identify thread / conversation.
+- If this is the first message in a thread:
+  - apply initial ownership rules.
+- Always:
+  - update lastMessageId, lastIncomingAt or lastOutgoingAt.
+  - recompute waitingState based on the sender (us vs them).
+  - update lastStateChangeAt if waitingState changed.
+
+This logic must be:
+- idempotent per message,
+- resilient to failures (do not break ingestion if ownership logic fails).
+
+--------------------------------------------------
+5. UI / UX
+--------------------------------------------------
+
+We need a very lightweight but visible surface for this.
+
+Per-thread UI:
+- Show owner:
+  - avatar + name or “Unowned” badge.
+  - clicking should allow manual assignment (dropdown of users in org).
+- Show waiting state:
+  - pill/badge with:
+    - “Waiting on us”
+    - “Waiting on customer”
+    - “Waiting on carrier”
+    - “Idle”
+    - “Resolved”
+- Actions:
+  - Change owner (if the user has permission).
+  - Set waiting state manually (e.g. mark resolved).
+
+List-level UI:
+- Allow filtering/sorting by:
+  - ownerUserId
+  - waitingState
+- Provide quick views like:
+  - “My conversations — waiting on me”
+  - “My conversations — waiting on them”
+  - “Unowned conversations — waiting on us”
+- Expose counts for each category to support NBAs and dashboards.
+
+Visual cues:
+- “Waiting on us” threads should be visually prominent (e.g., accent border or badge).
+- “Unowned + waiting on us” is especially important.
+
+--------------------------------------------------
+6. NEXT BEST ACTIONS / ALERTING
+--------------------------------------------------
+
+Use the new state in your existing NBA/intelligence layer.
+
+At minimum, define NBAs like:
+- “Unowned conversation waiting on us” for X+ hours.
+- “High-value account conversation waiting on us for > N hours.”
+- “Carrier conversation waiting on us on an active load.”
+- “You have N conversations waiting on you.”
+
+Exact thresholds can be configuration or simple constants in v1.
+
+The goal:
+- nobody asks “what do I need to respond to?”
+- reps can quickly see and clear their queue of “waiting on us” conversations.
+
+--------------------------------------------------
+7. INTERNAL / API ENDPOINTS
+--------------------------------------------------
+
+Add or extend endpoints like:
+
+- GET /api/internal/conversations
+  - filters: accountId, carrierId, ownerUserId, waitingState, date ranges.
+- POST /api/internal/conversations/:id/owner
+  - body: { ownerUserId | null }
+- POST /api/internal/conversations/:id/waiting-state
+  - body: { waitingState }
+
+Use existing auth + org scoping.
+
+--------------------------------------------------
+8. TESTS
+--------------------------------------------------
+
+Add tests for:
+
+A) Ownership
+- new thread from our user → owner set to that user.
+- thread linked to account with account owner → owner set correctly.
+- thread with no clear mapping → ownerUserId null, flagged unowned.
+- deactivated owner or reassigned account → owner updated per rules.
+
+B) Waiting state
+- last message from external → waiting_on_us.
+- last message from our side → waiting_on_them.
+- manual set to resolved → stays resolved after new signals until new email arrives.
+- state transitions update lastStateChangeAt.
+
+C) Integration
+- email ingestion runs ownership + waitingState logic without failing.
+- repeated processing of same message is idempotent.
+
+D) UI contract
+- list filters by owner and waitingState work.
+- manual changes propagate to the underlying records.
+
+--------------------------------------------------
+9. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. Short summary of changes.
+2. Exact files changed.
+3. New/updated schemas and enums.
+4. Ownership rules implemented (with any org-specific assumptions).
+5. Waiting-state rules and edge cases.
+6. UI surfaces for owner + waiting state.
+7. List filtering and NBA hooks.
+8. Tests added/updated.
+9. Limitations and recommended next iterations (e.g., SLA timers, importance scoring).
+
+Success criteria:
+- Every conversation can have a clear owner (or be explicitly unowned).
+- It is obvious who the conversation is currently waiting on.
+- Reps can quickly see “what do I owe replies on?” across customers and carriers.
+- No extra inbox chaos, just clearer responsibility and next steps.

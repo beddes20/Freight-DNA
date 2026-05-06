@@ -1,0 +1,280 @@
+Use this exact prompt in Replit:
+
+We need to debug and fix why the History tab in the Lock In Capacity popup inside the Lane Work Queue is showing no information.
+
+This is an existing feature investigation + fix, not a redesign.
+
+Problem
+In the Lock In Capacity side panel / popup in the Lane Work Queue, the History tab is not showing the expected data.
+
+I need you to determine why the History tab is empty and fix it so historical lane/carrier/outreach activity shows correctly.
+
+This should be treated as a real debugging task, not a cosmetic UI patch.
+
+Objective
+Trace the full data flow for the History tab and identify where it is breaking:
+
+no data being fetched
+
+wrong query / filter
+
+wrong lane identifier being passed
+
+history API returning empty
+
+UI expecting a different shape than API returns
+
+tab not requesting data on activation
+
+data exists but is filtered out incorrectly
+
+history source is only outreach logs and not broader lane history
+
+any other mismatch
+
+Then implement the fix cleanly.
+
+What I want investigated
+Please debug the History tab end-to-end.
+
+Check 1: Is the History tab actually loading data?
+Verify:
+
+whether the tab triggers a fetch when opened
+
+whether it fetches on panel open
+
+whether it depends on lane selection state correctly
+
+whether there is a network call at all
+
+Check 2: What data source is the History tab using?
+Identify exactly what powers the History tab today:
+
+outreach logs
+
+lane history
+
+benchmark / bench entries
+
+carrier outreach log table
+
+prior loads on the lane
+
+prior assignments
+
+prior send events
+
+something else
+
+I need clarity on whether the tab is empty because:
+
+the wrong source is being queried
+
+the source is too narrow
+
+or the mapping/filter is broken
+
+Check 3: Is the correct lane context being passed?
+Verify the popup is passing the right identifiers:
+
+lane ID
+
+customer ID
+
+origin/destination
+
+normalized lane key if applicable
+
+lane work queue row context
+
+Possible issue:
+the History tab may be querying with the wrong ID or missing lane context, so it returns nothing.
+
+Check 4: Is the backend returning data?
+Inspect the relevant endpoint / query.
+Determine:
+
+whether the backend returns empty data
+
+whether the data exists in DB but filters are too strict
+
+whether the endpoint is filtering by the wrong lane / carrier / date range
+
+whether the frontend is expecting a different response shape
+
+Check 5: Is the frontend rendering empty incorrectly?
+Possible issues:
+
+wrong property names
+
+empty-state triggered before fetch completes
+
+tab never updates after async load
+
+data shape mismatch
+
+silent error swallowed in UI
+
+history only renders if one specific field exists
+
+Please confirm whether the data is:
+
+truly absent
+
+present but not rendered
+
+or never requested
+
+Expected behavior
+The History tab should show useful historical context for the lane in the Lock In Capacity flow.
+
+At minimum, it should show whatever historical data the feature is intended to expose, such as:
+
+prior outreach on this lane
+
+prior carrier contact attempts
+
+prior send/log actions
+
+prior lane coverage history
+
+previously used / contacted carriers
+
+historical execution context tied to this lane
+
+If there is no matching history, then the UI should show a proper empty state like:
+
+“No history yet for this lane”
+instead of appearing broken or silently blank.
+
+Fix requirements
+1) Find the actual root cause
+Do not just add placeholder text and call it fixed.
+I need the true reason the history is empty.
+
+2) Fix the data path
+Once identified, fix the correct layer:
+
+frontend state / tab activation
+
+API request
+
+backend query
+
+join/filter logic
+
+response mapping
+
+rendering logic
+
+empty state handling
+
+3) Add useful instrumentation if needed
+If this flow is hard to debug, add temporary logs or safe debug output while you trace:
+
+lane ID being passed
+
+endpoint called
+
+response count
+
+filtered item count
+
+Then remove or clean up noisy debug output before finalizing.
+
+4) Add a real empty state
+If there is genuinely no history, do not render a blank panel.
+Render an intentional empty state such as:
+
+“No outreach or lane history yet”
+
+“History will appear here after outreach is logged”
+
+But only after you confirm the query is functioning correctly.
+
+Specific things to inspect
+Please check all of the following:
+
+the component that renders the Lock In Capacity popup / drawer
+
+the tab-switching logic
+
+the History tab component
+
+any hook used to load history
+
+any API route used for lane history / outreach history
+
+any backend service or query used by that route
+
+whether it pulls from carrier_outreach_logs or another history source
+
+whether lane-level history depends on bench entries or sent outreach records
+
+whether the current lane ID is null / stale / mismatched
+
+whether the tab is accidentally filtering to only one type of history that often does not exist
+
+Deliverable behavior I want
+After the fix:
+
+opening the History tab should reliably show relevant historical records for that lane when they exist
+
+if data exists in backend, it should render
+
+if no data exists, the UI should show a clean empty state
+
+there should be no silent blank tab
+
+Tests required
+Please add/update tests for at least:
+
+Data fetch behavior
+History tab requests data with the correct lane context
+
+switching to the History tab loads the expected data source
+
+Rendering behavior
+records render when API returns history
+
+empty state renders when API returns no records
+
+loading state renders while fetch is in progress
+
+silent blank state does not occur
+
+Mapping behavior
+frontend correctly handles current API response shape
+
+history items with expected fields render correctly
+
+Regression case
+a lane with known outreach/history data shows records in the History tab
+
+a lane with no history shows intentional empty state
+
+Output I want back
+Please return:
+
+the root cause of why the History tab was empty
+
+exact files changed
+
+whether the issue was frontend, backend, or both
+
+what data source the History tab now uses
+
+any edge cases or assumptions discovered
+
+Important:
+
+do not guess
+
+trace the real cause
+
+fix the actual data flow
+
+make the History tab reliable and explainable
+
+If multiple issues are found, fix the smallest correct end-to-end version so the History tab becomes trustworthy in the Lock In Capacity workflow.

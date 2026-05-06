@@ -1,0 +1,109 @@
+I need you to update the carrier import / seeding logic so it correctly handles TWO separate file types and cross-references them.
+
+Business goal:
+We already have a financial/TMS file that tells us which carriers we actually use on live freight.
+Now we also have a separate carrier rolodex file that contains richer carrier master-data like MC #, contact name, phone, email, legal name, DOT, SCAC, insurance/admin fields, etc.
+
+Key column mappings (very important):
+- In the FINANCIAL file, the carrier code column is: Payee code
+- In the CARRIER ROLODEX file:
+  - Carrier code: Payee code
+  - MC number: MC number
+  - City based in: City
+  - State based in: State
+  - Contact email: Contact email
+  - Phone number: Phone number
+
+I want the system to:
+1) read the financial file as operational history,
+2) read the carrier rolodex as carrier master data,
+3) cross-reference them by carrier code (Payee code),
+4) enrich the carriers we actually use on consistent freight.
+
+What I need you to build
+
+1. File type detection
+Detect these as different upload modes:
+
+A) Financial/TMS file mode
+- This is the daily freight file with load-level rows.
+- It contains customer / shipper / carrier activity and the carrier code used on each load.
+- Use it to identify:
+  - unique carriers actually used (by Payee code)
+  - freight history
+  - equipment history
+  - recurring / consistent lanes
+  - which carriers are actively hauling those lanes
+
+B) Carrier rolodex mode
+- This is a carrier directory / master-data file.
+- It contains one row per carrier and includes columns like:
+  - Payee code
+  - Name / Legal name
+  - City / State / Zip code
+  - MC number
+  - Phone number
+  - Contact email
+  - plus other admin / insurance fields
+- The key join field is Payee code (carrier code).
+
+2. Matching logic
+Implement carrier matching in this priority order:
+
+Priority 1:
+- Match rolodex row to existing carrier by exact orgId + Payee code
+
+Priority 2:
+- If no Payee code match, try exact orgId + MC number
+
+Priority 3:
+- If still no match, try exact orgId + normalized legal name / name
+  - trim whitespace
+  - uppercase
+  - collapse duplicate spaces
+
+Never match across orgs.
+
+3. Enrichment rules
+When a carrier from the rolodex matches a carrier discovered from financial history:
+- Enrich the existing carrier instead of creating a duplicate.
+- Populate missing fields such as:
+  - mcNumber (from “MC number”)
+  - city (from “City”)
+  - state (from “State”)
+  - contactEmail (from “Contact email”)
+  - phone (from “Phone number”)
+- Do NOT overwrite existing non-empty values with blank/null rolodex values.
+- Prefer:
+  - non-empty rolodex value over empty existing value
+  - existing non-empty value over blank rolodex value
+- For strong identifiers like MC number, log conflicts instead of silently overwriting.
+
+4. Consistent freight cross-reference
+After the import logic runs, the system should be able to answer:
+- Which Payee codes in the financial file represent carriers used on consistent / recurring freight?
+- For those Payee codes, which carriers were enriched from the rolodex with MC number, city/state, phone, and contact email?
+- Which carriers on recurring lanes still lack contact email or phone?
+
+Use the financial file + recurring lane logic for “consistent freight”.
+The rolodex should only enrich those carrier records, not define consistency by itself.
+
+5. Safe output behavior
+For each upload, produce a summary like:
+- rows read
+- carriers created
+- carriers matched and enriched (by Payee code / MC number)
+- carriers skipped (already up to date)
+- carriers with conflicts (e.g., different MC number for same Payee code)
+- recurring-lane carriers enriched with contact info
+- recurring-lane carriers still missing contact info
+
+6. Guardrails
+- Skip blank Payee code and blank Name rows.
+- Never create duplicates when a carrier with that Payee code already exists in that org.
+- Never let a rolodex upload create cross-org joins.
+- Do not confuse City/State columns with operating regions; treat them strictly as address fields.
+- Keep the financial import path and rolodex import path separate and clear in code.
+
+Most important outcome:
+Carriers we actually use on recurring/consistent freight (by Payee code in the financial file) are automatically enriched from the rolodex with MC number, city/state, phone, and contact email, so LMs/AMs have clean contactable carriers when they work those lanes.

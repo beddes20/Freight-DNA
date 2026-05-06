@@ -1,4 +1,6 @@
-import { ClipboardList, LayoutGrid, Network, Trophy, Users, LogOut, BarChart3, History, Zap, MessagesSquare, ListTodo, TrendingUp, Target, Plane, GraduationCap, Wrench, FileBarChart2, Bell, KeyRound, Inbox } from "lucide-react";
+import { LayoutGrid, Trophy, Users, LogOut, BarChart3, History, MessagesSquare, ListTodo, TrendingUp, Plane, GraduationCap, Wrench, KeyRound, Inbox, Truck, Medal, Settings, Phone, PhoneCall, Building2, PanelLeftClose, PanelLeftOpen, HelpCircle, Keyboard, BrainCircuit, Brain, MailCheck, ChevronDown, Activity, GitMerge, Filter, BotMessageSquare, RefreshCw, type LucideIcon } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import {
   Sidebar,
@@ -11,48 +13,40 @@ import {
   SidebarMenuItem,
   SidebarHeader,
   SidebarFooter,
+  useSidebar,
 } from "@/components/ui/sidebar";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Label } from "@/components/ui/label";
+import { SignatureEditor } from "@/components/signature-editor";
+import { WebexMyConnection } from "@/components/webex-my-connection";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { useAuth } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
-import { useNotificationCounts, useMarkNotificationsRead } from "@/hooks/use-notifications";
+import { useNotificationCounts } from "@/hooks/use-notifications";
+import { NotificationBell } from "@/components/notification-bell";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { SIDEBAR_TOOLTIP_DEFAULT_MAP } from "@/lib/sidebar-tooltip-catalog";
+import type { SidebarTooltip } from "@shared/schema";
+import {
+  navItems,
+  customerFacingItems,
+  carrierFacingItems,
+  aiHubItem,
+  DAILY_PRIORITIES_ROLES,
+  type NavItem,
+} from "@/lib/nav-items";
+import {
+  isFeatureVisibleFor,
+  isFeatureDisabledFor,
+  featurePreviewLabel,
+  featurePreviewTooltip,
+} from "@/lib/feature-visibility";
 import vtLogoWhite from "@assets/value-truck-logo-white.png";
 
-const SALES_ROLES = ["admin", "director", "national_account_manager", "account_manager", "sales", "sales_director"];
-
-const navItems = [
-  { title: "Dashboard",         url: "/",                 icon: LayoutGrid    },
-  { title: "Customers",         url: "/customers",        icon: Network,       roles: SALES_ROLES },
-  { title: "Top Opportunities", url: "/top-opportunities",icon: Zap,           roles: SALES_ROLES },
-  { title: "1:1's",             url: "/one-on-one",       icon: MessagesSquare },
-  { title: "Tasks",             url: "/tasks",            icon: ListTodo      },
-  {
-    title: "Team Performance",
-    url: "/team-performance",
-    icon: TrendingUp,
-    roles: ["admin", "director", "national_account_manager", "sales", "sales_director"],
-  },
-  { title: "Goals",           url: "/goals",      icon: Target         },
-  { title: "Report Cards",    url: "/reports",    icon: FileBarChart2, roles: ["admin", "director", "national_account_manager", "sales_director"] },
-  { title: "My Report Card",  url: "/report/me",  icon: FileBarChart2, roles: ["account_manager", "sales", "logistics_manager", "logistics_coordinator"] },
-  { title: "PTO Passoff",     url: "/pto-passoff",icon: Plane          },
-  {
-    title: "Coordinators Corner",
-    url: "/coordinators-corner",
-    icon: KeyRound,
-    roles: ["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator"],
-  },
-];
-
-const pipelineItems = [
-  { title: "RFP & Awards",   url: "/rfp-awards",     icon: Trophy       },
-  { title: "Lane Research",  url: "/research-tasks", icon: ClipboardList },
-];
-
-const toolItems = [
-  { title: "Resources", url: "/tools",    icon: Wrench        },
-  { title: "Training",  url: "/training", icon: GraduationCap },
-];
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -65,11 +59,66 @@ const ROLE_LABELS: Record<string, string> = {
   logistics_coordinator: "Logistics Coordinator",
 };
 
-function NotificationBadge({ count }: { count: number }) {
+function CollapsibleGroup({
+  label,
+  children,
+  defaultOpen = true,
+  storageKey,
+}: {
+  label: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  storageKey?: string;
+}) {
+  // When `storageKey` is provided, the open/closed state is persisted in
+  // localStorage so the rep's preference survives page reloads. Reading
+  // happens in useEffect to avoid SSR/hydration mismatch — initial render
+  // always uses `defaultOpen`, then we sync once on mount.
+  const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (!storageKey || typeof window === "undefined") return;
+    try {
+      const v = window.localStorage.getItem(storageKey);
+      if (v === "1") setOpen(true);
+      else if (v === "0") setOpen(false);
+    } catch {
+      // localStorage may be blocked in private mode — fall back to default.
+    }
+  }, [storageKey]);
+  const toggle = () => {
+    setOpen(prev => {
+      const next = !prev;
+      if (storageKey && typeof window !== "undefined") {
+        try { window.localStorage.setItem(storageKey, next ? "1" : "0"); } catch { /* ignore */ }
+      }
+      return next;
+    });
+  };
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel
+        className="cursor-pointer select-none flex items-center justify-between pr-2 hover:text-sidebar-foreground/80 transition-colors"
+        onClick={toggle}
+        data-testid={`toggle-group-${label.toLowerCase().replace(/[\s/]+/g, "-")}`}
+      >
+        <span>{label}</span>
+        <ChevronDown className={`h-3.5 w-3.5 text-sidebar-foreground/40 transition-transform duration-200 ${open ? "" : "-rotate-90"}`} />
+      </SidebarGroupLabel>
+      {open && (
+        <SidebarGroupContent>
+          <SidebarMenu>{children}</SidebarMenu>
+        </SidebarGroupContent>
+      )}
+    </SidebarGroup>
+  );
+}
+
+function NotificationBadge({ count, color = "red" }: { count: number; color?: "red" | "green" | "amber" }) {
   if (count <= 0) return null;
+  const bg = color === "green" ? "bg-green-600" : color === "amber" ? "bg-amber-500" : "bg-red-500";
   return (
     <span
-      className="ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-semibold leading-none text-white group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:-top-1 group-data-[collapsible=icon]:-right-1 group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:min-w-4 group-data-[collapsible=icon]:text-[9px]"
+      className={`ml-auto flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full ${bg} px-1 text-[10px] font-semibold leading-none text-white group-data-[collapsible=icon]:absolute group-data-[collapsible=icon]:-top-1 group-data-[collapsible=icon]:-right-1 group-data-[collapsible=icon]:h-4 group-data-[collapsible=icon]:min-w-4 group-data-[collapsible=icon]:text-[9px]`}
       data-testid="badge-notification-count"
     >
       {count > 99 ? "99+" : count}
@@ -77,48 +126,262 @@ function NotificationBadge({ count }: { count: number }) {
   );
 }
 
-function NavLink({ item, isActive, badge }: { item: { title: string; url: string; icon: React.ElementType }; isActive: boolean; badge?: number }) {
+function navTooltip(title: string, description: string) {
+  return {
+    alwaysShow: true,
+    children: (
+      <div className="max-w-[15rem]">
+        <p className="font-medium">{title}</p>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+    ),
+  };
+}
+
+function useSidebarTooltipOverrides() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ items: SidebarTooltip[] }>({
+    queryKey: ["/api/sidebar-tooltips"],
+    enabled: !!user,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const map: Record<string, string> = {};
+  for (const t of data?.items ?? []) map[t.itemKey] = t.description;
+  return map;
+}
+
+function resolveDescription(key: string, fallback: string, overrides?: Record<string, string>): string {
+  const o = overrides?.[key];
+  if (typeof o === "string" && o.trim().length > 0) return o;
+  return fallback;
+}
+
+function NavLink({
+  item,
+  isActive,
+  badge,
+  badgeColor,
+  overrides,
+  disabled,
+  previewLabel,
+  previewTooltip,
+}: {
+  item: NavItem;
+  isActive: boolean;
+  badge?: number;
+  badgeColor?: "red" | "green" | "amber";
+  overrides?: Record<string, string>;
+  /** When true, the entry renders greyed and clicks are intercepted. */
+  disabled?: boolean;
+  /** Small tag rendered next to an in-development entry (shown for both
+   *  greyed-and-blocked non-admins AND click-through-enabled admins). */
+  previewLabel?: string | null;
+  /** Replaces the title/description tooltip when the entry is in development. */
+  previewTooltip?: string | null;
+}) {
   const Icon = item.icon;
+  const description = resolveDescription(item.title, item.description, overrides);
+  const tooltipText = previewTooltip
+    ? previewTooltip
+    : navTooltip(item.title, description);
+  // Greyed visual is driven off `previewLabel` (i.e. an in-development
+  // entry) rather than `disabled`, so admins still see the greyed
+  // treatment even though they get full click-through.
+  const greyed = !!previewLabel;
   return (
     <SidebarMenuItem>
-      <SidebarMenuButton asChild isActive={isActive} tooltip={item.title}>
-        <Link href={item.url} data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`} className="relative">
+      <SidebarMenuButton
+        asChild
+        isActive={!disabled && isActive}
+        tooltip={tooltipText}
+        aria-disabled={disabled || undefined}
+        className={greyed ? "opacity-60" : undefined}
+      >
+        <Link
+          href={item.url}
+          data-testid={`link-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`}
+          className="relative"
+          aria-disabled={disabled || undefined}
+          tabIndex={disabled ? -1 : undefined}
+          onClick={disabled ? (e) => e.preventDefault() : undefined}
+        >
           <Icon className="h-4 w-4" />
           <span>{item.title}</span>
-          {badge !== undefined && <NotificationBadge count={badge} />}
+          {previewLabel && (
+            <span
+              className="ml-auto text-[9px] uppercase tracking-wide font-semibold text-muted-foreground/70 border border-muted-foreground/30 rounded px-1 py-0.5"
+              data-testid={`badge-feature-${item.title.toLowerCase().replace(/[\s&]+/g, "-")}`}
+            >
+              {previewLabel}
+            </span>
+          )}
+          {!previewLabel && badge !== undefined && <NotificationBadge count={badge} color={badgeColor} />}
         </Link>
       </SidebarMenuButton>
     </SidebarMenuItem>
   );
 }
 
+function useUnactionedReplyCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/recurring-lanes/unactioned-reply-count"],
+    enabled: !!user,
+    refetchInterval: 60_000,
+    staleTime: 50_000,
+    retry: false,
+  });
+  return data?.count ?? 0;
+}
+
+function useConversationsWaitingCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/internal/conversations/my-count"],
+    enabled: !!user,
+    refetchInterval: 90_000,
+    staleTime: 80_000,
+    retry: false,
+  });
+  return data?.count ?? 0;
+}
+
+function useDailyWorkspaceCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ totalCards: number }>({
+    queryKey: ["/api/nba/daily-workspace"],
+    enabled: !!user && DAILY_PRIORITIES_ROLES.includes(user.role),
+    refetchInterval: 5 * 60_000,
+    staleTime: 4 * 60_000,
+    retry: false,
+  });
+  return data?.totalCards ?? 0;
+}
+
+// Task #690 — sidebar badge for the Customer Quotes entry. Shows the number
+// of stale quote follow-ups for the current org, polled every 90s and
+// refreshed on tab focus. The endpoint is count-only and shares the
+// list endpoint's per-org cache, so polling is cheap even with many open
+// tabs. Live-sync invalidates this query on `customer_quote` and
+// `customer_quote_followup` topics so a quote answered in another tab
+// drops the badge within ~2s.
+const STALE_FOLLOWUP_ROLES = ["admin", "director", "national_account_manager", "account_manager"];
+function useStaleFollowupCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/customer-quotes/stale-followups/count"],
+    enabled: !!user && STALE_FOLLOWUP_ROLES.includes(user.role),
+    refetchInterval: 90_000,
+    // Keep polling while the tab is hidden so a rep returning to the
+    // window already sees an up-to-date badge instead of waiting for
+    // the next focus-driven refetch.
+    refetchIntervalInBackground: true,
+    // Force a refetch every time the rep refocuses the window so the
+    // badge reflects work taken in another tab (or another device)
+    // even if the cached value isn't yet considered stale.
+    refetchOnWindowFocus: "always",
+    staleTime: 60_000,
+    retry: false,
+  });
+  return data?.count ?? 0;
+}
+
+const INTEL_REVIEW_ROLES = ["admin", "director"];
+
+function usePendingIntelCount() {
+  const { user } = useAuth();
+  const { data } = useQuery<{ count: number }>({
+    queryKey: ["/api/carrier-hub/pending-intel-count"],
+    enabled: !!user && INTEL_REVIEW_ROLES.includes(user.role),
+    refetchInterval: 60_000,
+    staleTime: 50_000,
+    retry: false,
+  });
+  return data?.count ?? 0;
+}
+
 export function AppSidebar() {
-  const [location, navigate] = useLocation();
+  const [location] = useLocation();
   const { user, logout } = useAuth();
-  const { taskCount, otherCount, otherUnreadIds } = useNotificationCounts();
-  const markOtherRead = useMarkNotificationsRead();
+  const { taskCount, suggestionCount, podCount } = useNotificationCounts();
+  const unactionedReplyCount = useUnactionedReplyCount();
+  const conversationsWaitingCount = useConversationsWaitingCount();
+  const pendingIntelCount = usePendingIntelCount();
+  const dailyWorkspaceCount = useDailyWorkspaceCount();
+  const staleFollowupCount = useStaleFollowupCount();
+  const tooltipOverrides = useSidebarTooltipOverrides();
+  const desc = (key: string, fallback?: string) =>
+    resolveDescription(key, fallback ?? SIDEBAR_TOOLTIP_DEFAULT_MAP[key] ?? "", tooltipOverrides);
+  const { toast } = useToast();
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [signature, setSignature] = useState("");
+  const { toggleSidebar, open, isMobile } = useSidebar();
+
+  const saveSignatureMutation = useMutation({
+    mutationFn: async (sig: string) => {
+      const cleaned = sig
+        .replace(/<p[^>]*>(\s|&nbsp;|<br\s*\/?>)*<\/p>/gi, "")
+        .replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>")
+        .trim();
+      const res = await apiRequest("PATCH", `/api/users/${user?.id}`, { emailSignature: cleaned || null });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Profile saved" });
+      setProfileOpen(false);
+    },
+    onError: () => toast({ title: "Failed to save profile", variant: "destructive" }),
+  });
+
+  function openProfile() {
+    setSignature(user?.emailSignature ?? "");
+    setProfileOpen(true);
+  }
 
   const isActive = (url: string) =>
     url === "/"
       ? location === "/"
-      : location.startsWith(url) || (url === "/customers" && location.startsWith("/companies/"));
+      : url === "/ai"
+        // /ai must not match sibling-prefixed routes like /ai-intelligence,
+        // /ai-intelligence-legacy, or /ai-agent. Use path-boundary check.
+        ? location === "/ai" || location.startsWith("/ai/")
+        : location.startsWith(url) || (url === "/customers" && location.startsWith("/companies/")) ||
+          (url === "/research-tasks" && (location.startsWith("/research-tasks") || location.startsWith("/rfp-lane-search") || location.startsWith("/carrier-lane-search")));
 
   return (
+    <>
     <Sidebar collapsible="icon">
+      {/* Desktop rail toggle button */}
+      {!isMobile && (
+        <button
+          onClick={toggleSidebar}
+          title={open ? "Collapse sidebar" : "Expand sidebar"}
+          data-testid="button-sidebar-rail-toggle"
+          className="absolute -right-3 top-20 z-50 hidden md:flex h-6 w-6 items-center justify-center rounded-full border border-sidebar-border bg-sidebar text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent shadow-sm transition-colors"
+          aria-label={open ? "Collapse sidebar" : "Expand sidebar"}
+        >
+          {open ? (
+            <PanelLeftClose className="h-3.5 w-3.5" />
+          ) : (
+            <PanelLeftOpen className="h-3.5 w-3.5" />
+          )}
+        </button>
+      )}
       <SidebarHeader className="p-4 border-b border-sidebar-border">
         {/* Expanded sidebar header */}
         <div className="flex flex-col items-center justify-center py-1 gap-1 group-data-[collapsible=icon]:hidden">
           {user?.organizationSlug === "demo" ? (
             <div className="flex flex-col items-center gap-0.5">
               <svg viewBox="0 0 120 36" width="110" height="33" aria-label="Freight DNA">
-                {/* Stylized truck outline */}
                 <rect x="2" y="10" width="70" height="20" rx="3" fill="none" stroke="#ffb400" strokeWidth="2"/>
                 <rect x="72" y="16" width="26" height="14" rx="2" fill="none" stroke="#ffb400" strokeWidth="2"/>
                 <circle cx="18" cy="32" r="4" fill="#ffb400"/>
                 <circle cx="52" cy="32" r="4" fill="#ffb400"/>
                 <circle cx="88" cy="32" r="4" fill="#ffb400"/>
                 <line x1="72" y1="23" x2="72" y2="30" stroke="#ffb400" strokeWidth="1.5"/>
-                {/* DNA double helix hint */}
                 <path d="M 100,12 Q 104,17 100,22 Q 96,27 100,32" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
                 <path d="M 108,12 Q 104,17 108,22 Q 112,27 108,32" fill="none" stroke="#ffb400" strokeWidth="1.5" strokeLinecap="round"/>
                 <line x1="100" y1="17" x2="108" y2="17" stroke="#ffb400" strokeWidth="1"/>
@@ -137,7 +400,6 @@ export function AppSidebar() {
             <span className="font-bold">N</span>ot{" "}
             <span className="font-bold">A</span>cross
           </p>
-          {/* Farmer → Hunter icon */}
           <div className="flex items-center justify-center mt-1" title="Farmer → Hunter">
             <svg viewBox="0 0 134 46" width="90" height="30" aria-label="Farmer to Hunter">
               <line x1="38" y1="4" x2="24" y2="21" stroke="#ffb400" strokeWidth="2.5" strokeLinecap="round"/>
@@ -183,57 +445,255 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems
-                .filter(item => !('roles' in item) || (user?.role && (item as any).roles.includes(user.role)))
+                .filter(item => item.status !== "admin_preview" && isFeatureVisibleFor(item, user?.role))
                 .map(item => (
                   <NavLink
                     key={item.title}
                     item={item}
                     isActive={isActive(item.url)}
                     badge={item.title === "Tasks" ? taskCount : undefined}
+                    overrides={tooltipOverrides}
+                    disabled={isFeatureDisabledFor(item, user?.role)}
+                    previewLabel={featurePreviewLabel(item.status)}
+                    previewTooltip={featurePreviewTooltip(item.title, item.status, user?.role)}
                   />
                 ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* ── Pipeline (hidden for LM/LC roles) ── */}
-        {SALES_ROLES.includes(user?.role ?? "") && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Pipeline</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {pipelineItems.map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+        {/* ── Customer-Facing ── */}
+        {(() => {
+          const visible = customerFacingItems.filter(item => item.status !== "admin_preview" && isFeatureVisibleFor(item, user?.role));
+          if (visible.length === 0) return null;
+          return (
+            <CollapsibleGroup label="Customer-Facing">
+              {visible.map(item => (
+                <NavLink
+                  key={item.title}
+                  item={item}
+                  isActive={isActive(item.url)}
+                  overrides={tooltipOverrides}
+                  disabled={isFeatureDisabledFor(item, user?.role)}
+                  previewLabel={featurePreviewLabel(item.status)}
+                  previewTooltip={featurePreviewTooltip(item.title, item.status, user?.role)}
+                  badge={
+                    item.title === "Customer Quotes" && staleFollowupCount > 0
+                      ? staleFollowupCount
+                      : item.title === "Conversations"
+                        ? conversationsWaitingCount
+                        : undefined
+                  }
+                  badgeColor={item.title === "Conversations" ? "red" : "amber"}
+                />
+              ))}
+            </CollapsibleGroup>
+          );
+        })()}
 
-        {/* ── Tools ── */}
-        <SidebarGroup>
-          <SidebarGroupLabel>Tools</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {toolItems.map(item => <NavLink key={item.title} item={item} isActive={isActive(item.url)} />)}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {/* ── AI (single hub entry — Task #742) ── */}
+        {/* All seven AI surfaces collapse into one row that opens the AI Hub
+            tabbed page. The Today's Priorities count surfaces here as the
+            row badge so reps still see actionable signal volume at a glance,
+            even though the priority list now lives one click deeper. We
+            render this as a label-less SidebarGroup so it sits as a single
+            clean row between the Customer-Facing and Carrier-Facing groups
+            without earning its own collapsible header. */}
+        {aiHubItem.status !== "admin_preview" && isFeatureVisibleFor(aiHubItem, user?.role) && (() => {
+          const aiDisabled = isFeatureDisabledFor(aiHubItem, user?.role);
+          const aiPreviewLabel = featurePreviewLabel(aiHubItem.status);
+          const aiPreviewTooltip = featurePreviewTooltip(aiHubItem.title, aiHubItem.status, user?.role);
+          const aiTooltip = aiPreviewTooltip
+            ?? navTooltip(aiHubItem.title, resolveDescription(aiHubItem.title, aiHubItem.description, tooltipOverrides));
+          // Greyed visual is driven off the in-development label rather
+          // than `disabled` so admins still see the greyed treatment
+          // even though they get full click-through.
+          const aiGreyed = !!aiPreviewLabel;
+          return (
+            <SidebarGroup>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={!aiDisabled && (isActive(aiHubItem.url) || isActive("/daily-priorities") || isActive("/valueiq") || location.startsWith("/ai/") || location === "/ai" || isActive("/admin/ai-engagement") || isActive("/admin/copilot-analytics"))}
+                      tooltip={aiTooltip}
+                      aria-disabled={aiDisabled || undefined}
+                      className={aiGreyed ? "opacity-60" : undefined}
+                    >
+                      <Link
+                        href={aiHubItem.url}
+                        data-testid="link-ai-hub"
+                        data-tour="tour-ai-hub"
+                        className="relative"
+                        aria-disabled={aiDisabled || undefined}
+                        tabIndex={aiDisabled ? -1 : undefined}
+                        onClick={aiDisabled ? (e) => e.preventDefault() : undefined}
+                      >
+                        <BotMessageSquare className="h-4 w-4" />
+                        <span>{aiHubItem.title}</span>
+                        {aiPreviewLabel && (
+                          <span
+                            className="ml-auto text-[9px] uppercase tracking-wide font-semibold text-muted-foreground/70 border border-muted-foreground/30 rounded px-1 py-0.5"
+                            data-testid="badge-feature-ai"
+                          >
+                            {aiPreviewLabel}
+                          </span>
+                        )}
+                        {!aiDisabled && dailyWorkspaceCount > 0 && DAILY_PRIORITIES_ROLES.includes(user?.role ?? "") && (
+                          <NotificationBadge count={dailyWorkspaceCount} color="green" />
+                        )}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          );
+        })()}
+
+        {/* ── Carrier-Facing ── */}
+        {(() => {
+          const visible = carrierFacingItems.filter(item => item.status !== "admin_preview" && isFeatureVisibleFor(item, user?.role));
+          if (visible.length === 0) return null;
+          return (
+            <CollapsibleGroup label="Carrier-Facing">
+              {visible.map(item => (
+                <NavLink
+                  key={item.title}
+                  item={item}
+                  isActive={isActive(item.url)}
+                  overrides={tooltipOverrides}
+                  disabled={isFeatureDisabledFor(item, user?.role)}
+                  previewLabel={featurePreviewLabel(item.status)}
+                  previewTooltip={featurePreviewTooltip(item.title, item.status, user?.role)}
+                  badge={
+                    (item.title === "Lane Work Queue" || item.title === "My Procurement")
+                      ? unactionedReplyCount
+                      : item.title === "Conversations"
+                        ? conversationsWaitingCount
+                        : item.title === "Carrier Hub"
+                          ? pendingIntelCount
+                          : item.title === "My PODs"
+                            ? podCount
+                            : undefined
+                  }
+                  badgeColor={item.title === "Conversations" ? "red" : item.title === "Carrier Hub" ? "red" : "green"}
+                />
+              ))}
+            </CollapsibleGroup>
+          );
+        })()}
 
         {/* ── Admin / Team ── */}
         {(user?.role === "admin" || user?.role === "director" || user?.role === "national_account_manager" || user?.role === "sales" || user?.role === "sales_director") && (
-          <SidebarGroup>
-            <SidebarGroupLabel>{user?.role === "admin" ? "Admin" : "Team"}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
+          <CollapsibleGroup label={user?.role === "admin" ? "Admin" : "Team"} defaultOpen={false}>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/admin/users"}>
+                  <SidebarMenuButton asChild isActive={location === "/admin/users"} tooltip={navTooltip(user?.role === "admin" ? "User Management" : "My Team", desc("User Management"))}>
                     <Link href="/admin/users" data-testid="link-admin-users">
                       <Users className="h-4 w-4" />
                       <span>{user?.role === "admin" ? "User Management" : "My Team"}</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
+                {(user?.role === "admin" || user?.role === "director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/carriers"} tooltip={navTooltip("Carrier Catalog", desc("Carrier Catalog"))}>
+                      <Link href="/admin/carriers" data-testid="link-admin-carriers">
+                        <Truck className="h-4 w-4" />
+                        <span>Carrier Catalog</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {(user?.role === "admin" || user?.role === "director" || user?.role === "sales_director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/monitored-mailboxes"} tooltip={navTooltip("Monitored Mailboxes", desc("Monitored Mailboxes"))}>
+                      <Link href="/admin/monitored-mailboxes" data-testid="link-admin-monitored-mailboxes">
+                        <MailCheck className="h-4 w-4" />
+                        <span>Monitored Mailboxes</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {/* Task #752 — Freight Capture rep audit (admin-only by spec) */}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/freight-capture-rep-audit"} tooltip={navTooltip("Freight Capture rep audit", "Audit names appearing as 'Rep' on the Freight Capture funnel and link, suppress, or merge them.")}>
+                      <Link href="/admin/freight-capture-rep-audit" data-testid="link-admin-freight-capture-rep-audit">
+                        <Filter className="h-4 w-4" />
+                        <span>FC Rep Audit</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {(user?.role === "admin" || user?.role === "director" || user?.role === "sales_director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/pod-intake"} tooltip={navTooltip("POD Intake", "AR mailbox proof-of-delivery routing.")}>
+                      <Link href="/admin/pod-intake" data-testid="link-admin-pod-intake">
+                        <MailCheck className="h-4 w-4" />
+                        <span>POD Intake</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {["admin", "director", "national_account_manager", "sales_director", "logistics_manager"].includes(user?.role ?? "") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/available-freight/imports"} tooltip={navTooltip("Freight Import Health", desc("Freight Import Health"))}>
+                      <Link href="/admin/available-freight/imports" data-testid="link-admin-freight-imports">
+                        <Truck className="h-4 w-4" />
+                        <span>Freight Import Health</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {(user?.role === "admin" || user?.role === "director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location.startsWith("/admin/carrier-intelligence")} tooltip={navTooltip("Carrier Intelligence Admin", "Backfill load_fact, parity reports, and import audits.")}>
+                      <Link href="/admin/carrier-intelligence" data-testid="link-admin-carrier-intelligence">
+                        <GitMerge className="h-4 w-4" />
+                        <span>Carrier Intel Admin</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {/* Task #742 — Copilot Analytics now lives in the AI Hub. */}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/webex-health"} tooltip={navTooltip("Webex Health", "Scope coverage, backfill progress, and enrichment-job retry queue.")}>
+                      <Link href="/admin/webex-health" data-testid="link-admin-webex-health">
+                        <Activity className="h-4 w-4" />
+                        <span>Webex Health</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/integrations-health"} tooltip={navTooltip("Integrations Health", "Live status of every external integration (SONAR, Graph, Webex, ZoomInfo, OneDrive, TRAC, Stripe).")}>
+                      <Link href="/admin/integrations-health" data-testid="link-admin-integrations-health">
+                        <Activity className="h-4 w-4" />
+                        <span>Integrations Health</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/endpoint-perf"} tooltip={navTooltip("Endpoint Perf", "Per-route p50/p95/p99 latency vs. budget.")}>
+                      <Link href="/admin/endpoint-perf" data-testid="link-admin-endpoint-perf">
+                        <Activity className="h-4 w-4" />
+                        <span>Endpoint Perf</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {/* AI Center moved to the new top-level "AI" sidebar group
+                    (alongside Today's Priorities and ValueIQ) so reps don't
+                    have to hunt across Customer-Facing and Admin to find
+                    the AI surface they need. */}
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/financials"}>
+                  <SidebarMenuButton asChild isActive={location === "/financials"} tooltip={navTooltip("Financials", "Revenue, margin, and financial reports.")}>
                     <Link href="/financials" data-testid="link-financials">
                       <BarChart3 className="h-4 w-4" />
                       <span>Financials</span>
@@ -241,27 +701,153 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
                 <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={location === "/historical-data"}>
+                  <SidebarMenuButton asChild isActive={location === "/historical-data"} tooltip={navTooltip("Lane Analytics", "Historical lane volumes and pricing trends.")}>
                     <Link href="/historical-data" data-testid="link-historical-data">
                       <History className="h-4 w-4" />
                       <span>Lane Analytics</span>
                     </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
-                {(user?.role === "admin" || user?.role === "director") && (
+                {/* Coordinators Corner moved here — role-specific, not main nav */}
+                {["admin", "director", "national_account_manager", "logistics_manager", "logistics_coordinator"].includes(user?.role ?? "") && (
                   <SidebarMenuItem>
-                    <SidebarMenuButton asChild isActive={location === "/feedback-inbox"}>
-                      <Link href="/feedback-inbox" data-testid="link-feedback-inbox">
-                        <Inbox className="h-4 w-4" />
-                        <span>Feedback Inbox</span>
+                    <SidebarMenuButton asChild isActive={location === "/coordinators-corner"} tooltip={navTooltip("Coordinators Corner", desc("Coordinators Corner"))}>
+                      <Link href="/coordinators-corner" data-testid="link-coordinators-corner">
+                        <KeyRound className="h-4 w-4" />
+                        <span>Coordinators Corner</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+                {/* PTO Passoff moved here — used infrequently */}
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location === "/pto-passoff"} tooltip={navTooltip("PTO Passoff", desc("PTO Passoff"))}>
+                    <Link href="/pto-passoff" data-testid="link-pto-passoff">
+                      <Plane className="h-4 w-4" />
+                      <span>PTO Passoff</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {/* Touchpoint History moved here — review tool, not daily nav */}
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={location === "/touchpoint-history"} tooltip={navTooltip("Touchpoint History", desc("Touchpoint History"))}>
+                    <Link href="/touchpoint-history" data-testid="link-touchpoint-history">
+                      <Phone className="h-4 w-4" />
+                      <span>Touchpoint History</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                {user?.role === "admin" && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/admin/sidebar-tooltips"} tooltip={navTooltip("Sidebar Tooltips", desc("Sidebar Tooltips"))}>
+                      <Link href="/admin/sidebar-tooltips" data-testid="link-admin-sidebar-tooltips">
+                        <HelpCircle className="h-4 w-4" />
+                        <span>Sidebar Tooltips</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {(user?.role === "admin" || user?.role === "director") && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location === "/feedback-inbox"} tooltip={navTooltip("Feedback Inbox", desc("Feedback Inbox"))}>
+                      <Link href="/feedback-inbox" data-testid="link-feedback-inbox">
+                        <Inbox className="h-4 w-4" />
+                        <span>Feedback Inbox</span>
+                        {suggestionCount > 0 && (
+                          <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-black leading-none" data-testid="badge-feedback-count">
+                            {suggestionCount > 9 ? "9+" : suggestionCount}
+                          </span>
+                        )}
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+          </CollapsibleGroup>
         )}
+
+        {/* ── Future Rollouts ──
+            Aggregates every nav entry currently marked `admin_preview`
+            into a single collapsible group rendered directly under the
+            Admin group. Only admins see this group (every entry inside
+            is `admin_preview`, which is hidden for non-admins by
+            `isFeatureVisibleFor`). The group never renders empty. */}
+        {(() => {
+          const futureRolloutItems: NavItem[] = [
+            ...navItems.filter(i => i.status === "admin_preview"),
+            ...customerFacingItems.filter(i => i.status === "admin_preview"),
+            ...(aiHubItem.status === "admin_preview" ? [aiHubItem] : []),
+            ...carrierFacingItems.filter(i => i.status === "admin_preview"),
+          ];
+          const visible = futureRolloutItems.filter(item => isFeatureVisibleFor(item, user?.role));
+          if (visible.length === 0) return null;
+          return (
+            <CollapsibleGroup
+              label="Future Rollouts"
+              defaultOpen={false}
+              storageKey="sidebar-group-future-rollouts"
+            >
+              {visible.map(item => {
+                // Preserve the AI hub's custom testid (`link-ai-hub`),
+                // tour anchor, and broader active-route matching so
+                // existing tests / muscle memory keep working.
+                if (item === aiHubItem) {
+                  const aiDisabled = isFeatureDisabledFor(aiHubItem, user?.role);
+                  const aiPreviewLabel = featurePreviewLabel(aiHubItem.status);
+                  const aiPreviewTooltip = featurePreviewTooltip(aiHubItem.title, aiHubItem.status, user?.role);
+                  const aiTooltip = aiPreviewTooltip
+                    ?? navTooltip(aiHubItem.title, resolveDescription(aiHubItem.title, aiHubItem.description, tooltipOverrides));
+                  const aiGreyed = !!aiPreviewLabel;
+                  return (
+                    <SidebarMenuItem key={aiHubItem.title}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={!aiDisabled && (isActive(aiHubItem.url) || isActive("/daily-priorities") || isActive("/valueiq") || location.startsWith("/ai/") || location === "/ai" || isActive("/admin/ai-engagement") || isActive("/admin/copilot-analytics"))}
+                        tooltip={aiTooltip}
+                        aria-disabled={aiDisabled || undefined}
+                        className={aiGreyed ? "opacity-60" : undefined}
+                      >
+                        <Link
+                          href={aiHubItem.url}
+                          data-testid="link-ai-hub"
+                          data-tour="tour-ai-hub"
+                          className="relative"
+                          aria-disabled={aiDisabled || undefined}
+                          tabIndex={aiDisabled ? -1 : undefined}
+                          onClick={aiDisabled ? (e) => e.preventDefault() : undefined}
+                        >
+                          <BotMessageSquare className="h-4 w-4" />
+                          <span>{aiHubItem.title}</span>
+                          {aiPreviewLabel && (
+                            <span
+                              className="ml-auto text-[9px] uppercase tracking-wide font-semibold text-muted-foreground/70 border border-muted-foreground/30 rounded px-1 py-0.5"
+                              data-testid="badge-feature-ai"
+                            >
+                              {aiPreviewLabel}
+                            </span>
+                          )}
+                          {!aiDisabled && dailyWorkspaceCount > 0 && DAILY_PRIORITIES_ROLES.includes(user?.role ?? "") && (
+                            <NotificationBadge count={dailyWorkspaceCount} color="green" />
+                          )}
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                }
+                return (
+                  <NavLink
+                    key={item.title}
+                    item={item}
+                    isActive={isActive(item.url)}
+                    overrides={tooltipOverrides}
+                    disabled={isFeatureDisabledFor(item, user?.role)}
+                    previewLabel={featurePreviewLabel(item.status)}
+                    previewTooltip={featurePreviewTooltip(item.title, item.status, user?.role)}
+                  />
+                );
+              })}
+            </CollapsibleGroup>
+          );
+        })()}
       </SidebarContent>
 
       <SidebarFooter className="p-3 border-t border-sidebar-border space-y-3">
@@ -272,31 +858,67 @@ export function AppSidebar() {
               <p className="text-xs text-sidebar-foreground/60">{ROLE_LABELS[user.role] || user.role}</p>
             </div>
             <div className="flex items-center gap-1 shrink-0">
-              {otherCount > 0 && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="relative text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-                  title={`${otherCount} unread notification${otherCount !== 1 ? "s" : ""}`}
-                  data-testid="button-notifications-bell"
-                  onClick={() => navigate("/notifications")}
-                >
-                  <Bell className="h-4 w-4" />
-                  <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold text-white" data-testid="badge-bell-count">
-                    {otherCount > 99 ? "99+" : otherCount}
-                  </span>
-                </Button>
-              )}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-                onClick={() => logout.mutate()}
-                data-testid="button-logout"
-                title="Log out"
-              >
-                <LogOut className="h-4 w-4" />
-              </Button>
+              <NotificationBell />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                    onClick={() => setHelpOpen(true)}
+                    data-testid="button-help"
+                    aria-label="Help & Resources"
+                  >
+                    <HelpCircle className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="center">
+                  <div className="max-w-[15rem]">
+                    <p className="font-medium">Help &amp; Resources</p>
+                    <p className="text-xs text-muted-foreground">{desc("Help & Resources")}</p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                    onClick={openProfile}
+                    data-testid="button-my-profile"
+                    aria-label="My profile"
+                  >
+                    <Settings className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="center">
+                  <div className="max-w-[15rem]">
+                    <p className="font-medium">My Profile</p>
+                    <p className="text-xs text-muted-foreground">{desc("My Profile")}</p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                    onClick={() => logout.mutate()}
+                    data-testid="button-logout"
+                    aria-label="Sign out"
+                  >
+                    <LogOut className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="center">
+                  <div className="max-w-[15rem]">
+                    <p className="font-medium">Sign Out</p>
+                    <p className="text-xs text-muted-foreground">{desc("Sign Out")}</p>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
             </div>
           </div>
         )}
@@ -306,5 +928,111 @@ export function AppSidebar() {
         </div>
       </SidebarFooter>
     </Sidebar>
+
+    {/* Help & Resources Dialog */}
+    <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
+      <DialogContent className="sm:max-w-sm" data-testid="dialog-help">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <HelpCircle className="h-4 w-4 text-blue-500" />
+            Help & Resources
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-2 py-1">
+          <Link
+            href="/tools"
+            onClick={() => setHelpOpen(false)}
+            className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50 transition-colors"
+            data-testid="link-resources-help"
+          >
+            <Wrench className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div>
+              <p className="text-sm font-medium">Resources</p>
+              <p className="text-xs text-muted-foreground">Templates, guides, and reference materials</p>
+            </div>
+          </Link>
+          <Link
+            href="/training"
+            onClick={() => setHelpOpen(false)}
+            className="flex items-center gap-3 rounded-lg border p-3 hover:bg-muted/50 transition-colors"
+            data-testid="link-training-help"
+          >
+            <GraduationCap className="h-4 w-4 text-muted-foreground shrink-0" />
+            <div>
+              <p className="text-sm font-medium">Training</p>
+              <p className="text-xs text-muted-foreground">Onboarding materials and learning content</p>
+            </div>
+          </Link>
+          <div className="rounded-lg border p-3 space-y-2" data-testid="section-keyboard-shortcuts">
+            <div className="flex items-center gap-2 mb-1">
+              <Keyboard className="h-4 w-4 text-muted-foreground shrink-0" />
+              <p className="text-sm font-medium">Keyboard Shortcuts</p>
+            </div>
+            {[
+              { keys: ["/"], label: "Focus global search" },
+              { keys: ["⌘", "K"], label: "Focus global search" },
+              { keys: ["Shift", "T"], label: "Log a Touch" },
+              { keys: ["Shift", "D"], label: "Go to Dashboard" },
+              { keys: ["Shift", "A"], label: "Go to Customers" },
+              { keys: ["Shift", "L"], label: "Open Lane Work Queue" },
+            ].map(({ keys, label }) => (
+              <div key={label + keys.join("")} className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">{label}</span>
+                <div className="flex items-center gap-1">
+                  {keys.map((k, i) => (
+                    <span key={i} className="text-[10px] font-mono px-1.5 py-0.5 rounded border bg-muted text-muted-foreground">{k}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => setHelpOpen(false)} data-testid="button-help-close">Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    {/* Profile Dialog */}
+    <Dialog open={profileOpen} onOpenChange={(v) => !v && setProfileOpen(false)}>
+      <DialogContent className="sm:max-w-md max-h-[85vh] flex flex-col overflow-hidden" data-testid="dialog-my-profile">
+        <DialogHeader>
+          <DialogTitle>My Profile</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2 overflow-y-auto flex-1 min-h-0">
+          <div className="space-y-1">
+            <p className="text-sm font-medium">{user?.name}</p>
+            <p className="text-xs text-muted-foreground">{user?.username}</p>
+          </div>
+          <div className="space-y-2">
+            <Label>Email Signature</Label>
+            <SignatureEditor value={signature} onChange={setSignature} />
+            <p className="text-xs text-muted-foreground">
+              Supports bold, italic, underline, color, alignment, links, and logos. Appended automatically to every email you compose.
+            </p>
+          </div>
+          <div className="space-y-2">
+            <Label>Integrations</Label>
+            <WebexMyConnection />
+            <p className="text-xs text-muted-foreground">
+              Need more settings? <Link href="/profile" onClick={() => setProfileOpen(false)} className="underline" data-testid="link-full-profile">Open the full profile page →</Link>
+            </p>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setProfileOpen(false)} data-testid="button-cancel-profile">
+            Cancel
+          </Button>
+          <Button
+            onClick={() => saveSignatureMutation.mutate(signature)}
+            disabled={saveSignatureMutation.isPending}
+            data-testid="button-save-profile"
+          >
+            {saveSignatureMutation.isPending ? "Saving..." : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

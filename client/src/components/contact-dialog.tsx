@@ -1,9 +1,19 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
-import { Loader2, HelpCircle } from "lucide-react";
+import { Loader2, HelpCircle, Trash2 } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useConfetti } from "@/components/confetti";
 import {
   Dialog,
@@ -45,6 +55,7 @@ const contactSchema = z.object({
   relationshipBase: z.string().optional(),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
   phone: z.string().optional(),
+  mobile: z.string().optional(),
   reportsToId: z.string().optional(),
   lanes: z.string().optional(),
   regions: z.string().optional(),
@@ -83,6 +94,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       relationshipBase: "",
       email: "",
       phone: "",
+      mobile: "",
       reportsToId: "",
       lanes: "",
       regions: "",
@@ -102,6 +114,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         relationshipBase: contact.relationshipBase || "",
         email: contact.email || "",
         phone: contact.phone || "",
+        mobile: contact.mobile || "",
         reportsToId: contact.reportsToId || "",
         lanes: contact.lanes?.join(", ") || "",
         regions: contact.regions?.join(", ") || "",
@@ -118,6 +131,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
         relationshipBase: "",
         email: "",
         phone: "",
+        mobile: "",
         reportsToId: "",
         lanes: defaults?.lane || "",
         regions: defaults?.region || "",
@@ -141,16 +155,16 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "relationship-freight-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/relationship-freight-summary"] });
       toast({
         title: "🎉 Contact created!",
         description: "New contact added to your org chart",
         className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
       });
       fireConfetti();
-      setTimeout(() => {
-        onOpenChange(false);
-        form.reset();
-      }, 800);
+      onOpenChange(false);
+      form.reset();
     },
     onError: (error: Error) => {
       toast({ title: "Error creating contact", description: error.message, variant: "destructive" });
@@ -166,16 +180,42 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "relationship-freight-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/relationship-freight-summary"] });
       toast({
         title: "✅ Contact updated!",
         description: "Changes saved successfully",
         className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
       });
       fireConfetti();
-      setTimeout(() => onOpenChange(false), 800);
+      onOpenChange(false);
     },
     onError: (error: Error) => {
       toast({ title: "Error updating contact", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null);
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      if (!id) {
+        throw new Error("This contact has no saved record yet — close the dialog and refresh the page.");
+      }
+      const response = await apiRequest("DELETE", `/api/contacts/${id}`);
+      return response;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "relationship-freight-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/relationship-freight-summary"] });
+      toast({ title: "Contact deleted", description: "The contact was removed." });
+      setPendingDelete(null);
+      onOpenChange(false);
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error deleting contact", description: error.message, variant: "destructive" });
     },
   });
 
@@ -187,6 +227,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
       relationshipBase: data.relationshipBase || null,
       email: data.email || null,
       phone: data.phone || null,
+      mobile: data.mobile || null,
       reportsToId: data.reportsToId || null,
       lanes: data.lanes ? data.lanes.split(",").map((s) => s.trim()).filter(Boolean) : null,
       regions: data.regions ? data.regions.split(",").map((s) => s.trim()).filter(Boolean) : null,
@@ -209,7 +250,19 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
   return (
     <>
     {ConfettiOverlay && <ConfettiOverlay />}
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        onOpenChange(o);
+        if (!o) {
+          setTimeout(() => {
+            if (document.body.style.pointerEvents === "none") {
+              document.body.style.pointerEvents = "";
+            }
+          }, 300);
+        }
+      }}
+    >
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isEditing ? "Edit Contact" : "Add Contact"}</DialogTitle>
@@ -320,6 +373,21 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
                     <FormControl>
                       <Input placeholder="(555) 123-4567" {...field} data-testid="input-contact-phone" />
                     </FormControl>
+                    <FormDescription>Direct line / office</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="mobile"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Mobile</FormLabel>
+                    <FormControl>
+                      <Input placeholder="(555) 987-6543" {...field} data-testid="input-contact-mobile" />
+                    </FormControl>
+                    <FormDescription>Cell phone for call matching</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -340,7 +408,7 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
                     </FormControl>
                     <SelectContent>
                       <SelectItem value="none">No manager</SelectItem>
-                      {availableManagers.map((manager) => (
+                      {[...availableManagers].sort((a, b) => a.name.localeCompare(b.name)).map((manager) => (
                         <SelectItem key={manager.id} value={manager.id}>
                           {manager.name} {manager.title ? `- ${manager.title}` : ""}
                         </SelectItem>
@@ -471,19 +539,61 @@ export function ContactDialog({ open, onOpenChange, companyId, contact, defaults
               )}
             />
 
-            <div className="flex justify-end gap-2 pt-4">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-contact">
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isPending} data-testid="button-save-contact">
-                {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                {isPending ? "Saving..." : isEditing ? "Save Changes" : "Add Contact"}
-              </Button>
+            <div className="flex justify-between items-center gap-2 pt-4">
+              <div>
+                {isEditing && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700 dark:border-red-900/50 dark:hover:bg-red-950/40"
+                    onClick={() => {
+                      if (contact?.id) {
+                        setPendingDelete({ id: contact.id, name: contact.name ?? "this contact" });
+                      }
+                    }}
+                    disabled={deleteMutation.isPending || !contact?.id}
+                    data-testid="button-delete-contact"
+                  >
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Delete
+                  </Button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-contact">
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isPending} data-testid="button-save-contact">
+                  {isPending && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                  {isPending ? "Saving..." : isEditing ? "Save Changes" : "Add Contact"}
+                </Button>
+              </div>
             </div>
           </form>
         </Form>
       </DialogContent>
     </Dialog>
+    <AlertDialog open={!!pendingDelete} onOpenChange={(o) => { if (!o) setPendingDelete(null); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete this contact?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This will permanently remove {pendingDelete?.name ?? "this contact"} from the org chart. Touchpoints and past activity will be preserved but the contact record cannot be recovered.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel data-testid="button-cancel-delete-contact">Cancel</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={(e) => { e.preventDefault(); if (pendingDelete?.id) deleteMutation.mutate(pendingDelete.id); }}
+            disabled={deleteMutation.isPending || !pendingDelete?.id}
+            className="bg-red-600 hover:bg-red-700 text-white"
+            data-testid="button-confirm-delete-contact"
+          >
+            {deleteMutation.isPending ? "Deleting..." : "Delete Contact"}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
     </>
   );
 }

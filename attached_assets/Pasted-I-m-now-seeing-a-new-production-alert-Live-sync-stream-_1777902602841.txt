@@ -1,0 +1,75 @@
+I’m now seeing a new production alert: “Live-sync stream rejecting connections” for taylor.cal@valuetruck.com, and the admin screen is also showing Microsoft Graph degraded with:
+
+Reply mailbox "Ops@valuetruck.com" was not found in your Microsoft 365 tenant
+
+I need you to treat these as two separate issues and investigate both without conflating them.
+
+1) Live-sync rejection alert
+
+The watchdog is still reporting rejected SSE connections in production, so the live-sync fix is not fully resolved yet.
+
+Please investigate end-to-end:
+
+Is the global /api auth bypass for /api/live-sync/stream definitely live in production?
+
+Does the actual request path match the bypass path exactly?
+
+Are requests reaching the live-sync route handler?
+
+Is route-level Clerk token verification succeeding or failing?
+
+Is the client successfully minting and attaching the token for this user/session?
+
+Are there user-specific/org-specific cases where the token is missing, expired, malformed, or rejected?
+
+I want concrete answers from production logs for the affected user if possible:
+
+request path hit,
+
+status code returned,
+
+whether the route handler ran,
+
+whether token verification succeeded,
+
+and why the rejection alert fired.
+
+2) Microsoft Graph degraded error
+
+Separately, fix this Outlook config issue:
+
+Reply mailbox "Ops@valuetruck.com" was not found in your Microsoft 365 tenant
+
+I want you to determine:
+
+where OUTLOOK_REPLY_EMAIL (or equivalent config) is set,
+
+whether Ops@valuetruck.com is wrong, stale, misspelled, or no longer provisioned,
+
+whether this mailbox should be changed, removed, or replaced with a valid mailbox,
+
+and what product behavior is currently impacted by this bad value.
+
+Deliver back
+
+Send me:
+
+the root cause of the live-sync rejection alert,
+
+whether it is a deploy issue, path mismatch, token issue, or auth bug,
+
+the exact fix,
+
+the root cause of the Outlook reply mailbox error,
+
+the exact config/code changes needed,
+
+and what you verified in production afterward.
+
+Important:
+
+Keep live-sync auth and Microsoft Graph mailbox config as separate tracks.
+
+Do not assume one explains the other.
+
+I want production verification, not just local confidence.

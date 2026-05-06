@@ -3,8 +3,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Pencil, MapPin, Route, DollarSign, FileText, PhoneCall, ListTodo, Brain, ClipboardList } from "lucide-react";
+import { Pencil, MapPin, Route, DollarSign, FileText, PhoneCall, ListTodo, Brain, ClipboardList, Mail, BookOpen } from "lucide-react";
 import type { Contact, Touchpoint } from "@shared/schema";
+import { CopyButton } from "@/components/copy-button";
 
 interface OrgChartProps {
   contacts: Contact[];
@@ -14,6 +15,8 @@ interface OrgChartProps {
   onLogTouch?: (contact: Contact) => void;
   onIntelClick?: (contact: Contact) => void;
   onCreateTask?: (contact: Contact) => void;
+  onSendEmail?: (contact: Contact) => void;
+  onPrepForCall?: (contact: Contact) => void;
 }
 
 interface ContactNode {
@@ -86,10 +89,12 @@ interface ContactCardProps {
   onLogTouch?: (contact: Contact) => void;
   onIntelClick?: (contact: Contact) => void;
   onCreateTask?: (contact: Contact) => void;
+  onSendEmail?: (contact: Contact) => void;
+  onPrepForCall?: (contact: Contact) => void;
   level: number;
 }
 
-function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, onCreateTask, level }: ContactCardProps) {
+function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, onCreateTask, onSendEmail, onPrepForCall, level }: ContactCardProps) {
   const initials = contact.name
     .split(" ")
     .map((n) => n[0])
@@ -145,7 +150,7 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, o
               <div className="min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
                   <h4
-                    className="font-medium truncate hover:underline cursor-pointer"
+                    className="font-medium hover:underline cursor-pointer"
                     data-testid={`text-contact-name-${contact.id}`}
                     onClick={(e) => { e.stopPropagation(); onEdit(contact); }}
                   >
@@ -158,7 +163,7 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, o
                   )}
                 </div>
                 {contact.title && (
-                  <p className="text-sm text-muted-foreground truncate">
+                  <p className="text-sm text-muted-foreground">
                     {contact.title}
                   </p>
                 )}
@@ -198,6 +203,30 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, o
                     data-testid={`button-create-task-org-${contact.id}`}
                   >
                     <ClipboardList className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                {onPrepForCall && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={(e) => { e.stopPropagation(); onPrepForCall(contact); }}
+                    className="h-7 w-7 text-muted-foreground hover:text-indigo-500"
+                    title="Prep for Call"
+                    data-testid={`button-prep-call-org-${contact.id}`}
+                  >
+                    <BookOpen className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                {onSendEmail && contact.email && (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={(e) => { e.stopPropagation(); onSendEmail(contact); }}
+                    className="h-7 w-7 text-blue-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40"
+                    title={`Send email to ${contact.email}`}
+                    data-testid={`button-email-org-${contact.id}`}
+                  >
+                    <Mail className="h-3.5 w-3.5" />
                   </Button>
                 )}
                 <Button
@@ -290,8 +319,18 @@ function ContactCard({ contact, tps, onEdit, onView, onLogTouch, onIntelClick, o
 
             {(contact.email || contact.phone) && (
               <div className="mt-3 pt-3 border-t flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                {contact.email && <span>{contact.email}</span>}
-                {contact.phone && <span>{contact.phone}</span>}
+                {contact.email && (
+                  <span className="flex items-center gap-1">
+                    {contact.email}
+                    <CopyButton value={contact.email} label="Email" data-testid={`button-copy-email-${contact.id}`} />
+                  </span>
+                )}
+                {contact.phone && (
+                  <span className="flex items-center gap-1">
+                    {contact.phone}
+                    <CopyButton value={contact.phone} label="Phone" data-testid={`button-copy-phone-${contact.id}`} />
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -309,15 +348,17 @@ interface OrgNodeProps {
   onLogTouch?: (contact: Contact) => void;
   onIntelClick?: (contact: Contact) => void;
   onCreateTask?: (contact: Contact) => void;
+  onSendEmail?: (contact: Contact) => void;
+  onPrepForCall?: (contact: Contact) => void;
   level: number;
 }
 
-function OrgNode({ node, tpMap, onEdit, onView, onLogTouch, onIntelClick, onCreateTask, level }: OrgNodeProps) {
+function OrgNode({ node, tpMap, onEdit, onView, onLogTouch, onIntelClick, onCreateTask, onSendEmail, onPrepForCall, level }: OrgNodeProps) {
   const tps = tpMap.get(node.contact.id) ?? [];
   return (
     <div className="flex flex-col items-center">
       <div className="w-72">
-        <ContactCard contact={node.contact} tps={tps} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} onIntelClick={onIntelClick} onCreateTask={onCreateTask} level={level} />
+        <ContactCard contact={node.contact} tps={tps} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} onIntelClick={onIntelClick} onCreateTask={onCreateTask} onSendEmail={onSendEmail} onPrepForCall={onPrepForCall} level={level} />
       </div>
       {node.children.length > 0 && (
         <>
@@ -333,7 +374,7 @@ function OrgNode({ node, tpMap, onEdit, onView, onLogTouch, onIntelClick, onCrea
               {node.children.map((child) => (
                 <div key={child.contact.id} className="flex flex-col items-center">
                   <div className="w-px h-6 bg-border" />
-                  <OrgNode node={child} tpMap={tpMap} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} onIntelClick={onIntelClick} onCreateTask={onCreateTask} level={level + 1} />
+                  <OrgNode node={child} tpMap={tpMap} onEdit={onEdit} onView={onView} onLogTouch={onLogTouch} onIntelClick={onIntelClick} onCreateTask={onCreateTask} onSendEmail={onSendEmail} onPrepForCall={onPrepForCall} level={level + 1} />
                 </div>
               ))}
             </div>
@@ -344,7 +385,7 @@ function OrgNode({ node, tpMap, onEdit, onView, onLogTouch, onIntelClick, onCrea
   );
 }
 
-export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewContact, onLogTouch, onIntelClick, onCreateTask }: OrgChartProps) {
+export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewContact, onLogTouch, onIntelClick, onCreateTask, onSendEmail, onPrepForCall }: OrgChartProps) {
   const tree = useMemo(() => buildOrgTree(contacts), [contacts]);
 
   const tpMap = useMemo(() => {
@@ -366,7 +407,7 @@ export function OrgChart({ contacts, touchpoints = [], onEditContact, onViewCont
     <div className="overflow-x-auto pb-4">
       <div className="inline-flex flex-col items-center gap-4 min-w-max p-4">
         {tree.map((node) => (
-          <OrgNode key={node.contact.id} node={node} tpMap={tpMap} onEdit={onEditContact} onView={onViewContact} onLogTouch={onLogTouch} onIntelClick={onIntelClick} onCreateTask={onCreateTask} level={0} />
+          <OrgNode key={node.contact.id} node={node} tpMap={tpMap} onEdit={onEditContact} onView={onViewContact} onLogTouch={onLogTouch} onIntelClick={onIntelClick} onCreateTask={onCreateTask} onSendEmail={onSendEmail} onPrepForCall={onPrepForCall} level={0} />
         ))}
       </div>
     </div>

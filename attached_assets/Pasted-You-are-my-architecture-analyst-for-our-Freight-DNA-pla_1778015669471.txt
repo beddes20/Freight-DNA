@@ -1,0 +1,104 @@
+You are my architecture analyst for our Freight‑DNA platform.
+
+I want a clear, end‑to‑end picture of how we learn from customer and carrier EMAILS today, and where those learnings actually change behavior in the product.
+
+Scope: this single Replit project only (dev DB). Do NOT touch production, do NOT fabricate a production DATABASE_URL, and do NOT run any scripts that mutate production data. Read‑only inspection only; all output is documentation.
+
+Your tasks:
+
+1) Map every place where we TOUCH email data
+- Find all tables, types, and services that store or represent email content or metadata:
+  - Tables like email_messages, capture_leak_reviews, quote_opportunities, conversations, etc.
+  - Services like mailboxDeltaSyncService, graphWebhook, quoteEmailIngestion, conversationReplyCaptureService.
+- For each, document:
+  - What email fields we store (from, to, subject, body, threadId, messageId, direction, orgId, tags, parsed entities).
+  - Whether we store FULL bodies, previews, or just metadata.
+  - Any AI/LLM calls that read this data (classification, extraction, summarization, scoring).
+
+2) Map where EMAIL INSIGHTS show up in the UI
+For each major surface, answer “what from email are we using here?”:
+
+- Customer Quotes tab:
+  - Where do email‑derived quote requests appear?
+  - How do we show or use: subject line, lane text, rate mentions, “won/lost” signals, or reply intent?
+  - Where do we compare email quotes vs what we quoted out of the UI?
+
+- Conversations:
+  - How do we mark conversations as quote‑related, risk, at‑risk, etc., based on email content?
+  - Where do we show AI summaries, subject/body snippets, or extracted entities from emails?
+
+- Available Freight:
+  - Any places where email data or email‑inferred intent (e.g., “we’re sending you the load”) actually push a load into Available Freight, or change urgency/bucket/owner?
+
+For each UI, list:
+  - Which backend endpoints power it.
+  - Which of those endpoints read email tables or AI‑generated email signals.
+  - Exactly what email‑derived signals are visible to reps/LMs.
+
+3) Map where we COACH based on email behavior
+Find every place where we use email‑derived data to coach reps or LM’s:
+
+- Scoring or fit models that are based on reply rate, quote win‑rate by lane, or email responsiveness.
+- Any “attribution” or “Why this rep?” logic that uses email senders/recipients, last toucher, or similar.
+- Any alerts, dashboards, or scorecards that use:
+  - % of quote requests answered,
+  - response SLAs,
+  - “leaks” (quote opportunities missed from email),
+  - or “dropped”/unparseable emails.
+
+For each coaching surface:
+  - Identify which email signals it consumes (fields, flags, or AI labels).
+  - Show the metric definition (e.g., “leak” vs “handled”).
+  - Note whether it is rep‑visible, manager‑visible, or admin‑only.
+
+4) Map where we use AI on emails
+Find all LLM / AI usages that touch email:
+
+- classification (e.g., “this is a quote request”, “this is a carrier offer”, “this is a win/loss”),
+- extraction (lane, dates, equipment, rate, accessorials),
+- summarization (“thread summary”, “what changed since last time”),
+- ranking/scoring (e.g., which emails to show first in a queue).
+
+For each AI usage:
+  - Show the function name and file.
+  - Describe the input (raw body, bodyPreview, structured fields).
+  - Describe the output (labels, JSON, scores).
+  - List every place that output is used downstream (UI, routing, alerts, KPIs).
+
+5) Answer the big question: “Are our email learnings actually EXECUTING?”
+With the above maps, answer these explicitly:
+
+- Where do email‑derived signals DIRECTLY:
+  - create or update quote_opportunities,
+  - affect who owns a quote,
+  - change a lane’s status,
+  - create loads in Available Freight,
+  - or change what shows up in a rep’s / LM’s work queue?
+
+- Where are we only OBSERVING emails (dashboards, health checks, drops queues) vs actually ACTING on them?
+
+- List 3–5 “execution gaps” where:
+  - We clearly know something from email (e.g., a customer said “we’re sending you the load”), but
+  - We don’t turn that into a load, task, quote status change, or LM‑ready freight.
+
+6) Produce two artifacts:
+A) A short “Email Intelligence Map”:
+   - Sections: Storage, AI/Classification, Coaching, Execution.
+   - Bullet lists of which components live where and how they connect.
+
+B) A prioritized “Next 5 Email Execution Upgrades” list:
+   - Each item = one concrete change like:
+     - “When a quote is marked Won (from email or manually), auto‑create a load in Available Freight for that lane and link it back to the quote + email.”
+   - For each, include:
+     - Files likely involved (services, endpoints, UI),
+     - A one‑sentence acceptance test,
+     - Why it matters for reps/LMs.
+
+Important constraints:
+- Do not run any scripts or commands that mutate production. Dev only.
+- Do not fabricate or log any customer PII.
+- If something depends on the broken Value Truck ingestion, call that out explicitly and explain what will work once ingestion is fixed.
+
+When you’re done, return everything as:
+1) A concise Email Intelligence Map, and
+2) The “Next 5 Email Execution Upgrades” list.

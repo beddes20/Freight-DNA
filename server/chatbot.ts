@@ -2,17 +2,57 @@ import type { Express, Request, Response } from "express";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { sendEmail, buildFeedbackEmail } from "./emailService";
+import { getNationalMarketSummary, getMarketOtris, getLaneVotrisBatch, getLaneMarketRate, buildVotriQualifier, withSonarCaller } from "./sonarClient";
+import { tracLaneDirectionSignal } from "./tracAlertEngine";
+import { computeIntelPayload } from "./routes/intel";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
 import {
   companies, contacts, touchpoints, rfps, goals, tasks, users,
   chatConversations, chatMessages, appSuggestions, notifications,
+  prospects, crmOpportunities, oneOnOneSessions, oneOnOneTopics,
+  laneCarriers, freightOpportunities, emailMessages, emailSignals,
+  nbaCards, recurringLanes, reportCardSnapshots,
 } from "@shared/schema";
+import { storage } from "./storage";
+import { resolveColumns } from "./colResolver";
+import { geocodeCity, haversineDistance } from "./geocoding";
 
 const { Pool } = pg;
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 const db = drizzle(pool);
+
+// Rate positioning context cache: 30-minute TTL per org to avoid heavy recomputation on every chat message
+const ratePositioningCache = new Map<string, { context: string; fetchedAt: number }>();
+const RATE_POSITIONING_CACHE_TTL_MS = 30 * 60 * 1000;
+
+export async function getCachedRatePositioningContext(orgId: string, filterUserId?: string): Promise<string> {
+  const cacheKey = `rpc:${orgId}:${filterUserId ?? "all"}`;
+  const cached = ratePositioningCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < RATE_POSITIONING_CACHE_TTL_MS) {
+    return cached.context;
+  }
+  try {
+    const intel = await computeIntelPayload(orgId, filterUserId);
+    const rp = intel.ratePositioning;
+    if (!rp || rp.lanes.length === 0) return "";
+    const pe = rp.portfolioExposure;
+    const topAbove = rp.lanes.filter(l => l.classification === "ABOVE_MARKET").slice(0, 3);
+    const topBelow = rp.lanes.filter(l => l.classification === "BELOW_MARKET").slice(0, 3);
+    const context = `\n\n=== RATE POSITIONING SUMMARY (SONAR TRAC-adjusted, 4-week avg vs national VCRPM1 benchmark) ===
+Portfolio: ${pe.aboveMarketCount} lanes above market (${pe.aboveMarketPct}%), ${pe.atMarketCount} at market (${pe.atMarketPct}%), ${pe.belowMarketCount} below market (${pe.belowMarketPct}%).
+Avg delta: ${pe.avgDeltaPct > 0 ? "+" : ""}${pe.avgDeltaPct}% vs benchmark. Est. monthly over-market spend: $${pe.monthlyOverMarketDollars?.toLocaleString() ?? 0}.
+${topAbove.length > 0 ? `TOP ABOVE-MARKET LANES (paying too much): ${topAbove.map(l => `${l.lane} (+${l.deltaPct.toFixed(1)}%, $${l.avgCarrierPayPerMile.toFixed(2)}/mi vs ${l.marketRatePerMile != null ? `$${l.marketRatePerMile.toFixed(2)}` : "unavailable"} benchmark)`).join("; ")}.` : ""}
+${topBelow.length > 0 ? `TOP BELOW-MARKET LANES (favorable rate): ${topBelow.map(l => `${l.lane} (${l.deltaPct.toFixed(1)}%, $${l.avgCarrierPayPerMile.toFixed(2)}/mi vs ${l.marketRatePerMile != null ? `$${l.marketRatePerMile.toFixed(2)}` : "unavailable"} benchmark)`).join("; ")}.` : ""}
+${pe.tighteningActionLanes?.length ? `TIGHTENING LANES (act fast): ${pe.tighteningActionLanes.join(", ")}.` : ""}
+Use the get_lane_rate_positioning tool for full coaching detail on any specific lane or when the user asks about rate competitiveness.`;
+    ratePositioningCache.set(cacheKey, { context, fetchedAt: Date.now() });
+    return context;
+  } catch {
+    return "";
+  }
+}
 
 const anthropic = new Anthropic({
   apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
@@ -23,6 +63,437 @@ const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
   baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
 });
+
+function normalizeModeCS(raw: string): string {
+  const t = (raw || "").trim().toLowerCase();
+  if (!t) return "";
+  if (/^(v|van|dry.?van|dv|dryvan)$/.test(t)) return "Van";
+  if (/^(r|reefer|refrigerated|temp|temperature|temp.?ctrl)$/.test(t)) return "Reefer";
+  if (/^(f|flatbed|fb|flat|step.?deck|rgn|lowboy)$/.test(t)) return "Flatbed";
+  if (/^ltl$/.test(t)) return "LTL";
+  if (/^(drayage|dray)$/.test(t)) return "Drayage";
+  if (/^(imdl|intermodal|im|rail)$/.test(t)) return "IMDL";
+  const s = raw.trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+export async function runCarrierLaneSearch(
+  orgId: string,
+  originQuery: string,
+  destQuery: string,
+  radiusMiles: number,
+  modeFilter: string,
+  minLoadsPerMonth: number,
+): Promise<string> {
+  try {
+    function parseCityState(q: string): { city: string; state: string } {
+      if (!q) return { city: "", state: "" };
+      const cm = q.match(/^(.+),\s*([A-Za-z]{2})$/);
+      if (cm) return { city: cm[1].trim(), state: cm[2].trim().toUpperCase() };
+      const sm = q.match(/^(.+)\s+([A-Za-z]{2})$/);
+      if (sm) return { city: sm[1].trim(), state: sm[2].trim().toUpperCase() };
+      if (/^[A-Za-z]{2}$/.test(q)) return { city: "", state: q.trim().toUpperCase() };
+      return { city: q.trim(), state: "" };
+    }
+
+    const originParsed = parseCityState(originQuery);
+    const destParsed   = parseCityState(destQuery);
+    const originCenter = originQuery ? geocodeCity(originParsed.city, originParsed.state) : null;
+    const destCenter   = destQuery   ? geocodeCity(destParsed.city,   destParsed.state)   : null;
+
+    function locMatches(city: string, state: string, rawText: string, queryRaw: string, center: [number, number] | null): { match: boolean; dist: number | null } {
+      if (!queryRaw) return { match: true, dist: null };
+      if (center) {
+        const lc = geocodeCity(city, state);
+        if (lc) {
+          const d = haversineDistance(center[0], center[1], lc[0], lc[1]);
+          return { match: d <= radiusMiles, dist: Math.round(d) };
+        }
+      }
+      return { match: rawText.toLowerCase().includes(queryRaw.toLowerCase()), dist: null };
+    }
+
+    const uploads = await storage.getFinancialUploadsForOrg(orgId);
+    if (!uploads.length) return "No financial data found for this organization.";
+
+    type CarrierStats = { loads: number; totalMargin: number; totalCarrierPay: number; lastDate: string | null };
+    type CorridorData = {
+      originCity: string; originState: string;
+      destCity: string;   destState: string;
+      mode: string;
+      monthLoads: Map<string, number>;
+      carriers: Map<string, CarrierStats>;
+    };
+    const corridorMap = new Map<string, CorridorData>();
+
+    for (const upload of uploads) {
+      const rows: any[] = (upload.rows as any[]) || [];
+      if (!rows.length) continue;
+      const cols = resolveColumns(rows);
+
+      for (const row of rows) {
+        // exclude valubuaz
+        const rep = String(row[cols.opsUser] || "").trim().toLowerCase();
+        if (rep === "valubuaz") continue;
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || 0);
+        if (revenue === 0) continue;
+
+        const origCity  = String(row[cols.shipperCity]    || row[cols.origin]          || "").trim();
+        const origState = String(row[cols.shipperState]   || row[cols.originState]      || "").trim().toUpperCase();
+        const dstCity   = String(row[cols.consigneeCity]  || row[cols.destination]      || "").trim();
+        const dstState  = String(row[cols.consigneeState] || row[cols.destinationState] || "").trim().toUpperCase();
+        const carrier   = String(row[cols.carrier]        || "").trim();
+        const mode      = normalizeModeCS(String(row[cols.equipmentType] || "").trim());
+
+        if (!origCity && !origState) continue;
+        if (!dstCity  && !dstState)  continue;
+        if (!carrier) continue;
+        if (!mode) continue;
+        if (modeFilter && modeFilter.toLowerCase() !== "any" && mode.toLowerCase() !== modeFilter.toLowerCase()) continue;
+
+        // parse month key + margin
+        let monthKey = "";
+        let margin = 0;
+        const rawDate = row[cols.deliveryDate] || row[cols.dateOrdered];
+        if (rawDate != null && rawDate !== "") {
+          const serial = Number(rawDate);
+          if (!isNaN(serial) && serial > 40000) {
+            const d = new Date(new Date(1899, 11, 30).getTime() + serial * 86400000);
+            monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+          } else {
+            const dStr = String(rawDate).trim();
+            if (dStr && isNaN(Number(dStr))) {
+              const d = new Date(dStr);
+              if (!isNaN(d.getTime())) monthKey = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+            }
+          }
+        }
+        const rawMargin = String(row[cols.marginDollar] || "").replace(/[^0-9.\-]/g, "");
+        if (rawMargin) margin = parseFloat(rawMargin) || 0;
+        else {
+          const rev = Number(row[cols.revenue] || row[cols.totalCharges] || 0);
+          const rawCP = String(row[cols.carrierPay] || row[cols.freightCharge] || "").replace(/[^0-9.]/g, "");
+          const cp = rawCP ? parseFloat(rawCP) || 0 : 0;
+          margin = rev - cp;
+        }
+
+        const rawCarrierPay = String(row[cols.carrierPay] || row[cols.freightCharge] || "").replace(/[^0-9.]/g, "");
+        const carrierPayVal = rawCarrierPay ? parseFloat(rawCarrierPay) || 0 : 0;
+
+        const key = `${origCity.toLowerCase()}|${origState}|${dstCity.toLowerCase()}|${dstState}|${mode}`;
+        if (!corridorMap.has(key)) {
+          corridorMap.set(key, {
+            originCity: origCity, originState: origState,
+            destCity: dstCity,   destState: dstState,
+            mode,
+            monthLoads: new Map(),
+            carriers: new Map(),
+          });
+        }
+        const corridor = corridorMap.get(key)!;
+        const mk = monthKey || "unknown";
+        corridor.monthLoads.set(mk, (corridor.monthLoads.get(mk) || 0) + 1);
+        if (!corridor.carriers.has(carrier)) corridor.carriers.set(carrier, { loads: 0, totalMargin: 0, totalCarrierPay: 0, lastDate: null });
+        const cs = corridor.carriers.get(carrier)!;
+        cs.loads++;
+        cs.totalMargin += margin || 0;
+        cs.totalCarrierPay += carrierPayVal;
+        if (monthKey && (!cs.lastDate || monthKey > cs.lastDate)) cs.lastDate = monthKey;
+      }
+    }
+
+    const results: any[] = [];
+    for (const corridor of corridorMap.values()) {
+      const realMonths = [...corridor.monthLoads.keys()].filter(k => k !== "unknown");
+      const totalLoads = [...corridor.monthLoads.values()].reduce((s, v) => s + v, 0);
+      const monthCount = Math.max(1, realMonths.length);
+      const avgLoadsPerMonth = totalLoads / monthCount;
+      if (avgLoadsPerMonth < minLoadsPerMonth) continue;
+
+      const origCheck = locMatches(corridor.originCity, corridor.originState, `${corridor.originCity} ${corridor.originState}`, originQuery, originCenter);
+      const dstCheck  = locMatches(corridor.destCity,   corridor.destState,   `${corridor.destCity} ${corridor.destState}`,   destQuery,   destCenter);
+      if (!origCheck.match || !dstCheck.match) continue;
+
+      const originLabel = [corridor.originCity, corridor.originState].filter(Boolean).join(", ");
+      const destLabel   = [corridor.destCity,   corridor.destState].filter(Boolean).join(", ");
+      const carrierList = [...corridor.carriers.entries()]
+        .map(([name, cs]) => ({
+          name,
+          loads: cs.loads,
+          pct: Math.round((cs.loads / totalLoads) * 100),
+          avgMarginPerLoad: cs.loads > 0 ? Math.round(cs.totalMargin / cs.loads) : null,
+          avgCarrierPay: cs.loads > 0 && cs.totalCarrierPay > 0 ? Math.round(cs.totalCarrierPay / cs.loads) : null,
+          lastUsed: cs.lastDate,
+        }))
+        .sort((a, b) => b.loads - a.loads);
+
+      results.push({ originLabel, destLabel, mode: corridor.mode, avgLoadsPerMonth: Math.round(avgLoadsPerMonth * 10) / 10, totalLoads, carriers: carrierList });
+    }
+
+    results.sort((a, b) => b.avgLoadsPerMonth - a.avgLoadsPerMonth);
+
+    if (!results.length) return `No corridors found matching your criteria (origin: "${originQuery || "any"}", dest: "${destQuery || "any"}", radius: ${radiusMiles}mi, mode: ${modeFilter || "any"}).`;
+
+    const TOP_CORRIDORS = 6;
+    const TOP_CARRIERS  = 5;
+    let out = `Carrier lane search results — ${originQuery || "any origin"} → ${destQuery || "any dest"} (${radiusMiles}mi radius${modeFilter ? `, ${modeFilter} only` : ""}):\n\n`;
+    for (const r of results.slice(0, TOP_CORRIDORS)) {
+      out += `**${r.originLabel} → ${r.destLabel}** [${r.mode}] — ${r.avgLoadsPerMonth} loads/mo avg (${r.totalLoads} total)\n`;
+      for (const c of r.carriers.slice(0, TOP_CARRIERS)) {
+        const pay  = c.avgCarrierPay     != null ? ` | avg carrier pay $${c.avgCarrierPay.toLocaleString()}`    : "";
+        const marg = c.avgMarginPerLoad  != null ? ` | avg margin $${c.avgMarginPerLoad.toLocaleString()}`  : "";
+        out += `  • ${c.name} — ${c.loads} loads (${c.pct}%)${pay}${marg}\n`;
+      }
+      if (r.carriers.length > TOP_CARRIERS) out += `  ...and ${r.carriers.length - TOP_CARRIERS} more carriers\n`;
+      out += "\n";
+    }
+    if (results.length > TOP_CORRIDORS) out += `(${results.length - TOP_CORRIDORS} more corridors — open Carrier Lane Search for full results)\n`;
+    return out;
+  } catch (err) {
+    console.error("Chatbot carrier lane search error:", err);
+    return "Carrier lane search failed. Please try the Carrier Lane Search page directly.";
+  }
+}
+
+// ─── Phase 2 — Data & Tools Expansion (Task #422) ────────────────────────────
+// Adds envelope sections for pipeline (prospects + opps), 1:1 coaching,
+// lane carriers (procurement rolodex), available freight, email signals,
+// NBA cards, scorecards, recurring freight lanes, and account lifecycle.
+// Pulled in for BOTH "my team" and "everyone" scopes; the team variant
+// scopes by visible companies/users while everyone scopes by organization.
+async function buildPhase2Sections(
+  orgId: string,
+  opts: { scope: "team" | "everyone"; companyIds: string[]; userIds: string[]; selfUserId: string },
+): Promise<string> {
+  const { scope, companyIds, userIds, selfUserId } = opts;
+  const safeIds = userIds.length ? userIds : [selfUserId];
+  let out = "";
+
+  try {
+    // — Pipeline (prospects + opportunities) —
+    const orgProspects = await db.select().from(prospects)
+      .where(scope === "everyone"
+        ? eq(prospects.organizationId, orgId)
+        : and(eq(prospects.organizationId, orgId), inArray(prospects.ownerId, safeIds)))
+      .orderBy(desc(prospects.updatedAt))
+      .limit(50);
+    out += `\n=== PIPELINE — Prospects (${orgProspects.length}) ===\n`;
+    orgProspects.slice(0, 25).forEach(p => {
+      out += `- ${p.name} | stage ${p.stage} | status ${p.accountStatus ?? "?"}${p.followUpDate ? ` | follow-up ${p.followUpDate}` : ""}\n`;
+    });
+    if (orgProspects.length > 25) out += `  ...and ${orgProspects.length - 25} more prospects\n`;
+
+    const prospectIds = orgProspects.map(p => p.id);
+    if (prospectIds.length) {
+      const opps = await db.select().from(crmOpportunities)
+        .where(and(eq(crmOpportunities.organizationId, orgId), inArray(crmOpportunities.prospectId, prospectIds)))
+        .limit(80);
+      out += `\n=== PIPELINE — Opportunities (${opps.length}) ===\n`;
+      opps.slice(0, 30).forEach(o => {
+        const p = orgProspects.find(pp => pp.id === o.prospectId);
+        out += `- ${o.name} @ ${p?.name ?? "?"} | ${o.stage}${o.amount ? ` | $${Number(o.amount).toLocaleString()}` : ""}${o.outcome ? ` | ${o.outcome}` : ""}\n`;
+      });
+      if (opps.length > 30) out += `  ...and ${opps.length - 30} more opportunities\n`;
+    }
+
+    // — Account lifecycle stage rollup —
+    if (orgProspects.length) {
+      const byStage = new Map<string, number>();
+      orgProspects.forEach(p => byStage.set(p.stage, (byStage.get(p.stage) ?? 0) + 1));
+      out += `\n=== LIFECYCLE STAGE ROLLUP ===\n`;
+      Array.from(byStage.entries()).forEach(([s, n]) => { out += `- ${s}: ${n}\n`; });
+    }
+
+    // — 1:1 coaching sessions (manager visibility within scope) —
+    // Use storage helper which scopes by org + subordinate set safely.
+    const sessionRows = await storage.getSessionsForSubordinates(safeIds, orgId).catch(() => []);
+    const activeSessions = sessionRows.filter(s => s.session.status === "active");
+    if (activeSessions.length) {
+      out += `\n=== 1:1 ACTIVE SESSIONS (${activeSessions.length}) ===\n`;
+      activeSessions.slice(0, 8).forEach(r => {
+        const morale = r.session.moraleScore != null ? ` | morale ${r.session.moraleScore}/10` : "";
+        out += `- ${r.amUser.name} ↔ ${r.namUser.name}${morale} | ${r.topics.length} topics${r.session.meetingDate ? ` | next ${r.session.meetingDate}` : ""}\n`;
+      });
+    }
+
+    // — Lane carriers / procurement rolodex —
+    const lcCount = await db.select({ n: sql<number>`count(*)::int` }).from(laneCarriers)
+      .innerJoin(tasks, eq(tasks.id, laneCarriers.taskId))
+      .where(eq(tasks.orgId, orgId));
+    const lcN = lcCount[0]?.n ?? 0;
+    if (lcN > 0) {
+      out += `\n=== LANE CARRIERS — Procurement Rolodex ===\n- ${lcN} carrier rows logged across procurement tasks (use lane_carrier_lookup tool for detail)\n`;
+    }
+
+    // — Available freight (today + forward) —
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const freight = await db.select().from(freightOpportunities)
+      .where(and(eq(freightOpportunities.orgId, orgId), sql`(${freightOpportunities.pickupWindowEnd} IS NULL OR ${freightOpportunities.pickupWindowEnd} >= ${todayIso})`))
+      .orderBy(desc(freightOpportunities.urgencyScore))
+      .limit(30);
+    if (freight.length) {
+      out += `\n=== AVAILABLE FREIGHT (${freight.length}) ===\n`;
+      freight.slice(0, 15).forEach(f => {
+        out += `- ${f.origin}${f.originState ? `,${f.originState}` : ""} → ${f.destination}${f.destinationState ? `,${f.destinationState}` : ""} (${f.equipmentType ?? "?"}, ${f.loadCount}L, urgency ${f.urgencyScore})\n`;
+      });
+      if (freight.length > 15) out += `  ...and ${freight.length - 15} more loads\n`;
+    }
+
+    // — Email signals (last 14 days) —
+    const since14 = new Date(Date.now() - 14 * 86400000);
+    const sigs = await db.select({
+      intent: emailSignals.intentType,
+      sub: emailSignals.intentSubtype,
+      conf: emailSignals.confidence,
+      created: emailSignals.createdAt,
+      subject: emailMessages.subject,
+    }).from(emailSignals)
+      .innerJoin(emailMessages, eq(emailMessages.id, emailSignals.messageId))
+      .where(and(eq(emailMessages.orgId, orgId), gte(emailSignals.createdAt, since14)))
+      .orderBy(desc(emailSignals.createdAt))
+      .limit(30);
+    if (sigs.length) {
+      out += `\n=== EMAIL SIGNALS — last 14d (${sigs.length}) ===\n`;
+      sigs.slice(0, 15).forEach(s => {
+        const date = s.created instanceof Date ? s.created.toISOString().slice(0, 10) : String(s.created).slice(0, 10);
+        out += `- [${date}] ${s.intent}${s.sub ? `/${s.sub}` : ""} (conf ${s.conf}) — "${(s.subject ?? "").slice(0, 60)}"\n`;
+      });
+    }
+
+    // — NBA cards (top urgency) —
+    const cards = await db.select().from(nbaCards)
+      .where(scope === "everyone"
+        ? eq(nbaCards.orgId, orgId)
+        : and(eq(nbaCards.orgId, orgId), inArray(nbaCards.userId, safeIds)))
+      .orderBy(desc(nbaCards.urgencyScore))
+      .limit(20);
+    if (cards.length) {
+      out += `\n=== NBA CARDS — Top ${Math.min(cards.length, 12)} ===\n`;
+      cards.slice(0, 12).forEach(c => {
+        out += `- [${c.urgencyScore} ${c.ruleType}] ${c.companyName ?? "—"} → ${c.suggestedAction.slice(0, 100)}\n`;
+      });
+    }
+
+    // — Recurring freight lanes —
+    const rec = await storage.getRecurringLanes(orgId).catch(() => []);
+    if (rec.length) {
+      const filtered = scope === "everyone" ? rec : rec.filter(l => companyIds.length === 0 || (l.companyId != null && companyIds.includes(l.companyId)));
+      out += `\n=== RECURRING FREIGHT LANES (${filtered.length}) ===\n`;
+      filtered.slice(0, 12).forEach(l => {
+        const cadence = l.avgLoadsPerWeek ? `${Number(l.avgLoadsPerWeek).toFixed(1)}/wk` : "?";
+        const cov = l.hasPreferredCarrierProgram ? "covered" : "no preferred carrier";
+        out += `- ${l.companyName ?? "?"} ${l.origin} → ${l.destination} (${l.equipmentType ?? "?"}) | ${cadence} | score ${l.laneScore ?? "?"} | ${cov}\n`;
+      });
+    }
+
+    // — Recent documents (Task #910) — uploads + email-forwards relevant
+    //   to the rep. The actual tool call (find_documents) is the structured
+    //   path; this section just keeps the most recent items in the prompt
+    //   so the agent doesn't need a tool round-trip for "what did I drop in
+    //   last week?" style questions.
+    try {
+      const recentDocs = await storage.getRecentDocumentsForUser(orgId, selfUserId, companyIds, 8);
+      if (recentDocs.length) {
+        out += `\n=== RECENT DOCUMENTS (${recentDocs.length}) ===\n`;
+        // Task #911 — enrich rate-con entries with the resolved customer /
+        // lane / carrier headline so the model can answer "tell me about
+        // that rate con I dropped this morning" without an extra tool call.
+        const enriched = await Promise.all(recentDocs.map(async (d) => {
+          if (d.classLabel !== "rate_con") return { doc: d, headline: null as string | null };
+          try {
+            const [extraction, links] = await Promise.all([
+              storage.getDocumentExtraction(d.id),
+              storage.getDocumentEntityLinks(d.id),
+            ]);
+            if (!extraction || extraction.extractionStatus === "failed") return { doc: d, headline: null };
+            const payload = (extraction.payload ?? {}) as Record<string, { value?: unknown }>;
+            const oCity = (payload.originCity?.value as string | null) ?? null;
+            const oState = (payload.originState?.value as string | null) ?? null;
+            const dCity = (payload.destinationCity?.value as string | null) ?? null;
+            const dState = (payload.destinationState?.value as string | null) ?? null;
+            const rate = payload.allInRate?.value as number | null;
+            const customerLink = links.find((l) => l.kind === "customer" && l.isPrimary);
+            // Resolved carrier — falls back to the typed payload's carrier
+            // name when entity resolution couldn't pin a CRM carrier (e.g.
+            // an off-bench MC#) so the headline still surfaces "who is
+            // hauling this" for the rep.
+            const carrierLink = links.find((l) => l.kind === "carrier" && l.isPrimary);
+            const carrierLabel = carrierLink?.targetLabel
+              ?? (payload.carrierName?.value as string | null)
+              ?? null;
+            const lane = oCity && dCity ? `${oCity}${oState ? ", " + oState : ""} → ${dCity}${dState ? ", " + dState : ""}` : null;
+            const parts = [
+              lane,
+              customerLink?.targetLabel,
+              carrierLabel,
+              rate != null ? `$${Number(rate).toLocaleString()} all-in` : null,
+              extraction.extractionStatus === "needs_review" ? "needs review" : null,
+            ].filter(Boolean);
+            return { doc: d, headline: parts.length ? parts.join(" · ") : null };
+          } catch {
+            return { doc: d, headline: null };
+          }
+        }));
+        enriched.forEach(({ doc: d, headline }) => {
+          const when = d.createdAt ? new Date(d.createdAt).toISOString().slice(0, 10) : "?";
+          const status = d.status === "parsed" ? "" : ` [${d.status}]`;
+          const tail = headline ? ` — ${headline}` : "";
+          out += `- [${when}] (${d.classLabel}) ${d.filename} via ${d.sourceChannel}${status}${tail}\n`;
+        });
+      }
+    } catch (err) {
+      console.warn("buildPhase2Sections: recent_documents failed:", err);
+    }
+
+    // — Recent intelligence cards (Task #912 slice 3) — Copilot Fit &
+    //   Intelligence Cards generated for the rep's accounts. We keep the
+    //   most-recent few in the prompt so the model can quote a fit score
+    //   or risk without an extra tool round-trip; the structured tool
+    //   `get_intelligence_card` is still the right call for full payload.
+    try {
+      const recentCards = await storage.listRecentRecommendationsForOrg(orgId, 8);
+      const filteredCards = scope === "everyone"
+        ? recentCards
+        : recentCards.filter((c) => !c.customerCompanyId || companyIds.includes(c.customerCompanyId));
+      if (filteredCards.length) {
+        out += `\n=== RECENT INTELLIGENCE CARDS (${filteredCards.length}) ===\n`;
+        filteredCards.slice(0, 6).forEach((c) => {
+          const payload = (c.cardPayload ?? {}) as { header?: { title?: string; laneLabel?: string | null; customerLabel?: string | null; carrierLabel?: string | null } };
+          const head = payload.header ?? {};
+          const lane = head.laneLabel ?? "—";
+          const cust = head.customerLabel ?? "—";
+          const carr = head.carrierLabel ?? "—";
+          const when = c.generatedAt ? new Date(c.generatedAt).toISOString().slice(0, 10) : "?";
+          out += `- [${when}] fit ${c.fitScore} (${c.aggregateConfidence}) | ${lane} | cust: ${cust} | carrier: ${carr} | reaction: ${c.reaction}\n`;
+        });
+      }
+    } catch (err) {
+      console.warn("buildPhase2Sections: recent_intelligence_cards failed:", err);
+    }
+
+    // — Scorecards (latest snapshot per teammate) —
+    if (safeIds.length) {
+      const snaps = await db.select().from(reportCardSnapshots)
+        .where(inArray(reportCardSnapshots.userId, safeIds))
+        .orderBy(desc(reportCardSnapshots.snapshotDate))
+        .limit(30);
+      if (snaps.length) {
+        const latest = new Map<string, typeof snaps[number]>();
+        for (const s of snaps) if (!latest.has(s.userId)) latest.set(s.userId, s);
+        out += `\n=== SCORECARDS — latest per rep (${latest.size}) ===\n`;
+        const userRows = await db.select({ id: users.id, name: users.name }).from(users).where(inArray(users.id, Array.from(latest.keys())));
+        const nameMap = new Map(userRows.map(u => [u.id, u.name]));
+        Array.from(latest.values()).forEach(s => {
+          out += `- ${nameMap.get(s.userId) ?? s.userId}: ${s.periodLabel} (${s.periodType}, saved ${s.snapshotDate})\n`;
+        });
+      }
+    }
+  } catch (err) {
+    console.error("buildPhase2Sections error:", err);
+    out += "\n(Phase-2 envelope sections temporarily unavailable.)\n";
+  }
+  return out;
+}
 
 async function buildEveryoneContext(requestingUserId: string): Promise<string> {
   try {
@@ -107,6 +578,17 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
       const pct = tgt > 0 ? Math.round((cur / tgt) * 100) : 0;
       ctx += `- ${am?.name || "?"} | ${g.metric}${g.customLabel ? ` (${g.customLabel})` : ""}: ${cur}/${tgt} (${pct}%) | Set by: ${nam?.name || "?"}\n`;
     });
+
+    // Phase 2 — Data & Tools Expansion (Task #422)
+    const requestingUser = allUsers.find(u => u.id === requestingUserId);
+    if (requestingUser?.organizationId) {
+      ctx += await buildPhase2Sections(requestingUser.organizationId, {
+        scope: "everyone",
+        companyIds: allCompanies.map(c => c.id),
+        userIds: allUsers.map(u => u.id),
+        selfUserId: requestingUserId,
+      });
+    }
 
     return ctx;
   } catch (err) {
@@ -209,10 +691,89 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
       ctx += `- ${g.metric}${g.customLabel ? ` (${g.customLabel})` : ""}: ${cur}/${tgt} (${pct}%)\n`;
     });
 
+    // Phase 2 — Data & Tools Expansion (Task #422)
+    const selfRow = await db.select({ orgId: users.organizationId }).from(users).where(eq(users.id, userId)).limit(1);
+    const orgId = selfRow[0]?.orgId;
+    if (orgId) {
+      const subRows = await db.select({ id: users.id }).from(users)
+        .where(and(eq(users.organizationId, orgId), eq(users.managerId, userId)));
+      const teamUserIds = Array.from(new Set([userId, ...subRows.map(s => s.id)]));
+      ctx += await buildPhase2Sections(orgId, {
+        scope: "team",
+        companyIds: visibleCompanies.map(c => c.id),
+        userIds: teamUserIds,
+        selfUserId: userId,
+      });
+    }
+
     return ctx;
   } catch (err) {
     console.error("Error building my-team context:", err);
     return "CRM data temporarily unavailable.";
+  }
+}
+
+export async function getCompanyDetails(orgId: string, companyName: string): Promise<string> {
+  try {
+    const allCompanies = await db.select().from(companies).where(eq(companies.organizationId, orgId));
+    const cn = companyName.toLowerCase();
+    const company = allCompanies.find(c => c.name.toLowerCase().includes(cn))
+      || allCompanies.find(c => cn.includes(c.name.toLowerCase().slice(0, 5)));
+    if (!company) return `No company found matching "${companyName}".`;
+
+    const [companyContacts, companyRfps, assignedUserRows] = await Promise.all([
+      db.select().from(contacts).where(eq(contacts.companyId, company.id)),
+      db.select().from(rfps).where(and(eq(rfps.companyId, company.id), eq(rfps.status, "open"))),
+      company.assignedTo ? db.select({ name: users.name, role: users.role }).from(users).where(eq(users.id, company.assignedTo)) : Promise.resolve([]),
+    ]);
+
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000).toISOString().slice(0, 10);
+    const recentTps = await db.select().from(touchpoints)
+      .where(and(eq(touchpoints.companyId, company.id), gte(touchpoints.date, sixtyDaysAgo)))
+      .orderBy(desc(touchpoints.date))
+      .limit(15);
+
+    const assignedUser = assignedUserRows[0];
+    let out = `=== ${company.name} ===\n`;
+    if (company.industry) out += `Industry: ${company.industry}\n`;
+    if (company.financialAlias) out += `Financial alias: ${company.financialAlias}\n`;
+    if (company.shippingModes?.length) out += `Shipping modes: ${company.shippingModes.join(", ")}\n`;
+    if (company.estimatedFreightSpend) out += `Est. freight spend: $${Number(company.estimatedFreightSpend).toLocaleString()}\n`;
+    if (assignedUser) out += `Rep: ${assignedUser.name} (${assignedUser.role.replace(/_/g, " ")})\n`;
+    if (company.tenderStyle) out += `Tender style: ${company.tenderStyle}\n`;
+    if (company.accountSummary) out += `\nAccount summary: ${company.accountSummary}\n`;
+    if (company.accountQuirks) out += `Quirks/notes: ${company.accountQuirks}\n`;
+    if (company.processNotes) out += `Process notes: ${company.processNotes}\n`;
+    if (company.spotProcess) out += `Spot process: ${company.spotProcess}\n`;
+    if (company.operatingHours) out += `Operating hours: ${company.operatingHours}\n`;
+
+    out += `\n-- Contacts (${companyContacts.length}) --\n`;
+    companyContacts.forEach(c => {
+      out += `• ${c.name}${c.title ? ` (${c.title})` : ""}`;
+      if (c.relationshipBase) out += ` | Rel: ${c.relationshipBase}`;
+      if (c.email) out += ` | ${c.email}`;
+      if (c.phone) out += ` | ${c.phone}`;
+      if (c.nextSteps) out += ` | Next: ${c.nextSteps}`;
+      out += "\n";
+    });
+
+    out += `\n-- Recent Touchpoints (last 60 days, ${recentTps.length}) --\n`;
+    recentTps.forEach(tp => {
+      const contact = companyContacts.find(c => c.id === tp.contactId);
+      out += `• [${tp.date}] ${tp.type}${contact ? ` w/ ${contact.name}` : ""}${tp.isMeaningful ? " ★" : ""}`;
+      if (tp.notes) out += ` — "${tp.notes.slice(0, 100)}${tp.notes.length > 100 ? "..." : ""}"`;
+      out += "\n";
+    });
+
+    out += `\n-- Open RFPs (${companyRfps.length}) --\n`;
+    companyRfps.forEach(r => {
+      out += `• ${r.title}${r.dueDate ? ` | Due: ${r.dueDate}` : ""}${r.value ? ` | Value: $${Number(r.value).toLocaleString()}` : ""}\n`;
+    });
+
+    return out;
+  } catch (err) {
+    console.error("getCompanyDetails error:", err);
+    return `Failed to load details for "${companyName}".`;
   }
 }
 
@@ -271,8 +832,11 @@ export function registerChatbotRoutes(app: Express): void {
   app.get("/api/chatbot/conversations/:id/messages", async (req: Request, res: Response) => {
     if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
     try {
+      const conversationId = parseInt(req.params.id as string);
+      const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, conversationId));
+      if (!conv || conv.userId !== req.session.userId) return res.status(404).json({ error: "Conversation not found" });
       const msgs = await db.select().from(chatMessages)
-        .where(eq(chatMessages.conversationId, parseInt(req.params.id as string)))
+        .where(eq(chatMessages.conversationId, conversationId))
         .orderBy(chatMessages.id);
       res.json(msgs);
     } catch (err) {
@@ -282,11 +846,14 @@ export function registerChatbotRoutes(app: Express): void {
 
   app.post("/api/chatbot/conversations/:id/messages", async (req: Request, res: Response) => {
     if (!req.session?.userId) return res.status(401).json({ error: "Unauthorized" });
-    const { content, scope = "my_team" } = req.body;
+    const { content, scope = "my_team", pageContext } = req.body;
     if (!content?.trim()) return res.status(400).json({ error: "Message content required" });
 
     const conversationId = parseInt(req.params.id as string);
     try {
+      const [conv] = await db.select().from(chatConversations).where(eq(chatConversations.id, conversationId));
+      if (!conv || conv.userId !== req.session.userId) return res.status(404).json({ error: "Conversation not found" });
+
       await db.insert(chatMessages).values({
         conversationId,
         role: "user",
@@ -302,131 +869,151 @@ export function registerChatbotRoutes(app: Express): void {
         .orderBy(chatMessages.id)
         .limit(30);
 
-      const effectiveScope = (user.role === "admin" || user.role === "director") ? "everyone" : scope;
-      const crmContext = await buildCrmContext(user.id, user.role, effectiveScope);
+      // SECURITY: client-supplied `scope` must NEVER let a non-manager pull
+      // org-wide rollups. Several manager-only tools (team_touchpoint_tally,
+      // reps_missing_touchpoints, …) historically also accepted scope==="everyone"
+      // as a manager equivalence — so a sales rep posting `{scope:"everyone"}`
+      // would have bypassed the gate. Clamp here at the channel boundary:
+      //   - admin only  → "everyone" (full org)
+      //   - everyone else (incl. director / sales_director / NAM / logistics_manager
+      //     and individual contributors) → "my_team"
+      // Manager-tier users still see their own subtree because the manager
+      // tools resolve their team via storage.getTeamMemberIds at execute time.
+      const effectiveScope: "my_team" | "everyone" =
+        user.role === "admin" ? "everyone" : "my_team";
 
-      const scopeLabel = effectiveScope === "everyone" ? "the entire organization (all reps and teams)" : "the current user's team only";
-
-      const systemPrompt = `You are DNA Guru, an AI assistant built into the OrgChart CRM for Value Truck transportation brokerage. You have access to live CRM data.
-
-Current user: ${user.name} (${user.role.replace(/_/g, " ")})
-Data scope: ${scopeLabel}
-
-Here is the current CRM data:
-${crmContext}
-
-Keep it short and casual — reps are busy. No fluff, no filler.
-- Use the data above to answer questions about accounts, contacts, RFPs, touchpoints, tasks, and goals
-- For ranking questions use the TEAM MEMBERS section for per-rep stats
-- Bullet points for lists, plain sentences otherwise
-- If data isn't there, just say so
-- Talk like a sharp colleague, not a corporate assistant
-- When the user says they want to LOG A CALL, LOG AN EMAIL, LOG A TEXT, LOG A VISIT, or LOG A TOUCHPOINT — use the log_touchpoint tool
-- When the user says they want to CREATE A TASK, SET A REMINDER, or ADD A TO-DO — use the create_task tool`;
-
-      const tools: any[] = [
-        {
-          type: "function",
-          function: {
-            name: "log_touchpoint",
-            description: "Log a touchpoint/interaction (call, email, text, or site visit) with a contact. Use this when the user wants to log or record a call, email, text, or meeting.",
-            parameters: {
-              type: "object",
-              properties: {
-                company_name: { type: "string", description: "Name of the company/account (as it appears in the CRM)" },
-                contact_name: { type: "string", description: "Name of the contact person (leave empty if not specified)" },
-                type: { type: "string", enum: ["call", "email", "text", "site_visit"], description: "Type of interaction" },
-                note: { type: "string", description: "Brief note about what was discussed or the outcome" },
-              },
-              required: ["type"],
-            },
-          },
-        },
-        {
-          type: "function",
-          function: {
-            name: "create_task",
-            description: "Create a new task or reminder. Use this when the user wants to set a reminder, create a to-do, or follow up on something.",
-            parameters: {
-              type: "object",
-              properties: {
-                title: { type: "string", description: "Clear, actionable task title" },
-                due_date: { type: "string", description: "Due date in YYYY-MM-DD format (optional, omit if not mentioned)" },
-              },
-              required: ["title"],
-            },
-          },
-        },
-      ];
-
+      // ─── DNA Logistics Bot agent core (Task #282 Phase 1) ──────────────
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
 
-      const chatHistory = history.map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      }));
+      const { runAgentTurn } = await import("./agent/core");
+      const { hasModuleAccess } = await import("./agent/permissions");
+      const { tryRoute, buildPageContextBlock } = await import("./agent/router");
+      const { classifyDepthSmart } = await import("./agent/classifier");
+      const { resolveReference } = await import("./agent/sessionMemo");
+      const access = await hasModuleAccess(user);
+      if (!access.allowed) {
+        res.write(`data: ${JSON.stringify({ content: access.reason || "AI Agent module is not available." })}\n\n`);
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+        return;
+      }
+      const priorHistory = history
+        .slice(0, -1) // exclude the user message we just inserted; agent passes it as `userMessage`
+        .map((m) => ({ role: m.role as "user" | "assistant", content: m.content }));
 
-      const stream = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [{ role: "system", content: systemPrompt }, ...chatHistory],
-        tools,
-        tool_choice: "auto",
-        stream: true,
-        max_tokens: 1200,
+      const emit = (event: any) => { res.write(`data: ${JSON.stringify(event)}\n\n`); };
+      const conversationRef = String(conversationId);
+
+      // 1. Smart router — deterministic intents short-circuit the LLM.
+      const routed = await tryRoute({
+        rep: user,
+        organizationId: req.session.organizationId!,
+        conversationRef,
+        message: content.trim(),
+        pageContext,
+        emit,
       });
 
-      let fullResponse = "";
-      let toolCallName = "";
-      let toolCallArgs = "";
+      let assistantText = "";
+      let hadError = false;
+      let surfacedAction = false;
+      let confidence: number | undefined;
+      let route: string | undefined;
 
-      for await (const chunk of stream) {
-        const choice = chunk.choices[0];
-        const delta = choice?.delta;
+      if (routed.handled) {
+        assistantText = routed.assistantText || "";
+        surfacedAction = !!routed.surfacedAction;
+      } else {
+        // 2. Page-aware context block (also seeds the per-conversation memo).
+        let pageContextBlock = await buildPageContextBlock(
+          req.session.organizationId!,
+          conversationRef,
+          pageContext,
+        );
 
-        // Streaming text content
-        if (delta?.content) {
-          fullResponse += delta.content;
-          res.write(`data: ${JSON.stringify({ content: delta.content })}\n\n`);
+        // 2b. If the rep used a pronoun ("it", "that account", "the first one")
+        //     and we have a memo hit, surface the resolution to the model so it
+        //     doesn't have to guess. Memo entries are scoped per convoRef.
+        const resolved = resolveReference(conversationRef, content.trim());
+        if (resolved) {
+          const hint = `Reference resolution: when the rep just said something like "it" / "that ${resolved.type}" / an ordinal, they almost certainly mean the ${resolved.type} **${resolved.name}** (id ${resolved.id}). Act on that without re-asking.`;
+          pageContextBlock = pageContextBlock ? `${pageContextBlock}\n${hint}` : hint;
         }
 
-        // Accumulate tool call data
-        if (delta?.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            if (tc.function?.name) toolCallName += tc.function.name;
-            if (tc.function?.arguments) toolCallArgs += tc.function.arguments;
-          }
-        }
+        // 3. Pre-classify depth so a quick lookup never spins up gpt-4o.
+        //    Heuristic-first; only falls back to a tiny gpt-4o-mini call for
+        //    truly ambiguous prompts. Bounded by a 600ms timeout so a slow
+        //    OpenAI response never blocks the user-visible turn start.
+        const mode = await classifyDepthSmart(content.trim());
 
-        // Tool call complete — emit action event
-        if (choice?.finish_reason === "tool_calls" && toolCallName) {
+        const result = await runAgentTurn({
+          ctx: {
+            rep: user,
+            organizationId: req.session.organizationId!,
+            channel: "in_app",
+            conversationRef,
+            scope: effectiveScope as "my_team" | "everyone",
+          },
+          history: priorHistory,
+          userMessage: content.trim(),
+          emit,
+          pageContextBlock,
+          mode,
+        });
+        assistantText = result.assistantText;
+        hadError = result.hadError;
+        surfacedAction = result.surfacedAction;
+        confidence = (result as any).confidence;
+        route = (result as any).route;
+      }
+
+      // Only persist an assistant message if the turn produced something
+      // meaningful. Skip on transport errors (no empty bubbles) but keep a
+      // placeholder when the agent surfaced an action card without prose.
+      const persisted = assistantText.trim() || (surfacedAction ? "(action proposed)" : "");
+      let assistantMsgId: number | null = null;
+      if (!hadError && persisted) {
+        const [inserted] = await db.insert(chatMessages).values({
+          conversationId,
+          role: "assistant",
+          content: persisted,
+          createdAt: new Date().toISOString(),
+        }).returning();
+        assistantMsgId = inserted?.id ?? null;
+        if (assistantMsgId) {
+          // Back-fill the messageId on the most recent turn_complete row so
+          // analytics / feedback can pivot from the chat bubble.
           try {
-            const args = JSON.parse(toolCallArgs);
-            const actionResponse = `I can do that for you. Here's what I'll log:`;
-            fullResponse += actionResponse;
-            res.write(`data: ${JSON.stringify({ content: actionResponse })}\n\n`);
-            res.write(`data: ${JSON.stringify({ action: { tool: toolCallName, args } })}\n\n`);
-            toolCallName = "";
-            toolCallArgs = "";
-          } catch (parseErr) {
-            console.error("Tool call parse error:", parseErr);
-          }
+            const { agentActivity } = await import("@shared/schema");
+            const recent = await db.select({ id: agentActivity.id })
+              .from(agentActivity)
+              .where(and(
+                eq(agentActivity.conversationRef, String(conversationId)),
+                eq(agentActivity.userId, user.id),
+                eq(agentActivity.direction, "turn_complete"),
+              ))
+              .orderBy(desc(agentActivity.createdAt))
+              .limit(1);
+            if (recent[0]) {
+              await db.update(agentActivity)
+                .set({ messageId: assistantMsgId })
+                .where(eq(agentActivity.id, recent[0].id));
+            }
+          } catch (e) { /* non-fatal */ }
         }
       }
 
-      await db.insert(chatMessages).values({
-        conversationId,
-        role: "assistant",
-        content: fullResponse || "(action proposed)",
-        createdAt: new Date().toISOString(),
-      });
-
-      if (history.length <= 1) {
+      if (!hadError && history.length <= 1) {
         const shortTitle = content.trim().slice(0, 50);
         await db.update(chatConversations).set({ title: shortTitle }).where(eq(chatConversations.id, conversationId));
       }
 
+      // Surface the assistant message id so the client can wire feedback.
+      if (assistantMsgId) {
+        res.write(`data: ${JSON.stringify({ messageId: assistantMsgId })}\n\n`);
+      }
       res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
       res.end();
     } catch (err: any) {
@@ -706,7 +1293,7 @@ ${ANALYST_RULES}`,
 
   app.post("/api/ai/talking-points", async (req: Request, res: Response) => {
     try {
-      const { company, contacts: contactList, touchpoints: tps, tasks: tsks, rfps: rfpList, financialSummary, accountIntelligence } = req.body;
+      const { company, contacts: contactList, touchpoints: tps, tasks: tsks, rfps: rfpList, financialSummary, accountIntelligence, lanePairs } = req.body;
       if (!company) return res.status(400).json({ error: "Company data required" });
 
       const lastTouches = (contactList || []).slice(0, 6).map((c: any) => {
@@ -724,6 +1311,52 @@ ${ANALYST_RULES}`,
       const urgentRfps = rfpsWithDeadlines.filter((r: any) => r.daysLeft !== null && r.daysLeft <= 14 && r.daysLeft >= 0);
       const openTasksList = (tsks || []).filter((t: any) => t.status === "open");
 
+      // Resolve lane pairs: client may supply them, or we derive from server-side lane data.
+      let resolvedLanePairs: Array<{ origin: string; destination: string }> = [];
+      if (Array.isArray(lanePairs) && lanePairs.length > 0) {
+        resolvedLanePairs = lanePairs.slice(0, 5);
+      } else if (company.id) {
+        // Fall back: resolve top corridors server-side from recurring lane data
+        try {
+          const companyLanes = await storage.getRecurringLanesByCompany(company.id);
+          resolvedLanePairs = companyLanes
+            .filter((l: any) => l.origin && l.destination)
+            .sort((a: any, b: any) => (Number(b.weeklyFrequency ?? 0) - Number(a.weeklyFrequency ?? 0)))
+            .slice(0, 5)
+            .map((l: any) => ({ origin: l.origin as string, destination: l.destination as string }));
+        } catch { /* non-fatal */ }
+      }
+
+      // Fetch Sonar market context in parallel
+      let marketContext = "";
+      try {
+        const [pulse, laneVotris] = await withSonarCaller("chatbot:context", () => Promise.all([
+          getNationalMarketSummary(),
+          resolvedLanePairs.length > 0
+            ? getLaneVotrisBatch(resolvedLanePairs)
+            : Promise.resolve(new Map()),
+        ]));
+        if (pulse.otri !== null) {
+          const marketSignal = pulse.otri > 20 ? "tight (carriers rejecting frequently)"
+            : pulse.otri > 8 ? "moderate"
+            : "loose (capacity abundant)";
+          marketContext = `\nCurrent market: National OTRI ${pulse.otri.toFixed(1)}% — market is ${marketSignal}.${pulse.isStale ? " (data may be slightly delayed)" : ""}`;
+        } else {
+          marketContext = `\nCurrent market: National OTRI data unavailable${pulse.lastSuccessfulPull ? ` — last updated ${pulse.lastSuccessfulPull}` : ""}.`;
+        }
+        if (laneVotris.size > 0) {
+          const laneSignals = Array.from(laneVotris.values()).slice(0, 3).map(v => {
+            const sigLabel = v.signal === "hot" ? "🔴 Hot" : v.signal === "warm" ? "🟡 Warm" : v.signal === "cool" ? "🟢 Cool" : "⚪ No signal";
+            if (v.votri !== null) {
+              const wowStr = v.votriWoW !== null ? ` (${v.votriWoW > 0 ? "+" : ""}${v.votriWoW.toFixed(1)} pp WoW)` : "";
+              return `${v.origin}→${v.destination}: VOTRI ${v.votri.toFixed(1)}% ${sigLabel}${wowStr}`;
+            }
+            return `${v.origin}→${v.destination}: VOTRI unavailable`;
+          }).join("; ");
+          marketContext += `\nLane signals: ${laneSignals}`;
+        }
+      } catch { /* non-fatal */ }
+
       const prompt = `You are a freight broker sales coach. Help prep for a call with ${company.name}${company.industry ? ` (${company.industry})` : ""}.
 
 ${(req.body.accountSummary) ? `Current account status: ${req.body.accountSummary}\n` : ""}Key contacts:\n${lastTouches || "None on file"}
@@ -732,9 +1365,9 @@ ${urgentRfps.length > 0 ? `\nURGENT — RFPs due soon: ${urgentRfps.map((r: any)
 ${overdueTasks.length > 0 ? `\nOverdue tasks: ${overdueTasks.map((t: any) => t.title).join(", ")}` : openTasksList.length > 0 ? `\nOpen tasks: ${openTasksList.slice(0, 3).map((t: any) => t.title).join(", ")}` : ""}
 ${accountIntelligence?.quirks ? `\nAccount quirks: ${accountIntelligence.quirks}` : ""}
 ${accountIntelligence?.spotProcess ? `\nSpot process: ${accountIntelligence.spotProcess}` : ""}
-${accountIntelligence?.tenderStyle ? `\nTender style: ${accountIntelligence.tenderStyle}` : ""}
+${accountIntelligence?.tenderStyle ? `\nTender style: ${accountIntelligence.tenderStyle}` : ""}${marketContext}
 
-Generate exactly 3 sharp, specific talking points for this call. Each is 1-2 sentences. Be direct and actionable — reference the specific account details above. No generic freight advice. Numbered list.`;
+Generate exactly 3 sharp, specific talking points for this call. Each is 1-2 sentences. Be direct and actionable — reference the specific account details above. When market data is available and relevant, use it to make a talking point specific to current conditions. No generic freight advice. Numbered list.`;
 
       const message = await anthropic.messages.create({
         model: "claude-opus-4-5",

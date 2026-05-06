@@ -8,6 +8,27 @@
       "when": 1774368843039,
       "tag": "0000_add_rfp_type",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1744315200000,
+      "tag": "0002_market_signal_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1744401600000,
+      "tag": "0003_carrier_market_nbas",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1744487999000,
+      "tag": "0004_email_signal_consumers",
+      "breakpoints": true
     }
   ]
 }

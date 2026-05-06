@@ -1,0 +1,67 @@
+I want to keep the “in development” tabs in the left sidebar visually greyed out for normal users, because that worked well.
+
+But for admins, I still need to be able to access those tabs while I’m building and testing them.
+
+Please update the sidebar behavior with this exact logic:
+
+Desired behavior
+
+Keep the same greyed-out / “in development” visual treatment for the specific sidebar tabs we already marked.
+
+For non-admin users:
+
+the tabs should remain greyed out,
+
+not behave like normal navigation,
+
+and show a tooltip or helper text like “In development”.
+
+For admin users:
+
+keep the tab visually greyed out so the product still communicates that the feature is not fully launched,
+
+but allow click-through navigation so admins can open and test the page,
+
+and optionally show a tooltip like “In development — admin access enabled”.
+
+Important
+
+This should be a role-based access override, not a global removal of the greyed-out state.
+
+Do not make the admin version look fully launched; I still want the visual cue that the tab is in development.
+
+Do not rely on sidebar visibility alone for security. Keep any existing page-level auth/role checks in place.
+
+Keep the implementation clean so we can later swap this to feature-flag logic if needed.
+
+What I want you to inspect first
+
+Before coding, identify:
+
+where the sidebar “greyed out / in development” state is currently defined,
+
+how user role / admin status is determined in the app,
+
+whether the current implementation is using disabled buttons, blocked links, conditional rendering, or route guards,
+
+and the cleanest way to preserve the greyed-out look while allowing admin-only navigation.
+
+Implementation goal
+
+For the targeted sidebar items:
+
+non-admin = greyed out + non-navigable,
+
+admin = greyed out + navigable.
+
+Deliverable
+
+Return:
+
+files changed,
+
+exact logic used to determine admin override,
+
+which tabs were affected,
+
+and screenshots showing the same greyed-out look for both roles, with admin click-through working.

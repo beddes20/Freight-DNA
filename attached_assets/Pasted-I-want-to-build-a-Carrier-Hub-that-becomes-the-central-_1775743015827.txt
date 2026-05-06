@@ -1,0 +1,379 @@
+I want to build a Carrier Hub that becomes the central source of truth for carrier intelligence across the platform.
+
+This is NOT just a carrier directory.
+It should be the structured carrier intelligence layer that powers:
+- Lane Work Queue recommendations
+- carrier outreach and procurement
+- contact selection
+- smarter ranking
+- future reporting and carrier development
+
+The goal is to make the system smarter and more intuitive by knowing:
+- who each carrier is,
+- who we talk to,
+- what equipment they run,
+- what states/regions/lane corridors they actually cover,
+- what lanes they SAY they want,
+- what lanes they have PROVEN they can run,
+- and how confident we should be using them on a given lane.
+
+==================================================
+1. PRODUCT VISION
+==================================================
+
+Create a Carrier Hub where users can:
+- see all carriers in one place
+- search and filter carriers quickly
+- click a carrier to open a detail panel / drawer / modal
+- view and edit structured carrier data
+- use that data downstream in lane tools and procurement workflows
+
+Important:
+This should feel fast, clean, and operator-friendly.
+Do NOT make this a cluttered admin page or a generic CRM record.
+This should be built for freight ops / procurement users.
+
+==================================================
+2. CORE UX
+==================================================
+
+Create a main Carrier Hub page with:
+- search bar
+- filters
+- sortable table or card list of carriers
+- key at-a-glance columns / chips
+
+When a user clicks a carrier:
+- open a right-side detail drawer or similar expandable profile view
+- avoid a tiny cramped popup
+- allow both read and edit workflows
+
+The detail view should feel like a smart operational profile, not a dump of fields.
+
+==================================================
+3. CARRIER HUB LIST VIEW
+==================================================
+
+The main list should support:
+- search by carrier name
+- search by MC / DOT
+- search by dispatcher/contact email or phone
+- search by state / region / lane keyword
+- filter by:
+  - active / inactive / flagged
+  - equipment type
+  - has valid email
+  - has dispatcher contact
+  - has proven lane history
+  - has claimed lane preferences
+  - recently used
+  - recently contacted
+- sort by:
+  - name
+  - recently used
+  - loads run
+  - contact readiness
+  - confidence / fit completeness
+  - lane relevance when opened from a lane workflow
+
+Suggested columns / signals:
+- carrier name
+- MC / DOT
+- status
+- equipment
+- primary contact / dispatcher
+- states / regions served
+- proven lane count
+- claimed lane count
+- last used
+- loads run
+- outreach readiness
+- flagged / do-not-use indicator
+
+==================================================
+4. CARRIER DETAIL PROFILE
+==================================================
+
+The carrier profile should have structured sections:
+
+A. Company Profile
+- legal name
+- display name
+- MC number
+- DOT number
+- status (active / inactive / flagged / do not use)
+- notes
+- tags
+
+B. Contacts
+Support multiple contacts, for example:
+- dispatcher
+- after-hours / night dispatch
+- sales rep
+- billing / AP
+- general email
+
+Each contact record should support:
+- name
+- role
+- email
+- phone
+- extension
+- preferred contact method
+- notes
+- active / inactive
+- primary contact flag
+
+C. Equipment
+Structured equipment capabilities:
+- dry van
+- reefer
+- flatbed
+- step deck
+- power only
+- box truck
+- other
+
+Allow optional notes like:
+- team drivers
+- hazmat
+- drop trailer
+- liftgate
+- temp range
+- capacity notes
+
+D. Geography
+Store what they cover at multiple levels:
+- states
+- regions
+- metro areas
+- origin preferences
+- destination preferences
+
+E. Lane Coverage / Lane Intelligence
+This is the most important part.
+
+Create two distinct categories:
+1. Claimed lanes / preferences
+   - what the carrier says they run
+2. Proven lanes / historical lanes
+   - what the system knows they have actually run
+
+Do NOT blend these invisibly.
+They must be stored separately and shown separately.
+
+For claimed lanes/preferences, support:
+- exact lane pairs
+- origin region → destination region
+- state-to-state preferences
+- preferred backhaul lanes
+- avoid / do not prefer lanes
+- equipment-specific lane preferences if possible
+
+For proven lanes/history, show:
+- exact lane runs
+- similar corridor runs
+- last used date
+- total loads
+- recent load count (30/60/90 day if available)
+- customers served on those lanes
+- recency / confidence signals
+
+F. Performance / System Signals
+Show operational intelligence such as:
+- total loads run
+- last used
+- loads on exact lanes
+- customer history
+- outreach sent count
+- positive outreach outcomes
+- no-response / failed outreach
+- has valid email
+- recently contacted
+- ranking confidence / profile completeness
+
+==================================================
+5. KEY DATA MODEL RULE
+==================================================
+
+The system must distinguish between:
+- claimed fit
+- proven fit
+
+Examples:
+- “Carrier says they run CA-AZ”
+- “Carrier has actually run Glendale, AZ → Buena Park, CA 16 times”
+
+These are both useful, but proven fit should rank higher than claimed fit by default.
+
+This distinction must be visible in the UI and usable in ranking logic.
+
+==================================================
+6. HOW THIS FEEDS THE LANE TOOLS
+==================================================
+
+The Carrier Hub should become a source of truth for lane workflows.
+
+Use Carrier Hub data to improve:
+- carrier suggestions in Lane Work Queue
+- ranking signals
+- outreach recipient selection
+- “Why this carrier” explanations
+- contact selection for send-from-platform
+- suppression logic (flagged, inactive, no email, recently contacted)
+
+When viewing a lane, the system should be able to use carrier hub data such as:
+- exact proven lane history
+- claimed lane preferences
+- equipment compatibility
+- active geography
+- contact readiness
+- recent usage
+- prior outreach outcomes
+
+==================================================
+7. SMART LANE MATCHING
+==================================================
+
+When a lane is open, the system should be able to answer:
+- has this carrier run this exact lane?
+- have they run similar corridors?
+- do they claim this state pair / corridor?
+- do they have the right equipment?
+- do we have a valid dispatcher/contact?
+- have we used them recently?
+- have they responded positively before?
+
+The carrier profile should surface those answers clearly.
+
+==================================================
+8. EDITING EXPERIENCE
+==================================================
+
+Users should be able to edit carrier data easily without breaking data quality.
+
+Recommendations:
+- structured inputs wherever possible
+- chips / tokens for states and regions
+- searchable lane pair selectors where practical
+- inline add/edit for contacts
+- audit-friendly updates
+- clear save states and validation
+
+Avoid forcing everything into one giant form.
+
+==================================================
+9. AUTOMATIC WRITE-BACKS
+==================================================
+
+Certain platform activity should update the Carrier Hub automatically where appropriate.
+
+Examples:
+- successful outreach updates last contacted / outreach stats
+- sent emails improve contact readiness visibility
+- completed loads update proven lanes and recency
+- new valid email captured in workflow can update carrier contact data
+- lane history should enrich proven fit automatically
+
+Manual claimed lane/preferences should remain user-editable.
+System-generated proven history should be derived from real activity.
+
+==================================================
+10. SUGGESTED PROFILE TABS OR SECTIONS
+==================================================
+
+A good profile layout might be:
+- Overview
+- Contacts
+- Equipment
+- Geography
+- Lane Coverage
+- Proven History
+- Outreach / Activity
+- Notes
+
+Or similar, as long as it stays clean and intuitive.
+
+==================================================
+11. USE CASES TO SUPPORT
+==================================================
+
+The Carrier Hub should make these workflows easy:
+
+Use case 1:
+I search a carrier by name, open them, and immediately see who to contact and what they run.
+
+Use case 2:
+I am working a lane and want to understand why this carrier is or is not a good fit.
+
+Use case 3:
+I want to update a carrier’s dispatch email, equipment, and preferred lanes after a call.
+
+Use case 4:
+I want to know whether a carrier only says they run a lane, or if we have actually moved freight with them there.
+
+Use case 5:
+I want lane suggestions to be smarter because the carrier intelligence is better maintained.
+
+==================================================
+12. PHASE 1 SCOPE
+==================================================
+
+Please build a practical Phase 1 first.
+
+Phase 1 should include:
+- Carrier Hub list page
+- searchable/filterable carriers
+- right-side detail drawer or similar profile panel
+- editable company profile
+- editable contact list
+- editable equipment
+- editable geography
+- editable claimed lane preferences
+- visible proven lane history (read-only derived from system activity)
+- operational summary signals (last used, loads run, outreach readiness, etc.)
+- wiring into lane suggestion logic where possible
+
+Do not overbuild advanced reporting in Phase 1.
+Get the operational data model and user experience right first.
+
+==================================================
+13. IMPORTANT DESIGN PRINCIPLES
+==================================================
+
+- Fast and intuitive for ops users
+- Structured, not just notes-based
+- Claimed fit and proven fit must be distinct
+- Useful in lane workflows, not isolated from them
+- Clean enough that people will actually maintain it
+- Smart enough that lane tools improve because of it
+
+==================================================
+14. TESTS
+==================================================
+
+Add tests for:
+- carrier search and filters
+- create / update carrier contacts
+- equipment updates persist correctly
+- claimed lane preferences save and render correctly
+- proven lane history displays from actual system data
+- claimed vs proven fit remain distinct in data and UI
+- carrier hub data influences lane suggestions correctly
+- contact readiness signals are surfaced correctly
+- flagged / inactive carriers behave correctly
+- newly captured contact info can write back where intended
+
+==================================================
+15. RESPONSE FORMAT
+==================================================
+
+When done, respond with:
+1. CURRENT STATE / GAP
+2. CHANGES MADE
+3. DATA MODEL
+4. UX / SCREENS
+5. HOW CLAIMED VS PROVEN LANES WORK
+6. HOW THIS FEEDS LANE TOOLS
+7. TESTS ADDED
+8. KNOWN LIMITATIONS / NEXT IMPROVEMENTS

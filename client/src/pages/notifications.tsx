@@ -8,10 +8,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Bell, CheckCheck, ListTodo, MessageSquare, Target, CheckCircle2,
   Users, BellRing, Building2, CalendarOff, SquareCheck, Lightbulb,
-  Star, Inbox,
+  Star, Inbox, AtSign, MessageCircle,
 } from "lucide-react";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import type { Notification } from "@shared/schema";
+import { formatTimeAgo } from "@/lib/utils";
+import { ContextNotesInbox } from "@/components/context-notes";
 
 const TYPE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color: string }> = {
   task_reminder:         { icon: <BellRing className="h-4 w-4" />,      label: "Task Reminder",     color: "text-red-500" },
@@ -31,20 +33,12 @@ const TYPE_CONFIG: Record<string, { icon: React.ReactNode; label: string; color:
   pto_acknowledged:      { icon: <SquareCheck className="h-4 w-4" />,   label: "PTO Acknowledged",  color: "text-green-500" },
   app_suggestion:        { icon: <Lightbulb className="h-4 w-4" />,      label: "Suggestion",        color: "text-yellow-500" },
   promotion_nomination:  { icon: <Star className="h-4 w-4" />,           label: "Nomination",        color: "text-amber-400" },
+  context_note_mention:  { icon: <AtSign className="h-4 w-4" />,         label: "Mention",           color: "text-amber-500" },
+  context_note_reply:    { icon: <MessageSquare className="h-4 w-4" />,  label: "Note Reply",        color: "text-amber-400" },
 };
 
 const DEFAULT_CONFIG = { icon: <Bell className="h-4 w-4" />, label: "Notification", color: "text-muted-foreground" };
 
-function timeAgo(dateStr: string) {
-  const d = new Date(dateStr);
-  const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  const days = Math.floor(seconds / 86400);
-  if (days < 30) return `${days}d ago`;
-  return d.toLocaleDateString();
-}
 
 const ALL_TYPES = [
   "task_assigned", "task_reminder", "task_comment", "task_completed",
@@ -53,12 +47,15 @@ const ALL_TYPES = [
   "post_reply", "new_post",
   "account_assigned", "pto_covering", "pto_acknowledged",
   "app_suggestion", "promotion_nomination",
+  "context_note_mention", "context_note_reply",
 ];
 
 type Filter = "all" | "unread" | string;
+type Tab = "notifications" | "context_notes";
 
 export default function NotificationsPage() {
   const [, navigate] = useLocation();
+  const [tab, setTab] = useState<Tab>("notifications");
   const [filter, setFilter] = useState<Filter>("all");
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
@@ -91,7 +88,7 @@ export default function NotificationsPage() {
   const typesPresent = [...new Set(notifications.map(n => n.type))].filter(t => ALL_TYPES.includes(t));
 
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-4">
+    <div className="p-4 md:p-6 max-w-2xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -100,11 +97,13 @@ export default function NotificationsPage() {
           <div>
             <h1 className="text-xl font-bold">Inbox</h1>
             <p className="text-sm text-muted-foreground">
-              {unreadCount > 0 ? `${unreadCount} unread` : "All caught up"}
+              {tab === "notifications"
+                ? (unreadCount > 0 ? `${unreadCount} unread` : "All caught up")
+                : "Team notes you’re mentioned in"}
             </p>
           </div>
         </div>
-        {unreadCount > 0 && (
+        {tab === "notifications" && unreadCount > 0 && (
           <Button
             variant="outline"
             size="sm"
@@ -119,6 +118,65 @@ export default function NotificationsPage() {
         )}
       </div>
 
+      {/* Top-level: Notifications vs Context Notes */}
+      <div className="flex gap-1.5 border-b">
+        <button
+          onClick={() => setTab("notifications")}
+          data-testid="tab-section-notifications"
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            tab === "notifications"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Bell className="h-4 w-4" /> Notifications
+        </button>
+        <button
+          onClick={() => setTab("context_notes")}
+          data-testid="tab-section-context-notes"
+          className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            tab === "context_notes"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <MessageCircle className="h-4 w-4" /> Context Notes
+        </button>
+      </div>
+
+      {tab === "context_notes" ? (
+        <ContextNotesInbox />
+      ) : (
+        <NotificationsList
+          isLoading={isLoading}
+          notifications={notifications}
+          filter={filter}
+          setFilter={setFilter}
+          unreadCount={unreadCount}
+          handleClick={handleClick}
+          filtered={filtered}
+        />
+      )}
+    </div>
+  );
+}
+
+interface NotificationsListProps {
+  isLoading: boolean;
+  notifications: Notification[];
+  filter: Filter;
+  setFilter: (f: Filter) => void;
+  unreadCount: number;
+  handleClick: (n: Notification) => void;
+  filtered: Notification[];
+}
+
+function NotificationsList({
+  isLoading, notifications, filter, setFilter, unreadCount, handleClick, filtered,
+}: NotificationsListProps) {
+  const typesPresent = [...new Set(notifications.map(n => n.type))].filter(t => ALL_TYPES.includes(t));
+  return (
+    <>
       {/* Filter tabs */}
       <div className="flex gap-1.5 flex-wrap">
         {(["all", "unread", ...typesPresent] as Filter[]).map(f => {
@@ -179,7 +237,7 @@ export default function NotificationsPage() {
                         <span className="h-2 w-2 rounded-full bg-primary shrink-0" />
                       )}
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
-                        {timeAgo(notif.createdAt?.toString() ?? "")}
+                        {formatTimeAgo(notif.createdAt?.toString() ?? "")}
                       </span>
                     </div>
                   </div>
@@ -197,6 +255,6 @@ export default function NotificationsPage() {
           })}
         </div>
       )}
-    </div>
+    </>
   );
 }

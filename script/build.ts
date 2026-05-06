@@ -35,6 +35,9 @@ const allowlist = [
 async function buildAll() {
   await rm("dist", { recursive: true, force: true });
 
+  console.log("refreshing recognized US city list from server/zipcodes.json...");
+  await import("./generate-us-cities.ts");
+
   console.log("building client...");
   await viteBuild();
 

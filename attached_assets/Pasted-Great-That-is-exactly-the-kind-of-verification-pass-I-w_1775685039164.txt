@@ -1,0 +1,72 @@
+Great. That is exactly the kind of verification pass I wanted.
+
+Based on your findings and fixes, I want one final hardening pass focused on rollout confidence, not feature expansion.
+
+Current verified fixes already made:
+- Silent lane drop fixed in getLaneWorkQueue with catch-all logic so no eligible lane disappears from all buckets
+- AM over-permission fixed so non-managers can only self-assign, not assign other users
+- Empty bench display fixed so 0-bench lanes show “No carriers on bench” instead of “No contact info”
+
+Already verified clean:
+- route ordering
+- org isolation
+- sourceType preservation
+- historical carrier dedup
+- completion threshold behavior
+- assignedByUserId sourced server-side
+
+Now I want you to do 4 things only:
+
+1) Add targeted tests
+Please add or update tests for the exact bugs and guardrails we just covered:
+- getLaneWorkQueue does not silently drop lanes when contacted >= threshold but resolvedAt is null
+- non-manager cannot assign a lane to another user
+- non-manager can self-assign only if allowed by the intended business rule
+- manager/director can assign in-org
+- cross-org assignment fails
+- assigned lane with zero bench entries renders as “No carriers on bench”
+- assigned lane with carriers but no phone/email renders as “No contact info”
+
+2) Add one lightweight audit view or debug output
+I want one simple way to inspect queue correctness without digging through code.
+Choose the lowest-risk option:
+- either a temporary debug log summary on the backend for queue bucket counts and skipped lanes,
+- or a hidden admin-only debug section on the work queue page showing bucket totals and lane ids.
+Do not overbuild this.
+
+3) Do a rollout-readiness review
+Tell me plainly whether this is:
+- safe for internal testing only,
+- safe for limited pilot rollout,
+- or safe for broad internal rollout.
+
+Base that on:
+- correctness
+- auth/org safety
+- queue reliability
+- risk of misleading reps/managers
+- whether remaining issues are cosmetic vs operational
+
+4) Output in a strict format
+Please respond with:
+
+READY STATUS:
+- one of: INTERNAL TEST ONLY / LIMITED PILOT READY / BROAD INTERNAL READY
+
+TESTS ADDED OR UPDATED:
+- bullet list
+
+CHANGES MADE:
+- bullet list
+
+REMAINING RISKS:
+- bullet list
+
+RECOMMENDATION:
+- 3–6 sentences max, direct and decisive
+
+Important guardrails:
+- do not redesign the feature
+- do not create a large new admin system
+- do not expand scope beyond tests, lightweight verification visibility, and rollout-readiness judgment
+- keep everything org-scoped and low-risk

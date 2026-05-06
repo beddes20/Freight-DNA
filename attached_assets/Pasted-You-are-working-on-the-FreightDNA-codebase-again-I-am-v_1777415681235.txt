@@ -1,0 +1,112 @@
+You are working on the FreightDNA codebase again. I am very nervous about unintended changes, so you must follow these constraints exactly.
+
+### HARD CONSTRAINTS (DO NOT VIOLATE)
+
+1. DO NOT:
+   - touch any scheduler except `server/loadFactScheduler.ts` and the minimum necessary test file(s)
+   - touch `server/routes.ts`, `server/storage.ts`, `shared/schema.ts`
+   - change any other files in `server/`, `client/`, `shared/`, `migrations/`, or config
+   - add or remove dependencies
+   - change auth, email, Webex, Microsoft Graph, or AI logic
+   - change any database schema or run migrations
+
+2. You may **only**:
+   - update `server/loadFactScheduler.ts` to use the same hardening pattern as the existing email intelligence scheduler, and
+   - add or update tests that directly relate to this scheduler hardening.
+
+If any requested change would violate these constraints, STOP and ask me.
+
+---
+
+### GOAL
+
+Apply the **same safety pattern** that already exists for the email intelligence scheduler to **one more scheduler**, `loadFactScheduler`, so it cannot silently overlap, hang forever, or run without a heartbeat.
+
+The pattern we want to copy (conceptually) is:
+
+- an in‑flight mutex/flag to prevent overlapping runs,
+- a wall‑clock safety limit with AbortSignal,
+- proper `withHeartbeat()` instrumentation,
+- and tests that assert this behavior.
+
+Do NOT invent a new pattern. Reuse the one already used for email intelligence.
+
+---
+
+### STEP 1 — Inspect existing pattern on email intelligence scheduler (READ-ONLY)
+
+1. Before changing anything, carefully read these files:
+
+   - `server/emailIntelligenceScheduler.ts`
+   - any helper it uses for:
+     - in‑flight mutex / “already running” guard,
+     - AbortSignal / timeout,
+     - `withHeartbeat()` usage,
+   - and its related tests, likely under `tests/email-sync-cadence.test.ts` (or any other test file that validates the scheduler behavior).
+
+2. Summarize for me (in your own words, no code changes yet):
+
+   - How the email scheduler:
+     - prevents overlapping runs,
+     - enforces a maximum run time,
+     - records heartbeats / status.
+   - Which helpers it calls (names + file paths).
+
+Stop here and show me that summary **before** you modify `loadFactScheduler`.
+
+---
+
+### STEP 2 — Apply the same pattern to `server/loadFactScheduler.ts`
+
+Once you’ve summarized the pattern:
+
+1. Open `server/loadFactScheduler.ts`.
+
+2. Carefully refactor this file to use the same safety pattern as `emailIntelligenceScheduler`:
+
+   - Add a per‑job in‑flight guard so the scheduler will **not** start a new cycle if a previous one is still running.
+   - Add a wall‑clock time limit with AbortSignal (longer than the normal run time, e.g., if the normal is ~4 minutes, use something like 8–10 minutes).
+   - Wrap the job in `withHeartbeat()` or the equivalent helper, so failures and stuck runs are visible in `cron_heartbeats`.
+
+3. Keep the **functional behavior** of the job (what it does when it runs) the same. Only add safety: do not remove core logic or change the semantics of the data it writes.
+
+4. If there are any substantial differences in how `loadFactScheduler` loops over work, place the AbortSignal checks in the most reasonable points, mirroring where email intelligence checks for cancellation.
+
+5. Do not rename the file, do not move it, and do not add new imports except what is needed to mirror the pattern used by the email scheduler.
+
+---
+
+### STEP 3 — Add / update tests for `loadFactScheduler` behavior
+
+1. Find the most appropriate test file to extend. Likely candidates:
+
+   - an existing scheduler test file, or
+   - `tests/email-sync-cadence.test.ts` as a model for structure.
+
+2. Add **minimal** tests that assert:
+
+   - `loadFactScheduler` uses the heartbeat wrapper (or equivalent),
+   - it respects the “already running” guard (e.g., second run is blocked or skipped while first is in flight),
+   - it does not ignore the AbortSignal (at least one assertion around “if time limit is exceeded, it stops / signals correctly”).
+
+3. Keep tests focused and structural; do not try to fully re-simulate the whole scheduler pipeline.
+
+---
+
+### STEP 4 — Show your work, NO EXTRA CHANGES
+
+At the end, output a concise summary for me:
+
+1. Exactly what you changed in `server/loadFactScheduler.ts`:
+   - which guards you added,
+   - how you’re using AbortSignal,
+   - how `withHeartbeat()` (or similar) is applied.
+
+2. Which tests you added/modified (file paths + short description of each assertion).
+
+3. Confirmation that:
+   - you did **not** touch any other scheduler files,
+   - you did **not** touch `server/routes.ts`, `server/storage.ts`, `shared/schema.ts`,
+   - you did **not** change dependencies, migrations, auth, email, Webex, Microsoft Graph, or AI logic.
+
+Do **not** start hardening any other scheduler in this branch, even if it looks similar. Only `loadFactScheduler` for this prompt.

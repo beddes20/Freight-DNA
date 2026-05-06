@@ -1,0 +1,132 @@
+Before making any changes, read replit.md and follow its development guardrails.
+
+Context:
+We recently redesigned the Lane Work Queue CarrierOutreachPanel into a cleaner 4-step workspace:
+- Carriers
+- Message
+- Follow-up
+- History
+
+I now want to improve the Message tab by adding a message-template selector so reps can choose from a small set of approved outreach templates instead of relying on one generic default message.
+
+This should be implemented as one cohesive task:
+1. add the template dropdown/selector
+2. add the initial 5 curated templates
+3. make a better template the default
+4. preserve current editing / draft / send behavior
+
+Do NOT split this into multiple partial changes.
+
+Current problem:
+The current default message is too generic and not the tone I want.
+
+Current message I do not like:
+“Hey Starline Logistics Llc team — I'm with Value Truck, a freight brokerage. Checking to see if you've got capacity for Phoenix, AZ → Kent, WA (Dry Van). We usually have a few times a week on this lane and are looking to line up steady coverage. Does that fit your network? If so, I'd be glad to talk through it.”
+
+I want the message experience to feel more operational, faster, and more useful for reps.
+
+Goal:
+In the Message tab, add a compact “Message Template” selector with 5 starter templates that reps can choose from, edit, and send.
+
+Required behavior:
+A. Template selector UI
+- Add a visible but compact dropdown/select near the top of the Message tab editor.
+- Label it “Message Template” or “Template”.
+- The rep should be able to choose from 5 templates.
+- Selecting a template should populate the editable subject/body immediately.
+
+B. Template library
+Implement these 5 starter templates in code as the initial curated library.
+
+1. Quick Capacity Check
+Subject: Capacity for {{origin}} to {{destination}}
+Body:
+Hi {{carrierName}} team — Value Truck here. Do you have capacity for {{origin}} → {{destination}} on {{equipmentType}}? If it fits your network, send over availability and I can share the details.
+
+2. Steady Lane Ask
+Subject: Steady {{origin}} to {{destination}} freight
+Body:
+Hi {{carrierName}} team — we’re looking to build steady coverage on {{origin}} → {{destination}} for {{equipmentType}}. If this is a lane you like, let me know and I can send over the details and timing.
+
+3. Spot Quote Request
+Subject: Quote request: {{origin}} to {{destination}}
+Body:
+Hi {{carrierName}} team — do you have coverage for {{origin}} → {{destination}} on {{equipmentType}}? If yes, send me your best rate and availability and I’ll get you the load details right away.
+
+4. Re-engage Prior Carrier
+Subject: Checking capacity on a lane we’ve run together
+Body:
+Hi {{carrierName}} team — reaching out from Value Truck on {{origin}} → {{destination}} for {{equipmentType}}. Since this looks like a lane we may have overlap on, I wanted to see if you have capacity and interest in covering it again.
+
+5. Network Fit Check
+Subject: Does {{origin}} to {{destination}} fit your network?
+Body:
+Hi {{carrierName}} team — wanted to check whether {{origin}} → {{destination}} on {{equipmentType}} fits your network. If it does, I’d be happy to send over the lane details and talk through coverage.
+
+C. Default behavior
+- Make “Quick Capacity Check” the default selected template.
+- Do NOT keep the old generic message as the primary default UX.
+- If needed for safety/backward compatibility, the old message can remain as a legacy fallback in code, but it should not be what reps see by default.
+
+D. Variable interpolation / compatibility
+- Keep the templates compatible with the current lane/context interpolation system.
+- If the app uses different variable names internally than {{origin}}, {{destination}}, {{equipmentType}}, {{carrierName}}, map them to the current implementation cleanly.
+- Do not regress current message generation or send behavior.
+
+E. Unsaved edit protection
+If the rep edits the subject/body manually and then switches templates:
+- detect that the current content has been modified from the last applied template
+- show a lightweight confirmation:
+  “Switching templates will replace your current edits. Continue?”
+- if cancelled, keep the current content and restore the prior selected template
+- if confirmed, apply the newly selected template
+
+F. Interaction with current draft flow
+Please inspect the current Message tab implementation and integrate this cleanly with the existing draft flow.
+
+Requirements:
+- Do not break current AI-generated drafts if they already exist.
+- Do not break send/log behavior.
+- If there is already a default/fallback template helper, reuse or refactor it cleanly rather than duplicating logic.
+- The template selector should improve the starting message, not fight with the draft system.
+
+Preferred behavior:
+- On entering Message tab, a default starter template is already selected.
+- The rep can either keep/edit that template or generate drafts if that flow already exists.
+- The experience should feel coherent, not like two unrelated systems jammed together.
+
+G. Implementation style
+- Keep this simple and scoped.
+- Centralize template definitions in a helper/module instead of hardcoding large strings directly in JSX if possible.
+- Keep component readability high.
+- Do NOT build a template admin system, DB persistence, or CRUD.
+- This is just a curated starter template picker inside Lane Work Queue.
+
+H. Tests / validation
+Update or add tests as appropriate for:
+- template selector renders
+- selecting a template updates subject/body
+- default selected template is Quick Capacity Check
+- switching templates with no edits works
+- switching templates after manual edits prompts before overwriting
+- current procurement draft/send flow still works
+- no regression to existing procurement / ranking / history tests
+
+I. Deliverables
+Return:
+1. short summary of what you changed
+2. exact files changed
+3. where the template library lives
+4. confirmation that Quick Capacity Check is the default
+5. confirmation that the old generic message is no longer the default UX
+6. how unsaved-edit protection works
+7. any tests added/updated
+8. confirmation existing suites still pass
+
+Success criteria:
+- reps can choose from 5 approved message templates
+- the template selector is simple and user-friendly
+- the old generic message is no longer the main default
+- message editing still works normally
+- switching templates does not accidentally wipe edits
+- existing lane work queue outreach flow remains intact

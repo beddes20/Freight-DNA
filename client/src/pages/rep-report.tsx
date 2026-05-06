@@ -10,7 +10,7 @@ import {
   TrendingUp, TrendingDown, Minus, Phone, Mail, MessageSquare, Building2,
   Users, CheckSquare, AlertCircle, Target, ChevronRight, Zap, Trophy, Flame,
   Clock, ArrowLeft, Send, Loader2, ExternalLink, BookOpen, ChevronDown, ChevronUp, Save,
-  Package, DollarSign, Star, XCircle, Heart, UserCheck,
+  Package, DollarSign, Star, XCircle, Heart, UserCheck, CheckCircle2, Sun, ClipboardCheck,
 } from "lucide-react";
 
 interface PromotionCriteria {
@@ -40,6 +40,8 @@ function nextLevelRole(role: string): { fromRole: string; toRole: string; label:
 }
 
 import { matchRepName, fmtMoney } from "@/lib/rep-utils";
+import { formatCustomerName } from "@shared/laneFormatters";
+import { CopilotActionsCard } from "@/components/dna-copilot/copilot-actions-card";
 
 interface AccountSummaryRow {
   customerName: string;
@@ -73,6 +75,22 @@ interface RepReportData {
   accountsNeedingAttention: number;
   wins: Array<{ id: string; text: string; category: string }>;
   teamMembers: TeamMemberSummary[];
+}
+
+interface LmCheckinSummary {
+  totalCheckins: number;
+  morningCount: number;
+  afternoonCount: number;
+  checkCallsDonePct: number | null;
+  boardCleanMorningPct: number | null;
+  boardCleanAfternoonPct: number | null;
+  checkoutDonePct: number | null;
+  recentCheckins: {
+    id: number; check_date: string; check_type: string;
+    check_calls_done: boolean | null; board_clean: boolean | null;
+    checkout_done: boolean | null; notes: string | null;
+    reviewer_name: string;
+  }[];
 }
 
 interface ReportCardSnapshot {
@@ -475,6 +493,16 @@ export default function RepReportPage() {
     enabled: !!targetId,
   });
 
+  const { data: lmSummary } = useQuery<LmCheckinSummary>({
+    queryKey: ["/api/lm-checkins/lm-summary", targetId, period],
+    queryFn: async () => {
+      const res = await fetch(`/api/lm-checkins/lm-summary/${targetId}?period=${period === "weekly" ? "week" : "month"}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!targetId,
+  });
+
   if (isLoading) return <LoadingSkeleton />;
 
   if (error || !data) {
@@ -527,7 +555,7 @@ export default function RepReportPage() {
       {/* ── Dark hero header ── */}
       <div
         className="relative px-6 pt-6 pb-10 md:px-8 md:pt-8"
-        style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%)" }}
+        style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}
       >
         <div className="max-w-5xl mx-auto">
           {/* Back button */}
@@ -545,12 +573,12 @@ export default function RepReportPage() {
           <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
             {/* Rep info */}
             <div className="flex items-center gap-4">
-              <div className="h-14 w-14 rounded-2xl bg-primary/20 border border-primary/30 flex items-center justify-center text-white font-bold text-lg shadow-lg shrink-0">
+              <div className="h-14 w-14 rounded-2xl flex items-center justify-center text-white font-bold text-lg shadow-lg shrink-0" style={{ background: "rgba(255,180,0,0.12)", border: "1px solid rgba(255,180,0,0.25)" }}>
                 {initials}
               </div>
               <div>
                 <h1 className="text-2xl font-bold text-white" data-testid="text-rep-name">{rep.name}</h1>
-                <p className="text-slate-300 text-sm mt-0.5">
+                <p className="text-white/60 text-sm mt-0.5">
                   {roleLabel}{managerLine ? ` · ${managerLine}` : ""}
                 </p>
               </div>
@@ -559,17 +587,17 @@ export default function RepReportPage() {
             {/* Period toggle + actions */}
             <div className="flex flex-col items-start md:items-end gap-2">
               <div className="flex items-center gap-2 flex-wrap">
-                <div className="flex items-center gap-1 bg-white/10 rounded-xl p-1">
+                <div className="flex items-center gap-1 rounded-xl p-1" style={{ background: "rgba(255,255,255,0.07)" }}>
                   <button
                     onClick={() => setPeriod("weekly")}
-                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "weekly" ? "bg-white text-slate-900" : "text-white/70 hover:text-white"}`}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "weekly" ? "bg-white text-black" : "text-white/70 hover:text-white"}`}
                     data-testid="button-period-weekly"
                   >
                     Weekly
                   </button>
                   <button
                     onClick={() => setPeriod("monthly")}
-                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "monthly" ? "bg-white text-slate-900" : "text-white/70 hover:text-white"}`}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${period === "monthly" ? "bg-white text-black" : "text-white/70 hover:text-white"}`}
                     data-testid="button-period-monthly"
                   >
                     Monthly
@@ -638,8 +666,10 @@ export default function RepReportPage() {
         </div>
       </div>
 
+      <div className="h-8" style={{ background: "linear-gradient(to bottom, #0d0d0d 0%, #0d0d0d10 40%, transparent 100%)" }} />
+
       {/* ── Page body ── */}
-      <div className="max-w-5xl mx-auto px-6 py-6 space-y-6 md:px-8">
+      <div className="max-w-5xl mx-auto px-6 py-6 space-y-6 md:px-8 -mt-3">
 
         {/* Goals Progress */}
         {goals.length > 0 && (
@@ -684,6 +714,82 @@ export default function RepReportPage() {
                   </div>
                 );
               })}
+            </div>
+          </section>
+        )}
+
+        {/* LM Check-In Compliance — only for LM/LC roles */}
+        {(rep.role === "logistics_manager" || rep.role === "logistics_coordinator") && lmSummary && lmSummary.totalCheckins > 0 && (
+          <section data-testid="section-lm-checkin-compliance">
+            <div className="flex items-center gap-2 mb-3">
+              <ClipboardCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+              <h2 className="text-sm font-semibold text-foreground">Check-In Compliance</h2>
+              <span className="text-xs text-muted-foreground">{lmSummary.totalCheckins} check-in{lmSummary.totalCheckins !== 1 ? "s" : ""} this {period === "weekly" ? "week" : "month"}</span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+              {[
+                { label: "Check Calls Done", pct: lmSummary.checkCallsDonePct, icon: <Sun className="w-3.5 h-3.5" />, count: lmSummary.morningCount },
+                { label: "AM Board Clean", pct: lmSummary.boardCleanMorningPct, icon: <Sun className="w-3.5 h-3.5" />, count: lmSummary.morningCount },
+                { label: "Checkout Done", pct: lmSummary.checkoutDonePct, icon: <Clock className="w-3.5 h-3.5" />, count: lmSummary.afternoonCount },
+                { label: "PM Board Clean", pct: lmSummary.boardCleanAfternoonPct, icon: <Clock className="w-3.5 h-3.5" />, count: lmSummary.afternoonCount },
+              ].map(stat => (
+                <div key={stat.label} className="rounded-xl border bg-card p-3 text-center" data-testid={`stat-checkin-${stat.label.replace(/\s+/g, "-").toLowerCase()}`}>
+                  <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground mb-1">{stat.icon}{stat.label}</div>
+                  {stat.pct === null ? (
+                    <p className="text-lg font-bold text-muted-foreground/40">—</p>
+                  ) : (
+                    <p className={`text-2xl font-bold ${stat.pct >= 80 ? "text-emerald-600 dark:text-emerald-400" : stat.pct >= 50 ? "text-amber-500" : "text-red-500"}`}>
+                      {stat.pct}%
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">{stat.count} check{stat.count !== 1 ? "s" : ""}</p>
+                </div>
+              ))}
+            </div>
+            {/* Recent check-in log */}
+            <div className="rounded-xl border bg-card overflow-hidden overflow-x-auto">
+              <div className="bg-muted/30 px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wide">Recent Check-Ins</div>
+              <table className="w-full text-xs min-w-[500px]">
+                <thead className="border-b border-border">
+                  <tr>
+                    <th className="text-left px-4 py-2 font-medium text-muted-foreground">Date</th>
+                    <th className="text-center px-3 py-2 font-medium text-muted-foreground">Type</th>
+                    <th className="text-center px-3 py-2 font-medium text-muted-foreground">Check Calls</th>
+                    <th className="text-center px-3 py-2 font-medium text-muted-foreground">Board</th>
+                    <th className="text-center px-3 py-2 font-medium text-muted-foreground">Checkout</th>
+                    <th className="text-left px-3 py-2 font-medium text-muted-foreground">Reviewer</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lmSummary.recentCheckins.map(r => (
+                    <tr key={r.id} className="border-t border-border hover:bg-muted/20">
+                      <td className="px-4 py-2 font-medium">{r.check_date}</td>
+                      <td className="px-3 py-2 text-center">
+                        {r.check_type === "morning"
+                          ? <span className="inline-flex items-center gap-0.5 text-amber-600 dark:text-amber-400"><Sun className="w-3 h-3" />AM</span>
+                          : <span className="inline-flex items-center gap-0.5 text-blue-600 dark:text-blue-400"><Clock className="w-3 h-3" />PM</span>
+                        }
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {r.check_calls_done === true ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mx-auto" />
+                          : r.check_calls_done === false ? <XCircle className="w-3.5 h-3.5 text-red-500 mx-auto" />
+                          : <Minus className="w-3.5 h-3.5 text-muted-foreground/30 mx-auto" />}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {r.board_clean === true ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mx-auto" />
+                          : r.board_clean === false ? <XCircle className="w-3.5 h-3.5 text-red-500 mx-auto" />
+                          : <Minus className="w-3.5 h-3.5 text-muted-foreground/30 mx-auto" />}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {r.checkout_done === true ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 mx-auto" />
+                          : r.checkout_done === false ? <XCircle className="w-3.5 h-3.5 text-red-500 mx-auto" />
+                          : <Minus className="w-3.5 h-3.5 text-muted-foreground/30 mx-auto" />}
+                      </td>
+                      <td className="px-3 py-2 text-muted-foreground truncate max-w-[120px]">{r.reviewer_name}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </section>
         )}
@@ -814,9 +920,9 @@ export default function RepReportPage() {
                         <td className="px-4 py-2.5">
                           <div className="flex items-center gap-2">
                             <div className="h-6 w-6 rounded bg-primary/10 flex items-center justify-center text-primary text-[10px] font-bold shrink-0">
-                              {row.customerName[0]}
+                              {formatCustomerName(row.customerName)[0]}
                             </div>
-                            <span className="text-sm font-medium text-foreground truncate max-w-[180px]">{row.customerName}</span>
+                            <span className="text-sm font-medium text-foreground truncate max-w-[180px]">{formatCustomerName(row.customerName)}</span>
                           </div>
                         </td>
                         <td className="px-3 py-2.5 text-center">
@@ -888,6 +994,13 @@ export default function RepReportPage() {
                 </div>
               )}
             </section>
+
+            {/* Recent DNA copilot actions for this rep */}
+            {targetId && (
+              <section className="mb-4">
+                <CopilotActionsCard scope="user" id={targetId} limit={10} />
+              </section>
+            )}
 
             {/* Account activity */}
             {topAccounts.length > 0 && (

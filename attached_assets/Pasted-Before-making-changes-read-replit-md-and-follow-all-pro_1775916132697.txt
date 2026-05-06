@@ -1,0 +1,322 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+Context:
+We already have:
+- Email Intelligence Layer v1
+- email_messages / email_signals
+- account scoring using email signals
+- account/customer NBAs driven by email signals
+- internal email-signal endpoints
+- customer-side account intelligence work underway / planned
+
+We now want the customer-side equivalent of live carrier contact capture:
+when we email back and forth with a customer, the system should recognize new people on that domain and help us keep customer contacts current.
+
+Goal:
+Build **Customer Contact Capture from Email v1**.
+
+Core principle:
+Do NOT auto-create or auto-overwrite customer contacts blindly from domain match alone.
+Instead:
+- detect likely new customer contacts from email activity,
+- create a suggestion/workflow,
+- make it easy for users to add them to the correct customer account,
+- optionally auto-create low-risk “suggested” contact records if there is strong evidence.
+
+This should improve data freshness without making CRM contact data noisy or wrong.
+
+--------------------------------------------------
+1. HIGH-LEVEL PRODUCT BEHAVIOR
+--------------------------------------------------
+
+Desired behavior:
+
+If an inbound or outbound email is associated to a known customer account,
+and an email participant is not already a known contact for that account,
+the system should surface a lightweight suggestion:
+
+"New contact detected for Acme: jane@acme.com"
+
+User actions:
+- Add contact
+- Add + set role
+- Ignore
+- Dismiss for now / snooze
+- Never suggest this address again
+
+This should be a suggestion/banner/card pattern, not a blocking modal popup on every message.
+
+Important:
+- Domain match is a strong clue, but not sufficient for blind insertion.
+- Generic/shared inboxes (ops@, billing@, support@, ap@, ar@, no-reply@) should be treated carefully.
+- The workflow should be easy and low-friction.
+
+--------------------------------------------------
+2. DATA MODEL
+--------------------------------------------------
+
+If suitable customer contact tables already exist, extend them.
+If not, add the minimum needed structure.
+
+We likely need two related concepts:
+
+A) Canonical account contact
+Existing or new table, e.g. account_contacts:
+- id
+- accountId
+- orgId
+- name
+- email
+- phone
+- title
+- roleType (operations, procurement, sales, finance, leadership, other)
+- sourceType (manual, email_header, email_signature, import, sync)
+- status (active, inactive)
+- isPrimary
+- lastSeenAt
+- createdAt / updatedAt
+
+B) Suggested contact capture
+New table if needed, e.g. account_contact_suggestions:
+- id
+- accountId
+- orgId
+- emailMessageId (nullable)
+- threadId (nullable)
+- emailAddress
+- suggestedName
+- suggestedPhone
+- suggestedTitle
+- suggestionSource (domain_match, email_header, email_signature, repeated_thread_presence)
+- confidenceScore
+- status (pending, accepted, ignored, snoozed, never_suggest)
+- createdAt / updatedAt
+- acceptedAt / ignoredAt / snoozedUntil
+- actedByUserId
+- notes/comment
+
+Add proper dedupe constraints so one noisy thread doesn’t create many copies of the same suggestion.
+
+--------------------------------------------------
+3. DETECTION LOGIC
+--------------------------------------------------
+
+Create a service like:
+accountContactCaptureService.ts
+
+Responsibilities:
+- inspect email_messages associated with an account
+- identify participants (from/to/cc) that are not already contacts on that account
+- score whether they are likely valid account contacts
+- create/update account_contact_suggestions
+
+Detection inputs:
+- email address domain matches account domain(s)
+- repeated presence across multiple threads
+- appears in both TO and FROM over time
+- email signature extraction (name/title/phone if available)
+- thread already linked to the account
+- message direction and role in thread (sender vs copied)
+
+Confidence heuristics:
+Higher confidence:
+- exact domain match to known customer account domain
+- appears in multiple threads
+- direct sender or reply participant
+- signature contains plausible name/title
+- discussed on account-linked threads
+
+Lower confidence:
+- appears only once in CC
+- generic/shared mailbox
+- personal email domain
+- forwarding/alias cases
+- signature absent or unclear
+
+Generic inbox handling:
+- addresses like ops@, support@, billing@, ap@, ar@, accounting@ should:
+  - still be capturable,
+  - but flagged as “shared inbox” or “generic contact”
+  - should not automatically become primary contacts
+
+Do not create duplicate suggestions if:
+- the email address already exists as an account contact
+- a pending/ignored/snoozed suggestion already exists for the same account + email
+
+--------------------------------------------------
+4. ACCOUNT MATCHING
+--------------------------------------------------
+
+We need careful account matching.
+
+If the email_message is already linked to an account:
+- use that account as the source of truth.
+
+If the message is not linked to an account but domain matching is possible:
+- this task does NOT need to solve broad account resolution for all email traffic.
+- Only create suggestions when the message is already tied to a known account OR when there is a very strong unambiguous domain match and an existing account record.
+
+Avoid guessing across multiple customer accounts that share parent/subsidiary domains.
+
+If account domain handling already exists:
+- reuse it.
+If not:
+- keep v1 conservative.
+
+--------------------------------------------------
+5. ACCEPT / IGNORE WORKFLOW
+--------------------------------------------------
+
+Implement actions on suggestions:
+
+Accept:
+- create a canonical account contact if one doesn’t exist
+- populate:
+  - email
+  - name/title/phone if available
+  - sourceType = email_header / email_signature / suggestion_accept
+  - lastSeenAt
+- mark suggestion as accepted
+
+Accept + role:
+- optionally allow setting roleType during acceptance
+
+Ignore:
+- mark suggestion ignored
+- do not show prominently again unless the contact reappears after a meaningful period
+
+Snooze:
+- hide until snoozedUntil
+
+Never suggest:
+- permanently suppress this address for this account unless manually reset
+
+If a contact already exists:
+- update lastSeenAt
+- optionally enrich missing name/title/phone if confidence is high
+- do NOT overwrite manually entered fields lightly
+
+--------------------------------------------------
+6. UI / UX
+--------------------------------------------------
+
+Add a lightweight suggestion surface in the customer/account workflow.
+
+Good places (choose the one that best fits existing UI patterns):
+- Account Intelligence / Signals panel
+- Account detail sidebar
+- Email thread detail card
+- Next Best Actions / suggestions widget
+
+UI requirements:
+- show pending contact suggestions for the account
+- each suggestion shows:
+  - email address
+  - suggested name/title if available
+  - confidence level / source explanation
+  - “seen in X threads” if available
+- actions:
+  - Add contact
+  - Add + set role
+  - Ignore
+  - Snooze
+
+Do NOT make this a blocking modal on every email.
+Prefer a compact card/banner/list item that reps can action quickly.
+
+--------------------------------------------------
+7. INTERNAL/API ROUTES
+--------------------------------------------------
+
+Add minimal endpoints to support the workflow.
+
+Examples:
+- GET /api/internal/accounts/:accountId/contact-suggestions
+- POST /api/internal/accounts/:accountId/contact-suggestions/:suggestionId/accept
+- POST /api/internal/accounts/:accountId/contact-suggestions/:suggestionId/ignore
+- POST /api/internal/accounts/:accountId/contact-suggestions/:suggestionId/snooze
+- POST /api/internal/accounts/:accountId/contact-suggestions/:suggestionId/never-suggest
+
+Use existing internal auth / org guards.
+
+--------------------------------------------------
+8. INTEGRATION WITH EMAIL PIPELINE
+--------------------------------------------------
+
+Wire this into the existing email processing flow.
+
+When new inbound/outbound email is processed:
+- if linked to an account,
+- run account contact capture detection,
+- create/update account_contact_suggestions as needed.
+
+This can happen:
+- in the email intelligence scheduler, or
+- immediately after message/signal processing if safe.
+
+Make sure failures here do NOT break email ingestion.
+
+--------------------------------------------------
+9. DEDUPE / DATA QUALITY
+--------------------------------------------------
+
+Important guardrails:
+- one suggestion per (accountId, emailAddress) unless a new materially different suggestion state is needed
+- do not create duplicate canonical contacts for the same email on the same account
+- do not overwrite curated contact names/titles from email unless confidence is high and fields are currently blank
+- log source email/thread for auditability
+
+If an address belongs to an existing contact on a different account:
+- be careful
+- do not auto-reassign it without explicit review
+
+--------------------------------------------------
+10. TESTS
+--------------------------------------------------
+
+Add tests for at least:
+
+A) Suggestion creation
+- new email participant on account-linked thread creates pending suggestion
+- repeated participant updates existing suggestion instead of duplicating
+- generic/shared inbox creates suggestion but is flagged lower-confidence/shared
+
+B) Accept flow
+- accepting suggestion creates account contact
+- accepting with role sets roleType
+- accepting existing email updates lastSeenAt rather than duplicating contact
+
+C) Ignore/snooze/never-suggest
+- ignored suggestion is not repeatedly recreated on next pass
+- snoozed suggestion stays hidden until expiration
+- never-suggest suppresses future suggestions for that account+email
+
+D) Data quality
+- existing manual contact is not overwritten improperly
+- participant from unrelated domain does not create suggestion
+- ambiguous/multi-account cases fail safely
+
+E) Integration
+- email processing pipeline can invoke contact capture without crashing
+- new suggestion is visible via route/UI
+
+--------------------------------------------------
+11. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. short summary of changes
+2. exact files changed
+3. schemas/tables added or updated
+4. how suggestion confidence is determined
+5. UI location and behavior for contact suggestions
+6. accept/ignore/snooze workflow
+7. dedupe and data-quality rules
+8. tests added/updated
+9. assumptions / limitations / next-step ideas
+
+Success criteria:
+- Real customer email activity helps keep account contacts current.
+- Users are prompted to add new contacts without being spammed by popups.
+- Data quality improves without risky blind auto-creation.
+- The system learns from real communication and stays operationally useful.

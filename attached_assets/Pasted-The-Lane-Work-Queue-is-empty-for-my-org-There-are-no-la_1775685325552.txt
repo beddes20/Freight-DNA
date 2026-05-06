@@ -1,0 +1,63 @@
+The Lane Work Queue is empty for my org. There are no lanes showing at all.
+
+I need you to debug this from the source and tell me exactly why recurring lanes are not appearing.
+
+Do not assume the UI is the problem. Trace the full path end to end:
+
+1) Feature gating
+- Verify whether lane_carrier_outreach_v1 is enabled for this org
+- Verify whether recurring lane endpoints are returning empty because of a feature flag or org-level gating
+
+2) Recurring lane generation
+- Verify whether the recurring lane engine has actually run for this org
+- Tell me when it last ran
+- Tell me how many lanes it generated
+- Tell me how many were filtered out and why
+
+3) Eligibility logic
+- Inspect the recurring lane qualification logic
+- Tell me the exact criteria for a lane to qualify
+- Specifically answer whether a lane that runs 2+ times per week should qualify right now
+- If not, explain the current threshold and what is excluding those lanes
+
+4) Source data
+- Verify the freight history / load data needed by the engine is present for this org
+- Check whether the lane aggregation logic is actually seeing origin, destination, equipment, and frequency correctly
+- Identify if the data shape or normalization is causing valid lanes to be missed
+
+5) Database state
+- Query the recurring lanes table for this org
+- Tell me:
+  - total recurring lanes in DB
+  - total active recurring lanes
+  - total assigned recurring lanes
+  - total lanes with bench entries
+- If zero, identify exactly where in the pipeline they are being lost
+
+6) Work queue path
+- Verify whether getLaneWorkQueue is receiving zero recurring lanes versus filtering them all out after retrieval
+- If lanes exist in DB but are not making it into the queue, identify the exact filter/bucket condition causing that
+
+What I need back:
+- ROOT CAUSE
+- EXACT FILES / LOGIC RESPONSIBLE
+- WHETHER THIS IS:
+  - feature flag issue
+  - engine not running
+  - threshold mismatch
+  - bad source data
+  - queue filtering bug
+  - or some combination
+- LOW-RISK FIXES ONLY
+
+If no recurring lanes exist yet, I want you to also give me the fastest safe way to populate them for testing:
+- run the engine
+- loosen threshold if appropriate
+- seed from existing freight history if needed
+
+Output format:
+1. CURRENT STATE
+2. ROOT CAUSE
+3. WHERE THE LANES ARE GETTING LOST
+4. FIXES MADE
+5. HOW I CAN SEE 2+/WEEK LANES AFTER THE FIX

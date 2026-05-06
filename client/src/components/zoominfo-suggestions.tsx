@@ -138,8 +138,10 @@ export function ZoomInfoSuggestionsDialog({ open, onClose, companyId, companyNam
               <AlertCircle className="h-7 w-7 text-red-500" />
               <div>
                 <p className="text-sm font-medium text-foreground">Search unavailable</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {(error as any)?.error || "ZoomInfo API returned an error. Please try again later."}
+                <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+                  {(error as any)?.error?.includes("not authorized")
+                    ? "ZoomInfo API access is not yet enabled for this account. Contact integrationsupport@zoominfo.com to activate it."
+                    : ((error as any)?.error || "ZoomInfo API returned an error. Please try again later.")}
                 </p>
               </div>
             </div>

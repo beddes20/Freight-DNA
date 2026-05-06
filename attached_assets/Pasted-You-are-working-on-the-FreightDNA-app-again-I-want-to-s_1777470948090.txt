@@ -1,0 +1,141 @@
+You are working on the FreightDNA app again. I want to simplify what the sales floor sees by controlling which tabs/options are active, while still letting admins see everything (including incubating features) in a greyed/disabled state.
+
+I am nervous about unintended changes, so you must follow these constraints:
+
+### HARD CONSTRAINTS
+
+Do NOT:
+- change any backend behavior, routes, or APIs
+- rename or delete existing routes/pages
+- touch schedulers, auth, or integrations
+- change database schema or migrations
+- modify feature logic inside pages (only nav/tab visibility)
+
+You MAY:
+- add a small feature-visibility registry (config/constant) to centralize which tabs/options are “active”
+- add role-aware nav/tab rendering logic on the frontend ONLY
+- add minimal types/helpers to support this
+- optionally add a tiny admin-only UI section that shows the full list with disabled items greyed out
+
+If any requested change would violate these constraints, STOP and ask me.
+
+---
+
+### GOAL
+
+Based on the current FreightDNA navigation and tabs, I want:
+
+1) **These items active and visible for everyone (sales floor + admins):**
+
+Dashboard / Coaching:
+- Dashboard
+- 1:1’s
+- Tasks
+- Goals
+- Team Performance
+
+Customer Facing:
+- Customers
+- Customer Quotes
+- Top Opportunities
+- RFP & Awards
+- Contact Suggestions
+- Conversations
+
+Carrier Facing:
+- Lane Intelligence (BUT: move it to the Customer Facing group in the UI)
+- My Procurement
+- Lane Work Queue
+- Available Freight
+- Conversations
+- LM Check-In Log
+- Available Loads
+
+2) All other tabs/options:
+- completely hidden for non-admin users
+- visible but greyed/disabled (and clearly labeled as “Admin Only” or “In development”) for admins
+
+Do NOT remove or break the underlying pages/routes. This is a **visibility/UX** change only.
+
+Assume there is already a concept of “admin” vs “non-admin” user in the app (e.g., via roles or permissions). If you need to read that from an existing auth/user context, do so, but do not change the auth implementation itself.
+
+---
+
+### STEP 1 — Find and map the existing nav/tab structure (READ-ONLY)
+
+1. Identify the central places where:
+   - the main navigation/sidebar is defined, and
+   - the major tab sets for the areas above are defined (Dashboard, Customer-facing, Carrier-facing).
+
+2. Produce a short summary (no code changes yet) listing:
+   - which components/files control:
+     - main sidebar / top-level nav
+     - the Customer-facing tab group
+     - the Carrier-facing tab group
+   - how roles (admin vs non-admin) are currently read in the frontend, if at all.
+
+STOP after this summary and show it to me before you change anything.
+
+---
+
+### STEP 2 — Introduce a feature visibility registry (frontend-only)
+
+Once I approve the summary:
+
+1. Create a small, strongly-typed registry (e.g., a `featureVisibility.ts` or similar) that defines for each tab/option:
+   - a stable key (e.g., `dashboard`, `tasks`, `laneIntelligence`, `availableLoads`, etc.)
+   - group/category if needed (Dashboard, Customer, Carrier)
+   - a status: `"active"` | `"admin_preview"` | `"hidden"`
+
+2. Initialize this registry so that:
+   - the items in my “Keep Active” list are `"active"`
+   - everything else currently in nav/tabs is `"admin_preview"` or `"hidden"` (whichever makes more sense based on current usage)
+   - **Lane Intelligence** is associated with the Customer-facing group in the registry (even if its code lives under Carrier today).
+
+3. This registry should live in the frontend and NOT change any backend logic.
+
+---
+
+### STEP 3 — Wire the registry into nav/tab rendering
+
+1. Update the main nav/sidebar component so that:
+   - for **non-admin** users, it only renders items whose status is `"active"`
+   - for **admin** users, it renders both `"active"` and `"admin_preview"` items, but:
+     - `"admin_preview"` items are visibly greyed/disabled and labeled (e.g., a small “Admin only” or “Preview” tag)
+     - `"hidden"` items do not render at all for anyone
+
+2. Update the relevant tab components for the Customer-facing and Carrier-facing sections using the same rules.
+
+3. Move **Lane Intelligence** into the Customer-facing section in the UI (grouping/position), without breaking its route or behavior.
+
+Do NOT change the behavior of the underlying pages. If a non-admin somehow navigates directly to a hidden route, we can handle that later; for now this change is about the visible navigation and tab lists.
+
+---
+
+### STEP 4 — (Optional) Minimal admin visibility UI
+
+If it is straightforward:
+
+- add an admin-only view (even a very simple one) that:
+  - lists all features in the registry, grouped
+  - shows their current status (`active`, `admin_preview`, `hidden`)
+
+This view should be **read-only** for now (no toggles). I just want a place for admins to see what exists.
+
+If adding this view would be non-trivial or would require touching backend/admin routes, SKIP this step and say so in your summary.
+
+---
+
+### STEP 5 — Summary and constraints check
+
+At the end, output a concise summary:
+
+1. Files you added/changed (paths + a one-line description each).
+2. The structure of the feature visibility registry (key fields, example entry).
+3. How you determine admin vs non-admin in the frontend.
+4. Confirmation that:
+   - no backend routes/APIs were changed,
+   - no schedulers, auth, or integrations were touched,
+   - lane intelligence was moved only by UI grouping, not by breaking its route.
+
+Do NOT start any additional cleanup or refactors beyond what is described above.

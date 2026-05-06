@@ -79,8 +79,8 @@ export async function sendRepReportEmail(userId: string, period: "weekly" | "mon
 }
 
 export function initRepReportScheduler(): void {
-  const weeklyCron = process.env.REP_REPORT_WEEKLY_CRON || "0 7 * * 1";
-  const monthlyCron = process.env.REP_REPORT_MONTHLY_CRON || "0 7 1 * *";
+  const weeklyCron = process.env.REP_REPORT_WEEKLY_CRON || "0 8 * * 1";
+  const monthlyCron = process.env.REP_REPORT_MONTHLY_CRON || "0 8 1 * *";
 
   cron.schedule(weeklyCron, () => {
     sendWeeklyReports().catch(err => logMessage(`Error in weekly reports: ${err.message}`));

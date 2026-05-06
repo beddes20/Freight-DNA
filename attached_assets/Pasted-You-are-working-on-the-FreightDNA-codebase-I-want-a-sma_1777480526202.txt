@@ -1,0 +1,176 @@
+You are working on the FreightDNA codebase. I want a small, carefully scoped improvement to the quote-email funnel focused on:
+
+1) making invisible leak points visible (metrics only), and  
+3) improving the quality of “why we lose” data using the LLM instead of regex-only.
+
+IMPORTANT:
+Do NOT change schema, migrations, packages, or routing contracts.
+Do NOT touch quote ingestion from non-email sources.
+Do NOT touch the email connection/sync pipeline itself (webhooks, delta sync, etc.).
+Do NOT change any quote lifecycle semantics outside of lost-reason assignment.
+Do NOT implement the “wrong call” rep feedback button or sender pinning in this branch.
+
+This task is ONLY:
+- surfacing existing leak/failure signals as metrics/health, and
+- upgrading the lost reason classifier to be LLM-first with regex fallback.
+
+If any part of this spec would require broader refactors, STOP and ask me before proceeding.
+
+---
+
+### STEP 1 — Read-only plan first (no edits yet)
+
+Before making any changes, do a quick READ of these areas and then STOP:
+
+- funnel diagnostics:
+  - `server/services/customerQuotes.ts` → `getFunnelDiagnostics` and related helpers
+- outbound auto-quote and its status codes:
+  - `server/services/outboundQuoteAutoQuote.ts`
+- quote-email ingestion / lost-reason logic:
+  - `server/services/quoteEmailIngestion.ts` (especially `decideLostReason`)
+- email intelligence classifier:
+  - `server/emailIntelligenceService.ts`
+- any existing health/metrics endpoints for CQ/intel
+
+Then propose a short implementation plan that covers:
+
+1. Exactly which new leak metrics you will surface and where they will appear in the existing CQ diagnostics/health.
+2. Exactly how you will implement an LLM-first lost-reason classifier, including:
+   - where the prompt lives,
+   - which model you will call,
+   - how you will fall back to the existing regex classifier on timeout/failure,
+   - how you will audit the chosen reason in `quote_events` (e.g., `reasonSource: "llm" | "regex"`).
+3. A precise list of files to touch.
+4. Any tests you plan to add or update.
+
+Do not modify any files until I approve that plan.
+
+---
+
+### STEP 2 — Upgrade 1: surface leak counters (metrics only)
+
+After I approve the plan, implement the following, keeping scope tight:
+
+**A) Funnel diagnostics: missing-intent and orphan-outbound metrics**
+
+Extend `getFunnelDiagnostics` in `server/services/customerQuotes.ts` to add two metrics:
+
+1. `missingIntentInboundCount`  
+   - Definition: count of **inbound customer messages** in a recent window (e.g., last 7–14 days) that:
+     - belong to org’s monitored mailboxes,
+     - have `direction='inbound'`,
+     - were processed by email intelligence,
+     - but produced no quote-intent signals AND did not lead to a quote via `ingestQuoteFromEmail`.  
+   - This approximates: “customer emails we saw but did not interpret as quote-related.”
+
+2. `orphanOutboundRateCount`  
+   - Definition: count of **outbound messages** where outbound auto-quote:
+     - successfully extracted a high-confidence rate,
+     - but returned a status like “no pending quote on thread” / “no thread” (whatever statuses are already defined in `outboundQuoteAutoQuote.ts`),
+     - meaning: we saw a rate in email but had nowhere to attach it.  
+
+Add these as fields in the existing diagnostics payload; do NOT change the endpoint URL or its basic shape. Use the same time-window conventions already used by diagnostics (reuse existing date-window logic).
+
+You may add minimal helper functions or query fragments as needed, but:
+- keep all new logic inside the existing diagnostics/health layer,
+- do not change production behavior (only metrics/JSON payloads).
+
+**B) Webhook secret visibility**
+
+If it is practical without big refactors:
+
+- Add a simple Boolean (or status string) to an existing CQ/Intel health payload indicating whether `OUTLOOK_WEBHOOK_SECRET` is configured and valid.
+- This can be as simple as: `hasWebhookSecret: boolean` (true when the env var is set).
+- Do not change webhook handling logic in this task — just surface the configuration status for admins.
+
+If this would require bigger changes than expected, leave it out and note that in your summary.
+
+---
+
+### STEP 3 — Upgrade 3: LLM-backed lost-reason classifier (with regex fallback)
+
+Upgrade only the **lost-reason** decision logic, not the overall Won/Lost classification order or quote lifecycle semantics.
+
+Requirements:
+
+1. **Keep the four canonical reasons and default:**
+   - `lost_price`
+   - `lost_timing`
+   - `lost_service`
+   - `lost_incumbent`
+   - default still `lost_incumbent` when nothing else makes sense.
+
+2. **Add an LLM-first classifier:**
+   - Use the same model family already used in `emailIntelligenceService` (e.g. `gpt-4o-mini`) via the existing OpenAI integration patterns.
+   - Implement a small helper (e.g. `classifyLostReasonWithLlm`) that takes:
+     - key context: `lossLanguage` from the signal when present, otherwise relevant `subject + body` text,
+     - and returns one of the 4 reasons or `null` on failure/low confidence.
+   - The prompt should be tight and deterministic:
+     - instruct the model to choose exactly one of the 4 reasons,
+     - return a small JSON object with `{ reason: "lost_price" | ... }`,
+     - no free-form text.
+   - Keep temperature low and use an explicit `response_format` style if available in the existing integration.
+
+3. **Wire it into `decideLostReason`:**
+   - `decideLostReason` should:
+     - try the LLM classifier first,
+     - if that returns a valid reason, use it,
+     - if that errors, times out, or returns something invalid, fall back to the existing regex classifier (current behavior).
+   - The net effect: we only improve the classification; we don’t change what happens when classification fails.
+
+4. **Audit the reason source:**
+   - Wherever a lost reason is written into `quote_events` (or related events), add a field in the payload like:
+     - `reasonSource: "llm"` when the LLM provided the answer,
+     - `reasonSource: "regex"` when it came from the existing pattern logic,
+     - `reasonSource: "default"` when it fell back to `lost_incumbent` with no evidence.
+   - This should be additive in the `payload` JSON only; no schema changes.
+
+5. **Do NOT change:**
+   - Won vs lost precedence ordering,
+   - the conditions under which a quote moves to lost_* status,
+   - any manual mark-outcome behavior,
+   - any SLA/no-response sweep behavior.
+
+---
+
+### STEP 4 — Tests
+
+Add or update focused tests only, in line with your plan:
+
+1. **Diagnostics metrics tests**  
+   - Test that `getFunnelDiagnostics` returns the new fields with sane values in:
+     - a fixture where some inbound emails had no intent and no quotes,
+     - a fixture where outbound auto-quote saw a rate but had no pending quote.
+   - These can be simple unit/integration tests against the service-layer functions without hitting real external APIs.
+
+2. **Lost-reason classifier tests**  
+   - Extend or add tests around `decideLostReason` to cover:
+     - LLM returns `lost_price` → we use that, `reasonSource: "llm"`.
+     - LLM “fails” (mocked to throw or return null) → regex result is used, `reasonSource: "regex"`.
+     - Neither LLM nor regex produce a meaningful reason → `lost_incumbent` + `reasonSource: "default"`.
+
+Use the existing testing patterns (e.g., mocking the OpenAI client or using DI hooks) rather than inventing new ones.
+
+Do not add large new E2E flows in this task.
+
+---
+
+### STEP 5 — Final summary
+
+When you are done, output a concise summary that includes:
+
+1. Files changed.
+2. New diagnostics fields and how they’re computed.
+3. The LLM lost-reason classifier behavior:
+   - prompt location,
+   - model used,
+   - fallback behavior,
+   - where `reasonSource` is written.
+4. Tests added/updated and their purpose.
+5. Confirmation that:
+   - no schema/migrations/packages were changed,
+   - no quote lifecycle semantics (beyond reason choice) were altered,
+   - no email/webhook/sync infrastructure was modified,
+   - no new endpoints were added.
+
+Stop there. No further changes.

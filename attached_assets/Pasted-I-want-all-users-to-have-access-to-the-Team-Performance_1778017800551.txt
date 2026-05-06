@@ -1,0 +1,76 @@
+I want all users to have access to the Team Performance tab.
+
+Desired behavior
+
+Everyone can open the Team Performance tab, not just admins.
+
+By default, the tab should load in a team-scoped view showing only that user’s team data.
+
+Add a clear toggle/slider/control that lets the user switch between:
+
+My Team
+
+All Teams
+
+The All Teams view should show the same broad visibility I currently see as an admin.
+
+Implementation rules
+
+Separate tab access from data scope:
+
+do not keep the tab admin-only
+
+instead, allow everyone into the page and control the returned data by selected scope
+
+Default behavior:
+
+non-admin and admin users both land on My Team by default
+
+“My Team” should be derived from the user’s assigned team / reporting structure
+
+Expanded visibility:
+
+add a UI control near the top of Team Performance for My Team / All Teams
+
+when switched to All Teams, show the same org-wide visibility currently available in admin view
+
+Preserve current logic where possible:
+
+do not redesign the Team Performance calculations
+
+do not broadly refactor unrelated permissions
+
+reuse the existing admin/global query path for All Teams if possible
+
+add a scoped query path for My Team if one does not already exist
+
+Guardrails:
+
+make sure users cannot get an empty/broken state because of missing team mapping without a clear explanation
+
+if a user has no team mapping, show an honest message instead of a misleading blank view
+
+add regression protection so future permission changes do not remove tab access or break the scope toggle
+
+Deliverables back
+
+exact files changed
+
+how Team Performance access was opened to all users
+
+how “My Team” scope is determined
+
+how “All Teams” reuses or matches the current admin-wide visibility
+
+confirmation that calculations themselves were not changed unless necessary
+
+Constraints
+
+no broad permission-system rewrite
+
+no unrelated UI cleanup
+
+keep this as a focused access + scope enhancement
+
+Desired outcome:
+Everyone can access Team Performance; it opens to their team by default, and they can intentionally expand to all-team visibility using a simple toggle.

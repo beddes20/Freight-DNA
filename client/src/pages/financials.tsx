@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { UnifiedUploadFreshnessPill } from "@/components/freight/unified-upload-freshness-pill";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
@@ -132,6 +133,12 @@ export default function Financials() {
     queryKey: ["/api/settings/onedrive-url"],
     enabled: canSyncOneDrive,
   });
+
+  const { data: azureStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ["/api/settings/azure-enabled"],
+    enabled: canSyncOneDrive,
+  });
+  const azureEnabled = azureStatus?.enabled ?? false;
 
   const { data: sheetsData } = useQuery<{
     bestDealDaysSpot: Record<string, any>[];
@@ -608,11 +615,11 @@ export default function Financials() {
     <div className="flex flex-col gap-6 p-4 sm:p-6">
       <div
         className="relative overflow-hidden rounded-xl px-6 py-5 text-white"
-        style={{ background: "linear-gradient(135deg, #0f172a 0%, #1e293b 55%, #334155 100%)" }}
+        style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}
       >
-        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full bg-white/5" />
-        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full bg-white/5" />
-        <div className="pointer-events-none absolute top-1/2 right-24 -translate-y-1/2 h-20 w-20 rounded-full bg-white/5" />
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
+        <div className="pointer-events-none absolute top-1/2 right-24 -translate-y-1/2 h-20 w-20 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
         <div className="relative flex items-start justify-between">
           <div>
             <h1 className="text-xl sm:text-2xl font-bold flex items-center gap-2">
@@ -622,6 +629,11 @@ export default function Financials() {
             <p className="text-white/60 mt-1 text-sm">
               {financialData ? `${financialData.rowCount.toLocaleString()} total records · ${financialData.fileName}` : "Upload your Excel data to get started"}
             </p>
+            {/* Task #1051 — shared "last upload at" pill (Financials, AF, LWQ
+                all read the same canonical ReplitDailyUpload). */}
+            <div className="mt-2">
+              <UnifiedUploadFreshnessPill surface="financials" />
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -765,70 +777,87 @@ export default function Financials() {
                 <CloudDownload className="h-3.5 w-3.5" />
                 OneDrive Auto-Sync
               </p>
-              <p className="text-xs text-muted-foreground">
-                Paste a share link to your Excel file on OneDrive. The app will pull the latest data automatically on the first of each month — or you can sync manually below.
-              </p>
-              {editingUrl ? (
-                <div className="flex items-center gap-2">
-                  <Input
-                    value={oneDriveUrlInput}
-                    onChange={e => setOneDriveUrlInput(e.target.value)}
-                    placeholder="https://1drv.ms/x/..."
-                    className="text-sm flex-1"
-                    data-testid="input-onedrive-url"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={() => saveUrlMutation.mutate(oneDriveUrlInput)}
-                    disabled={saveUrlMutation.isPending || !oneDriveUrlInput.trim()}
-                    data-testid="button-save-onedrive-url"
-                  >
-                    {saveUrlMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                    Save
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => { setEditingUrl(false); setOneDriveUrlInput(oneDriveSetting?.url || ""); }}
-                  >
-                    Cancel
-                  </Button>
+              {!azureEnabled ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/30 px-3 py-2.5 space-y-1">
+                  <p className="text-xs font-medium text-amber-800 dark:text-amber-300">Azure not configured</p>
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    OneDrive sync requires Azure AD credentials (OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID, OUTLOOK_CLIENT_SECRET) to be set. Contact your administrator to configure them.
+                  </p>
                 </div>
               ) : (
-                <div className="flex items-center gap-2">
-                  <div className="flex-1 min-w-0 rounded-md border bg-muted/30 px-3 py-2">
-                    {oneDriveSetting?.url ? (
-                      <p className="text-xs text-foreground font-mono truncate">{oneDriveSetting.url}</p>
-                    ) : (
-                      <p className="text-xs text-muted-foreground italic">No OneDrive URL configured</p>
-                    )}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => { setEditingUrl(true); setOneDriveUrlInput(oneDriveSetting?.url || ""); }}
-                    data-testid="button-edit-onedrive-url"
-                  >
-                    <Pencil className="h-3.5 w-3.5 mr-1" />
-                    {oneDriveSetting?.url ? "Edit" : "Set URL"}
-                  </Button>
-                </div>
-              )}
-              {oneDriveSetting?.url && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => syncMutation.mutate()}
-                  disabled={syncMutation.isPending}
-                  data-testid="button-sync-onedrive"
-                >
-                  {syncMutation.isPending ? (
-                    <><Loader2 className="h-4 w-4 animate-spin mr-2" />Syncing from OneDrive...</>
+                <>
+                  <p className="text-xs text-muted-foreground">
+                    Paste a OneDrive share link or a Microsoft Graph API URL for your Excel file. The app uses the configured Azure credentials to fetch it automatically. Syncs on the first business day of each month, or trigger it manually below.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Accepted formats: <span className="font-mono text-blue-600 dark:text-blue-400">https://1drv.ms/x/...</span> (OneDrive "Share" link), <span className="font-mono">https://graph.microsoft.com/v1.0/drives/&#123;driveId&#125;/items/&#123;itemId&#125;/content</span>, or a relative path like <span className="font-mono">drives/&#123;driveId&#125;/items/&#123;itemId&#125;</span>.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    The Azure app must have the <span className="font-mono font-medium">Files.Read.All</span> application permission granted in Azure Portal. Share links also require that the file is shared with <span className="font-medium">"Anyone with the link"</span> or that the Azure app has tenant-wide Files.Read.All access.
+                  </p>
+                  {editingUrl ? (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={oneDriveUrlInput}
+                        onChange={e => setOneDriveUrlInput(e.target.value)}
+                        placeholder="https://1drv.ms/x/... or Graph API URL"
+                        className="text-sm flex-1"
+                        data-testid="input-onedrive-url"
+                      />
+                      <Button
+                        size="sm"
+                        onClick={() => saveUrlMutation.mutate(oneDriveUrlInput)}
+                        disabled={saveUrlMutation.isPending || !oneDriveUrlInput.trim()}
+                        data-testid="button-save-onedrive-url"
+                      >
+                        {saveUrlMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                        Save
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => { setEditingUrl(false); setOneDriveUrlInput(oneDriveSetting?.url || ""); }}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
                   ) : (
-                    <><CloudDownload className="h-4 w-4 mr-2" />Sync Now</>
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 min-w-0 rounded-md border bg-muted/30 px-3 py-2">
+                        {oneDriveSetting?.url ? (
+                          <p className="text-xs text-foreground font-mono truncate">{oneDriveSetting.url}</p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground italic">No OneDrive file path configured</p>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => { setEditingUrl(true); setOneDriveUrlInput(oneDriveSetting?.url || ""); }}
+                        data-testid="button-edit-onedrive-url"
+                      >
+                        <Pencil className="h-3.5 w-3.5 mr-1" />
+                        {oneDriveSetting?.url ? "Edit" : "Set Path"}
+                      </Button>
+                    </div>
                   )}
-                </Button>
+                  {oneDriveSetting?.url && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => syncMutation.mutate()}
+                      disabled={syncMutation.isPending}
+                      data-testid="button-sync-onedrive"
+                    >
+                      {syncMutation.isPending ? (
+                        <><Loader2 className="h-4 w-4 animate-spin mr-2" />Syncing from OneDrive...</>
+                      ) : (
+                        <><CloudDownload className="h-4 w-4 mr-2" />Sync Now</>
+                      )}
+                    </Button>
+                  )}
+                </>
               )}
             </div>
           </CardContent>
@@ -1081,7 +1110,29 @@ export default function Financials() {
             </CardHeader>
             {!tableCollapsed && (
               <CardContent className="p-0">
-                <div className="overflow-x-auto">
+                {/* Mobile card view */}
+                <div className="md:hidden space-y-2 px-3 py-2">
+                  {paginated.length === 0 ? (
+                    <p className="py-12 text-center text-muted-foreground text-sm">No records match your filters</p>
+                  ) : paginated.map((r, i) => (
+                    <div key={i} className="rounded-lg border p-3 space-y-1.5" data-testid={`card-financial-${i}`}>
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-sm truncate max-w-[60%]">{r[colMap.customer] as string || "—"}</span>
+                        {r[colMap.status] ? <Badge variant="outline" className="text-xs capitalize">{r[colMap.status] as string}</Badge> : null}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {r[colMap.shipperCity] ? `${r[colMap.shipperCity]}, ${r[colMap.shipperState]}` : "—"} → {r[colMap.consigneeCity] ? `${r[colMap.consigneeCity]}, ${r[colMap.consigneeState]}` : "—"}
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                        <span className="text-muted-foreground">#{r[colMap.orderNumber] as string || "—"}</span>
+                        <span className="text-muted-foreground">{formatDate(r[colMap.dateOrdered])}</span>
+                        <span className="font-semibold text-green-600 dark:text-green-400">{formatCurrency(r[colMap.totalCharges])}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {/* Desktop table view */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/40">

@@ -1,0 +1,74 @@
+I need to focus on a concrete example where we definitely had saved contacts with rich data that are now gone from the Org Chart.
+
+For the company Armstrong (Armstrong World Industries), we previously had at least these contacts fully created in the Org Chart with detailed fields filled out (lanes, regions, annual freight spend, spot process, next steps, interests, notes):
+
+Randall Zercher (rzercher@armstrong.com)
+
+John Stone (jstone@armstrong.com)
+
+I’m not talking about suggested contacts — these were in the Org Chart exactly the way the contact form in my screenshot shows, with the extended freight + relationship fields filled in.
+
+Right now, Armstrong shows:
+
+multiple Suggested Contacts (including some of those same emails)
+
+0 contacts in the Org Chart
+
+and all of that rich contact‑card information is no longer visible.
+
+I need you to answer, for these specific people, in prod:
+
+Does a row for Randall Zercher or John Stone exist in the contacts table now (by name/email)?
+
+Did a row for them ever exist in contacts according to:
+
+any audit/history tables,
+
+or any past migration / log / event that mentions their IDs or emails?
+
+Do they exist today in:
+
+account_contact_suggestions,
+
+email intelligence tables,
+
+signature‑derived contact tables,
+
+or any other contact‑like table?
+
+If they were once in contacts and are now gone:
+
+what code path or script could have deleted or overwritten them?
+
+when did that happen (approximately)?
+
+Constraints
+
+Read‑only only — do not write anything to prod.
+
+No backfills, no repair scripts, no deletes, no merges.
+
+Deliverable
+
+For each of:
+
+Randall Zercher
+
+John Stone
+
+give me a short, precise report:
+
+where they exist now (which tables/rows, with IDs),
+
+whether they ever existed in contacts,
+
+and what you can infer about how the Org Chart view lost those contact‑card details.
+
+Desired outcome:
+I want to know, for these exact Armstrong contacts, whether we are dealing with:
+
+true deletion of saved contacts,
+
+a migration / overwrite that lost the rich contact fields,
+
+or a rendering/visibility regression where the contact data still exists but isn’t being loaded.

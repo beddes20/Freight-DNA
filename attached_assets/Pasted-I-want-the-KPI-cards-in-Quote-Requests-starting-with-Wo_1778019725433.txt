@@ -1,0 +1,105 @@
+I want the KPI cards in Quote Requests — starting with Won Today — to become drill-down entry points into the exact underlying records.
+
+Desired behavior
+
+The Won Today tile should be clickable.
+
+When clicked, it should take the user into the Quote Requests / Customer Quotes list already filtered to the exact records contributing to that KPI.
+
+For the screenshot example, clicking Won Today = 14 should show the exact 14 won quote requests / emails / records behind that number.
+image.jpg
+
+Product expectations
+
+The KPI is not just informational — it is a doorway into the underlying data.
+
+The destination should feel native, not like a separate reporting page.
+
+The filtered destination should clearly indicate the active context, e.g.:
+
+Status = Won
+
+Date range = Today
+
+Result count = 14
+
+Each resulting row should still allow the user to open the related quote / email / shipment context as normal.
+
+Source-of-truth requirement
+
+I need the Won Today count and the drill-down result set to come from the same logic.
+
+That means:
+
+if the KPI says 14, the drill-down should return those same 14 records
+
+do not create separate, loosely matched logic for the card and the list
+
+if there is currently drift between KPI math and list filtering, consolidate it so both rely on the same underlying criteria
+
+Implementation guidance
+
+Please:
+
+Find where the Won Today KPI is computed.
+
+Find the list/read path for Quote Requests / Customer Quotes.
+
+Reuse the KPI’s exact criteria to produce a matching filtered list view.
+
+Add click handling on the KPI tile that routes into the filtered list state.
+
+Make the destination state deep-linkable if possible (query params / route state), so the filtered view can be refreshed or shared internally without losing context.
+
+UX requirements
+
+The card should look clickable on hover.
+
+Clicking it should feel fast and obvious.
+
+The destination should display a clear active-filter label like Won Today.
+
+The user should be able to back out of the drill-down and return to the broader queue easily.
+
+Do not make users rebuild the filters manually after clicking the KPI.
+
+Guardrails
+
+Do not broad-refactor Quote Requests.
+
+Do not change the meaning of “Won Today” unless necessary to align the card and the list.
+
+Do not introduce a second definition of “won”.
+
+Do not fake this with front-end-only filtering if the underlying query logic differs.
+
+If “Won Today” currently uses a different source than the list, unify them carefully and minimally.
+
+Deliverables back
+
+I want:
+
+The exact files changed
+
+The current definition of Won Today
+
+Confirmation that the KPI count and drill-down list now use the same source-of-truth logic
+
+The route / filter state used for the drill-down
+
+Proof that clicking Won Today = 14 returns the exact 14 records behind the tile
+
+After that
+
+Structure this so the same pattern can later be reused for:
+
+Open Requests
+
+Awaiting Your Reply
+
+Past SLA
+
+Auto-Captured Today
+
+Desired outcome:
+Every major KPI card can become a trustworthy click-through into the exact underlying records, starting with Won Today.

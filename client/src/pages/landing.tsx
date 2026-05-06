@@ -1,20 +1,22 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useLocation } from "wouter";
 import {
   TrendingUp, Network, FileSearch, MousePointerClick, BarChart3,
   Target, Map, Users, CheckCircle, ClipboardList, CalendarCheck,
-  BookOpen, Zap, ChevronRight, TrendingUp as CareerIcon,
-  GitBranch, Phone, Key, Megaphone, Sparkles, Bot, ArrowRight,
+  BookOpen, Zap, TrendingUp as CareerIcon,
+  GitBranch, Phone, Sparkles, Bot, ArrowRight,
   LayoutGrid, MessagesSquare, ListTodo, Trophy, Wrench, GraduationCap,
-  UserCog, LineChart,
+  UserCog, LineChart, Loader2, Kanban, RefreshCw, Send, X,
+  ChevronDown, ChevronUp, AlertCircle, Truck, Route,
+  Radio, Brain, Warehouse, Briefcase, Activity, Rocket,
 } from "lucide-react";
 import ScheduleDemoModal from "@/components/ScheduleDemoModal";
 
 const stats = [
-  { value: "15+", label: "Platform Modules" },
+  { value: "25+", label: "Platform Modules" },
   { value: "360°", label: "Account Visibility" },
-  { value: "AI-Powered", label: "Analysis & Alerts" },
-  { value: "Built for", label: "Freight Brokers" },
+  { value: "AI-Powered", label: "Sales Intelligence" },
+  { value: "~1 Week", label: "Avg. Onboarding Time" },
 ];
 
 const features = [
@@ -24,19 +26,24 @@ const features = [
     description: "Map every stakeholder — procurement, operations, finance — and track who owns each decision. Know your accounts down, not across.",
   },
   {
-    icon: FileSearch,
-    title: "RFP Intelligence Engine",
-    description: "Upload RFP lane data, analyze corridors, track bid history, and compare awards. Walk into every bid knowing exactly how to win.",
+    icon: Kanban,
+    title: "Sales Pipeline & AI Prospect Intel",
+    description: "Manage every prospect through a visual Kanban pipeline. One click generates an AI-powered brief: network overlap, conversation starters, industry pain points, and competitive tips — before you ever pick up the phone.",
+  },
+  {
+    icon: Truck,
+    title: "Carrier Lane Intelligence",
+    description: "Search your financial history by corridor to instantly build a carrier call list — loads hauled, market share, avg carrier pay, and last ship date, grouped by mode (Van, Reefer, Flatbed, LTL, Drayage, IMDL). Ask DNA Guru in plain English: \"What carriers run TX-CA?\" and get a live answer.",
   },
   {
     icon: MousePointerClick,
     title: "Touchpoint Tracking",
-    description: "Log a touchpoint in seconds from anywhere in the platform with the global Log Touch button. Calls, emails, texts, and site visits tracked in one click — automated \"Needs Attention\" alerts surface contacts going cold before it costs you freight.",
+    description: "Log a touchpoint in seconds from anywhere in the platform. Calls, emails, texts, and site visits in one click — automated alerts surface contacts going cold before it costs you freight.",
   },
   {
-    icon: BarChart3,
-    title: "Team Performance Dashboards",
-    description: "Real-time dashboards show activity metrics, pipeline health, and rep rankings so leaders can coach with precision.",
+    icon: FileSearch,
+    title: "RFP & Lane Intelligence",
+    description: "Upload RFP lane data, analyze corridors by mode, track bid history, and find which customers have freight on specific lanes across all their RFPs. Walk into every bid knowing exactly how to win.",
   },
   {
     icon: Target,
@@ -44,53 +51,39 @@ const features = [
     description: "Set quarterly targets for load count, margin, touchpoints, and new contacts — then watch progress auto-track against live data.",
   },
   {
-    icon: Map,
-    title: "Lane Analytics",
-    description: "Identify top-volume corridors, spot market gaps, and build targeted proposals backed by historical freight data.",
+    icon: Radio,
+    title: "Market Intelligence & SONAR Integration",
+    description: "Tap into real-time freight market data and rate benchmarks via SONAR. Spot capacity shifts, validate lane pricing, and arm your team with live market context before every negotiation.",
   },
   {
-    icon: CareerIcon,
-    title: "Career Progression",
-    description: "Track talent development from day one. Career conversations, progression milestones, and historical performance logs give managers a complete picture of every rep's growth trajectory — not just last quarter's numbers.",
+    icon: Brain,
+    title: "AI Intelligence Hub",
+    description: "Sentiment analysis on customer interactions, AI-driven coaching recommendations, and competitive intelligence — all synthesized in one hub so leadership and reps stay a step ahead.",
   },
 ];
 
 const modules = [
+  { icon: Kanban, name: "Sales Pipeline", desc: "Kanban board for every prospect — import via CSV, track stages, and generate AI Sales Intel Briefs in one click." },
   { icon: Users, name: "Customers", desc: "Full account profiles with financials, contacts, modes, and intelligence notes." },
   { icon: Zap, name: "Top Opportunities", desc: "Auto-surfaced accounts with the highest untapped wallet share potential." },
-  { icon: CalendarCheck, name: "1:1's", desc: "Structured NAM-AM session topics, follow-ups, and threaded discussion threads." },
-  { icon: ClipboardList, name: "Tasks", desc: "Assign and track account-linked tasks with due dates and priority levels." },
-  { icon: BarChart3, name: "Report Cards", desc: "Per-rep scorecards showing load count, margin, touchpoints, and goal progress." },
-  { icon: BookOpen, name: "PTO Passoff", desc: "Structured handoff documents so accounts never slip during out-of-office periods." },
-  { icon: FileSearch, name: "RFP & Awards", desc: "Full pipeline management for bids, awards, and lane-level analysis." },
-  { icon: Map, name: "Lane Analytics", desc: "Heat maps and corridor analysis from financial and RFP upload data." },
-  { icon: CareerIcon, name: "Career Progression", desc: "Career conversations, progression tracking, and performance history for every rep on your team." },
-  { icon: BookOpen, name: "Playbook & Buckets", desc: "External resource links, sales playbooks, and account segmentation buckets for structured selling." },
-  { icon: GitBranch, name: "Org Charts & Contacts", desc: "Visual org charts for every account — map decision-makers, influencers, and key contacts across the organization." },
+  { icon: GitBranch, name: "Org Charts & Contacts", desc: "Visual org charts for every account — map decision-makers, influencers, and key contacts." },
   { icon: Phone, name: "Touchpoint Log", desc: "Every call, email, text, and site visit in a unified timeline. AI flags cold contacts before they cost you freight." },
-  { icon: Key, name: "Portal Credentials (Coordinator's Corner)", desc: "Securely store and access customer portal logins, carrier onboarding credentials, and spot process details in one place." },
-  { icon: BarChart3, name: "Team Performance", desc: "Period-over-period activity and revenue tracking with rep rankings — turn coaching from opinions into evidence." },
+  { icon: CalendarCheck, name: "1:1's", desc: "Structured NAM-AM session topics, follow-ups, and threaded discussion threads." },
+  { icon: BarChart3, name: "Report Cards", desc: "Per-rep scorecards showing load count, margin, touchpoints, and goal progress." },
+  { icon: FileSearch, name: "RFP & Awards", desc: "Full bid lifecycle management with lane-level analysis, award tracking, AI column mapping, and deadline alerts." },
+  { icon: Truck, name: "Carrier Lane Search", desc: "Find every carrier that's run a corridor from your financial history — loads, market share, avg carrier pay, and last ship date, grouped by mode. Build a call list in seconds." },
+  { icon: Route, name: "RFP Lane Search", desc: "Search across all uploaded RFPs by corridor to find which customers have freight on specific lanes, grouped by mode. Know who to call before an RFP drops." },
   { icon: Target, name: "Goals & Accountability", desc: "Set and auto-track targets for loads, margin, touchpoints, and new contacts against live platform data." },
-  { icon: Megaphone, name: "Callouts / Trends Feed", desc: "Broadcast wins, flag at-risk accounts, and share market intel across your team in real time." },
+  { icon: BarChart3, name: "Team Performance", desc: "Period-over-period activity and revenue tracking with rep rankings — turn coaching from opinions into evidence." },
+  { icon: ListTodo, name: "Lane Work Queue", desc: "Prioritized carrier procurement workflow — see which lanes need coverage, rank by urgency, and work through sourcing tasks systematically." },
+  { icon: Radio, name: "Market Intelligence / SONAR", desc: "Real-time market data and rate benchmarks powered by SONAR integration — spot trends, validate pricing, and negotiate with confidence." },
+  { icon: Brain, name: "AI Intelligence Hub", desc: "Sentiment analysis, rep coaching insights, and competitive intel — all driven by AI so your team sells smarter every day." },
+  { icon: Warehouse, name: "Carrier Hub", desc: "Centralized carrier relationship management and sourcing — track capacity, performance, and preferred lanes across your entire network." },
+  { icon: Briefcase, name: "My Procurement", desc: "Personalized logistics manager view — your lanes, your carriers, your priorities, all in one dashboard built for daily execution." },
+  { icon: Activity, name: "Market Signal Engine", desc: "Proactive alerts on market shifts, capacity changes, and rate movements — know what's happening before it hits your margins." },
+  { icon: Rocket, name: "Momentum Scores & NBA", desc: "Momentum Scores quantify deal velocity while Next Best Action cards tell each rep exactly what to do next to keep opportunities moving." },
 ];
 
-const howItWorks = [
-  {
-    step: "01",
-    title: "Map your accounts",
-    body: "Build visual org charts, capture every contact's role and influence, log portal credentials and carrier intel in Coordinator's Corner — all the account DNA your team needs, right where they work.",
-  },
-  {
-    step: "02",
-    title: "Track every touchpoint",
-    body: "Every call, email, text, and site visit is logged in seconds. Freight DNA's AI automatically flags contacts going cold — so your reps engage before the relationship costs you freight.",
-  },
-  {
-    step: "03",
-    title: "Win more freight",
-    body: "AI-powered analysis surfaces wallet share gaps, RFP intelligence shows you where to bid and how to win, and real-time scoring tells you which accounts to prioritize today — not next quarter.",
-  },
-];
 
 const personas = [
   {
@@ -100,7 +93,8 @@ const personas = [
       "Full account org charts with contact ownership and decision-maker mapping",
       "One-click touchpoint logging from anywhere — calls, emails, texts, site visits",
       "AI-flagged cold contacts so no relationship slips through the cracks",
-      "Wallet share scoring and RFP history to walk into every conversation prepared",
+      "Momentum Scores show deal velocity at a glance; Next Best Action cards tell you exactly what to do next",
+      "AI Sales Intel Briefs with wallet share scoring, RFP history, network overlap, and conversation starters — before every pitch",
     ],
   },
   {
@@ -108,29 +102,518 @@ const personas = [
     tagline: "Coach with data, not opinions.",
     bullets: [
       "Real-time team performance dashboards with period-over-period comparisons",
-      "Rep scorecards covering loads, margin, touchpoints, and goal progress",
+      "Market Intelligence dashboards with SONAR-powered rate benchmarks and trend data",
+      "AI Intelligence Hub surfaces sentiment analysis, coaching insights, and competitive intel",
       "1:1 tooling with threaded follow-ups and structured agendas",
-      "Career progression tracking to develop talent from day one",
+      "Rep scorecards covering loads, margin, touchpoints, and goal progress",
     ],
   },
   {
-    role: "Admins & Operations",
+    role: "Ops & Logistics Managers",
+    tagline: "Execute faster, source smarter.",
+    bullets: [
+      "Lane Work Queue prioritizes carrier procurement tasks by urgency so nothing falls through",
+      "My Procurement dashboard — your lanes, carriers, and sourcing priorities in one view",
+      "Carrier Hub for centralized carrier relationship management and capacity tracking",
+      "Market Signal Engine alerts you to capacity shifts and rate changes before they impact margins",
+      "Financial data powers Carrier Lane Search, RFP Lane Search, and wallet share — all from a single upload",
+    ],
+  },
+  {
+    role: "Admins & Platform Owners",
     tagline: "Keep the platform running clean.",
     bullets: [
       "Multi-team and multi-org support with role-based access control",
       "Centralized portal credentials management via Coordinator's Corner",
       "PTO passoff workflows so accounts never slip during coverage gaps",
-      "Playbook and bucket configuration to standardize how your team sells",
+      "25+ modules configured and ready — onboard new teams in days, not months",
     ],
   },
 ];
 
+function FaqItem({ question, answer, index }: { question: string; answer: string; index: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ borderColor: "rgba(255,180,0,0.12)" }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="w-full flex items-center justify-between gap-4 py-5 text-left transition-colors duration-150"
+        data-testid={`button-faq-${index}`}
+        style={{ color: open ? "#ffc333" : "rgba(255,255,255,0.85)" }}
+      >
+        <span className="text-sm font-semibold leading-snug">{question}</span>
+        {open
+          ? <ChevronUp className="w-4 h-4 flex-shrink-0" style={{ color: "#ffc333" }} />
+          : <ChevronDown className="w-4 h-4 flex-shrink-0" style={{ color: "rgba(255,255,255,0.35)" }} />
+        }
+      </button>
+      {open && (
+        <p className="pb-5 text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.5)" }}>
+          {answer}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function PricingSection({ onScheduleDemo }: { onScheduleDemo: () => void }) {
+  const [annual, setAnnual] = useState(false);
+
+  const plans = [
+    {
+      key: "trial",
+      badge: "Try First",
+      name: "Trial",
+      price: "$1,000",
+      period: "/ first month",
+      savingsNote: null as string | null,
+      description: "One month of full platform access with complete hands-on setup included. If you continue, the $1,000 applies toward your first year.",
+      features: [
+        "Full platform access — all 25+ modules",
+        "Complete setup and data import",
+        "Team configuration and training",
+        "All AI features enabled",
+        "Hands-on onboarding support",
+      ],
+      highlight: false,
+    },
+    {
+      key: "standard",
+      badge: "Most Popular",
+      name: "Standard",
+      price: annual ? "$1,200" : "$1,500",
+      period: annual ? "/ mo, billed annually" : "/ month",
+      savingsNote: annual ? "You save $3,600/year" : "Save 20% — pay annually",
+      description: "Full platform access for teams up to 50 members. Everything you need to run a best-in-class freight sales org.",
+      features: [
+        "All 25+ platform modules",
+        "Up to 50 team members",
+        "AI Sales Intel Briefs and DNA Guru",
+        "Goals, 1:1s, and performance dashboards",
+        "Unlimited accounts and contacts",
+        "Dedicated onboarding support",
+      ],
+      highlight: true,
+    },
+    {
+      key: "enterprise",
+      badge: "50+ Seats",
+      name: "Enterprise",
+      price: annual ? "$1,600" : "$2,000",
+      period: annual ? "/ mo, billed annually" : "/ month",
+      savingsNote: annual ? "You save $4,800/year" : "Save 20% — pay annually",
+      description: "For larger brokerages with 50 or more team members. Everything in Standard plus enterprise-grade support.",
+      features: [
+        "Everything in Standard",
+        "Unlimited team members",
+        "Multi-org and multi-team support",
+        "Dedicated account manager",
+        "Priority feature development",
+      ],
+      highlight: false,
+    },
+  ];
+
+  return (
+    <section className="py-24 px-6 md:px-12 max-w-6xl mx-auto w-full" data-testid="section-pricing" id="pricing">
+      <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
+        Pricing
+      </p>
+      <h2
+        className="text-3xl md:text-4xl font-bold text-center mb-4 tracking-tight"
+        style={{ letterSpacing: "-0.02em" }}
+        data-testid="text-pricing-heading"
+      >
+        Transparent pricing. No surprises.
+      </h2>
+      <p className="text-center text-sm mb-10 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
+        No per-seat fees within your tier. Every path starts with a demo — we want to make sure it's the right fit before you sign. Annual plans save 20% off monthly pricing.
+      </p>
+
+      {/* Monthly / Annual toggle */}
+      <div className="flex items-center justify-center gap-4 mb-14" data-testid="toggle-billing-period">
+        <span className="text-sm font-medium" style={{ color: annual ? "rgba(255,255,255,0.35)" : "#fff" }}>Monthly</span>
+        <button
+          onClick={() => setAnnual(a => !a)}
+          className="relative w-12 h-6 rounded-full transition-all duration-200 flex-shrink-0"
+          style={{ background: annual ? "#ffc333" : "rgba(255,255,255,0.15)" }}
+          data-testid="button-billing-toggle"
+          aria-label="Toggle annual billing"
+        >
+          <span
+            className="absolute top-0.5 w-5 h-5 rounded-full transition-all duration-200"
+            style={{ background: "#fff", left: annual ? "calc(100% - 22px)" : "2px" }}
+          />
+        </button>
+        <span className="text-sm font-medium flex items-center gap-2" style={{ color: annual ? "#fff" : "rgba(255,255,255,0.35)" }}>
+          Annual
+          <span
+            className="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full"
+            style={{ background: "rgba(255,195,51,0.15)", color: "#ffc333", border: "1px solid rgba(255,195,51,0.3)" }}
+          >
+            Save 20%
+          </span>
+        </span>
+      </div>
+
+      {/* Plan cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        {plans.map((plan, i) => (
+          <div
+            key={plan.key}
+            className="relative flex flex-col p-7 rounded-2xl"
+            style={{
+              background: plan.highlight ? "linear-gradient(135deg, #111200 0%, #0f0f00 100%)" : "#0f0f0f",
+              border: plan.highlight ? "1.5px solid rgba(255,195,51,0.35)" : "1px solid rgba(255,180,0,0.14)",
+              boxShadow: plan.highlight ? "0 0 40px rgba(255,195,51,0.07)" : "none",
+            }}
+            data-testid={`card-plan-${i}`}
+          >
+            {/* Badge */}
+            <span
+              className="absolute top-4 right-4 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full"
+              style={{
+                background: plan.highlight ? "rgba(255,195,51,0.18)" : "rgba(255,255,255,0.07)",
+                color: plan.highlight ? "#ffc333" : "rgba(255,255,255,0.45)",
+                border: plan.highlight ? "1px solid rgba(255,195,51,0.3)" : "1px solid rgba(255,255,255,0.1)",
+              }}
+            >
+              {plan.badge}
+            </span>
+
+            <div className="mb-5">
+              <p className="text-xs uppercase tracking-[0.18em] font-semibold mb-3" style={{ color: "rgba(255,180,0,0.6)" }}>
+                {plan.name}
+              </p>
+              <div className="flex items-end gap-1 mb-1">
+                <span className="text-4xl font-extrabold tracking-tight" style={{ letterSpacing: "-0.03em" }}>
+                  {plan.price}
+                </span>
+                <span className="text-sm mb-1.5" style={{ color: "rgba(255,255,255,0.4)" }}>{plan.period}</span>
+              </div>
+              {plan.savingsNote && (
+                <p className="text-xs mb-3" style={{ color: annual ? "#ffc333" : "rgba(255,255,255,0.3)" }}>
+                  {plan.savingsNote}
+                </p>
+              )}
+              {!plan.savingsNote && <div className="mb-3" />}
+              <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>
+                {plan.description}
+              </p>
+            </div>
+
+            <ul className="flex flex-col gap-2.5 mb-7 flex-1">
+              {plan.features.map((feature, j) => (
+                <li key={j} className="flex items-start gap-2.5" data-testid={`text-plan-${i}-feature-${j}`}>
+                  <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#ffc333" }} />
+                  <span className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.55)" }}>{feature}</span>
+                </li>
+              ))}
+            </ul>
+
+            <button
+              onClick={onScheduleDemo}
+              className="w-full flex items-center justify-center gap-2 text-sm font-bold px-6 py-3 rounded transition-all duration-150"
+              style={{
+                background: plan.highlight ? "#ffc333" : "transparent",
+                color: plan.highlight ? "#0a0a0a" : "#ffc333",
+                border: plan.highlight ? "none" : "1px solid rgba(255,195,51,0.4)",
+              }}
+              data-testid={`button-plan-${i}-cta`}
+              onMouseEnter={e => {
+                const el = e.currentTarget as HTMLElement;
+                if (plan.highlight) el.style.background = "#ffb400";
+                else { el.style.background = "rgba(255,195,51,0.08)"; el.style.borderColor = "#ffc333"; }
+              }}
+              onMouseLeave={e => {
+                const el = e.currentTarget as HTMLElement;
+                if (plan.highlight) el.style.background = "#ffc333";
+                else { el.style.background = "transparent"; el.style.borderColor = "rgba(255,195,51,0.4)"; }
+              }}
+            >
+              Schedule Demo
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* Custom buildout */}
+      <div
+        className="flex flex-col md:flex-row items-start gap-8 p-8 rounded-2xl"
+        style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.12)" }}
+        data-testid="card-plan-buildout"
+      >
+        <div className="flex-1">
+          <p className="text-xs uppercase tracking-[0.18em] font-semibold mb-2" style={{ color: "rgba(255,180,0,0.6)" }}>
+            Custom Feature Buildout
+          </p>
+          <p className="text-2xl font-extrabold mb-1 tracking-tight" style={{ letterSpacing: "-0.02em" }}>Quoted per project</p>
+          <p className="text-sm mb-4" style={{ color: "rgba(255,255,255,0.35)" }}>Price varies by scope and complexity</p>
+          <p className="text-sm leading-relaxed max-w-xl" style={{ color: "rgba(255,255,255,0.45)" }}>
+            Need something the platform doesn't do yet? We scope, build, and deploy custom features tailored to your brokerage's exact workflow.
+            Simple additions are quick, easy, and start around $500 — larger integrations or standalone modules are scoped per project.
+          </p>
+        </div>
+        <div className="flex flex-col gap-3 md:w-64 w-full flex-shrink-0">
+          {[
+            "Scoped to your exact requirements",
+            "Full development and deployment",
+            "Priority roadmap access",
+            "Ongoing support for the feature",
+          ].map((f, i) => (
+            <div key={i} className="flex items-start gap-2.5">
+              <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#ffc333" }} />
+              <span className="text-sm" style={{ color: "rgba(255,255,255,0.55)" }}>{f}</span>
+            </div>
+          ))}
+          <a
+            href="mailto:info@freight-dna.com?subject=Custom Feature Buildout Inquiry"
+            className="mt-2 w-full flex items-center justify-center gap-2 text-sm font-bold px-6 py-3 rounded transition-all duration-150"
+            style={{ border: "1px solid rgba(255,195,51,0.4)", color: "#ffc333", background: "transparent" }}
+            data-testid="button-plan-buildout-cta"
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,195,51,0.08)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; }}
+          >
+            Contact Us <ArrowRight className="w-4 h-4" />
+          </a>
+        </div>
+      </div>
+
+      <p className="text-center text-xs mt-8" style={{ color: "rgba(255,255,255,0.25)" }}>
+        Questions? Reach us at{" "}
+        <a href="mailto:info@freight-dna.com" className="hover:text-white transition-colors" style={{ color: "rgba(255,255,255,0.35)" }}>
+          info@freight-dna.com
+        </a>
+      </p>
+    </section>
+  );
+}
+
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+const GREETING: ChatMessage = {
+  role: "assistant",
+  content: "Hey there! I'm Dana, your Freight DNA guide. Whether you're curious about features, pricing, how we compare to other CRMs, or just want to know if this is right for your team — I'm here to help. What's on your mind?",
+};
+
+function MarketingChatWidget({ onScheduleDemo }: { onScheduleDemo: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([GREETING]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    const next: ChatMessage[] = [...messages, { role: "user", content: text }];
+    setMessages(next);
+    setInput("");
+    setLoading(true);
+    try {
+      const res = await fetch("/api/marketing-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: next }),
+      });
+      const data = await res.json() as { reply?: string; error?: string };
+      setMessages(prev => [...prev, { role: "assistant", content: data.reply ?? "Sorry, something went wrong. Try again!" }]);
+    } catch {
+      setMessages(prev => [...prev, { role: "assistant", content: "Hmm, I had trouble connecting. Give it another try!" }]);
+    } finally {
+      setLoading(false);
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  };
+
+  return (
+    <>
+      {/* Floating button */}
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="fixed bottom-6 right-6 z-50 flex items-center justify-center w-14 h-14 rounded-full shadow-lg transition-all duration-200"
+        style={{ background: "#ffc333", color: "#0a0a0a", boxShadow: "0 4px 24px rgba(255,195,51,0.35)" }}
+        data-testid="button-marketing-chat-toggle"
+        aria-label="Chat with Dana"
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
+        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#ffc333"; }}
+      >
+        {open ? <X className="w-6 h-6" /> : <MessagesSquare className="w-6 h-6" />}
+      </button>
+
+      {/* Chat panel */}
+      {open && (
+        <div
+          className="fixed bottom-24 right-6 z-50 flex flex-col rounded-2xl overflow-hidden"
+          style={{
+            width: "min(380px, calc(100vw - 24px))",
+            height: "min(520px, calc(100vh - 120px))",
+            background: "#111",
+            border: "1px solid rgba(255,180,0,0.25)",
+            boxShadow: "0 8px 40px rgba(0,0,0,0.6), 0 0 60px rgba(255,180,0,0.08)",
+          }}
+          data-testid="panel-marketing-chat"
+        >
+          {/* Header */}
+          <div
+            className="flex items-center justify-between px-4 py-3 flex-shrink-0"
+            style={{ background: "#0d0d0d", borderBottom: "1px solid rgba(255,180,0,0.15)" }}
+          >
+            <div className="flex items-center gap-2.5">
+              <div
+                className="flex items-center justify-center w-8 h-8 rounded-full"
+                style={{ background: "rgba(255,195,51,0.15)", border: "1px solid rgba(255,195,51,0.3)" }}
+              >
+                <Bot className="w-4 h-4" style={{ color: "#ffc333" }} />
+              </div>
+              <div>
+                <p className="text-sm font-bold leading-none" style={{ color: "#ffc333" }}>Dana</p>
+                <p className="text-[10px] mt-0.5" style={{ color: "rgba(255,255,255,0.35)" }}>Freight DNA Sales Assistant</p>
+              </div>
+            </div>
+            <button
+              onClick={() => onScheduleDemo()}
+              className="text-[10px] font-bold uppercase tracking-widest px-2.5 py-1 rounded transition-all duration-150"
+              style={{ background: "rgba(255,195,51,0.12)", color: "#ffc333", border: "1px solid rgba(255,195,51,0.25)" }}
+              data-testid="button-chat-schedule-demo"
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,195,51,0.22)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,195,51,0.12)"; }}
+            >
+              Schedule Demo
+            </button>
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3" data-testid="list-chat-messages">
+            {messages.map((msg, i) => (
+              <div key={i} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                {msg.role === "assistant" && (
+                  <div
+                    className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mr-2 mt-0.5"
+                    style={{ background: "rgba(255,195,51,0.12)", border: "1px solid rgba(255,195,51,0.2)" }}
+                  >
+                    <Bot className="w-3 h-3" style={{ color: "#ffc333" }} />
+                  </div>
+                )}
+                <div
+                  className="max-w-[78%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed"
+                  style={
+                    msg.role === "user"
+                      ? { background: "#ffc333", color: "#0a0a0a", borderBottomRightRadius: "4px" }
+                      : { background: "#1a1a1a", color: "rgba(255,255,255,0.85)", border: "1px solid rgba(255,255,255,0.06)", borderBottomLeftRadius: "4px" }
+                  }
+                  data-testid={`msg-${msg.role}-${i}`}
+                >
+                  {msg.content}
+                </div>
+              </div>
+            ))}
+            {loading && (
+              <div className="flex justify-start">
+                <div
+                  className="flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mr-2 mt-0.5"
+                  style={{ background: "rgba(255,195,51,0.12)", border: "1px solid rgba(255,195,51,0.2)" }}
+                >
+                  <Bot className="w-3 h-3" style={{ color: "#ffc333" }} />
+                </div>
+                <div
+                  className="rounded-xl px-3.5 py-2.5 flex items-center gap-1.5"
+                  style={{ background: "#1a1a1a", border: "1px solid rgba(255,255,255,0.06)", borderBottomLeftRadius: "4px" }}
+                  data-testid="msg-typing"
+                >
+                  {[0, 1, 2].map(d => (
+                    <span
+                      key={d}
+                      className="w-1.5 h-1.5 rounded-full animate-bounce"
+                      style={{ background: "rgba(255,195,51,0.6)", animationDelay: `${d * 0.15}s` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Input */}
+          <div
+            className="flex-shrink-0 flex items-center gap-2 px-3 py-3"
+            style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}
+          >
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+              placeholder="Ask anything about Freight DNA…"
+              disabled={loading}
+              className="flex-1 text-sm px-3 py-2 rounded-lg outline-none"
+              style={{ background: "#1a1a1a", border: "1px solid rgba(255,255,255,0.1)", color: "#fff" }}
+              data-testid="input-chat-message"
+            />
+            <button
+              onClick={send}
+              disabled={!input.trim() || loading}
+              className="flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 transition-all duration-150"
+              style={{
+                background: input.trim() && !loading ? "#ffc333" : "rgba(255,195,51,0.15)",
+                color: input.trim() && !loading ? "#0a0a0a" : "rgba(255,195,51,0.4)",
+              }}
+              data-testid="button-chat-send"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 export default function LandingPage() {
   const [, navigate] = useLocation();
   const [demoOpen, setDemoOpen] = useState(false);
+  const [showCancelledBanner, setShowCancelledBanner] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("checkout") === "cancelled";
+  });
 
   return (
     <div className="min-h-screen flex flex-col" style={{ background: "#0a0a0a", color: "#fff" }}>
+      {showCancelledBanner && (
+        <div
+          className="flex items-center justify-between px-4 py-3 text-sm"
+          style={{ background: "rgba(255,100,60,0.12)", borderBottom: "1px solid rgba(255,100,60,0.25)" }}
+          data-testid="banner-checkout-cancelled"
+        >
+          <span style={{ color: "rgba(255,200,180,0.9)" }}>
+            Your checkout was cancelled — no charge was made. You can try again any time.
+          </span>
+          <button
+            onClick={() => setShowCancelledBanner(false)}
+            className="ml-4 text-xs opacity-60 hover:opacity-100 transition-opacity"
+            style={{ color: "rgba(255,200,180,0.9)" }}
+            data-testid="button-dismiss-cancel-banner"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       <ScheduleDemoModal open={demoOpen} onClose={() => setDemoOpen(false)} />
 
@@ -139,7 +622,11 @@ export default function LandingPage() {
         className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 md:px-12 h-16"
         style={{ background: "rgba(10,10,10,0.92)", borderBottom: "1px solid rgba(255,180,0,0.12)", backdropFilter: "blur(8px)" }}
       >
-        <div className="flex items-center gap-3" data-testid="nav-wordmark">
+        <button
+          className="flex items-center gap-3 cursor-pointer"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          data-testid="nav-wordmark"
+        >
           <div
             className="flex items-center justify-center w-8 h-8 rounded-full"
             style={{ border: "1.5px solid #ffb400", background: "#111" }}
@@ -149,9 +636,19 @@ export default function LandingPage() {
           <span className="text-base font-bold tracking-tight" style={{ color: "#ffb400" }}>
             freight · dna
           </span>
-        </div>
+        </button>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => setDemoOpen(true)}
+            className="text-sm font-semibold px-4 py-2 rounded transition-all duration-150"
+            style={{ color: "rgba(255,255,255,0.65)", background: "transparent" }}
+            data-testid="link-nav-schedule-demo"
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#fff"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.65)"; }}
+          >
+            Schedule Demo
+          </button>
           <a
             href="/login"
             onClick={e => { e.preventDefault(); navigate("/login"); }}
@@ -176,7 +673,7 @@ export default function LandingPage() {
       <section className="flex flex-col items-center justify-center text-center pt-40 pb-24 px-6 relative" style={{ minHeight: "88vh" }}>
         <div
           className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[400px] rounded-full"
-          style={{ background: "radial-gradient(ellipse, rgba(255,180,0,0.07) 0%, transparent 70%)" }}
+          style={{ background: "radial-gradient(ellipse, rgba(255,180,0,0.14) 0%, transparent 70%)" }}
         />
 
         <p
@@ -192,23 +689,23 @@ export default function LandingPage() {
           style={{ letterSpacing: "-0.03em" }}
           data-testid="text-hero-headline"
         >
-          Know your accounts
+          Know your customers
           <br />
           <span style={{ color: "#ffc333" }}>down, not across.</span>
         </h1>
 
         <p
-          className="max-w-xl text-lg md:text-xl leading-relaxed mb-10"
+          className="max-w-lg text-lg md:text-xl leading-relaxed mb-10"
           style={{ color: "rgba(255,255,255,0.5)" }}
           data-testid="text-hero-subheadline"
         >
-          In today's freight market, the fastest path to exponential growth isn't chasing new logos — it's unlocking the wallet share you're leaving behind in the accounts you already own. Freight DNA gives your team the relationship intelligence and competitive data to grow deeper, not just wider.
+          Stop chasing new logos. The freight you're leaving behind is already in your book — Freight DNA gives your team the intelligence to find it and win it.
         </p>
 
         <div className="flex items-center gap-4">
           <button
             onClick={() => setDemoOpen(true)}
-            className="text-sm font-bold px-7 py-3 rounded transition-all duration-150"
+            className="text-sm font-bold px-8 py-3.5 rounded transition-all duration-150"
             style={{ background: "#ffc333", color: "#0a0a0a" }}
             data-testid="button-hero-schedule-demo"
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
@@ -217,10 +714,10 @@ export default function LandingPage() {
             Schedule Demo
           </button>
           <a
-            href="/login"
-            onClick={e => { e.preventDefault(); navigate("/login"); }}
-            className="text-sm font-semibold px-7 py-3 rounded transition-all duration-150"
-            style={{ border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.7)" }}
+            href="#pricing"
+            onClick={e => { e.preventDefault(); document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" }); }}
+            className="text-sm font-semibold px-8 py-3.5 rounded transition-all duration-150 flex items-center gap-2"
+            style={{ border: "1px solid rgba(255,255,255,0.15)", color: "rgba(255,255,255,0.65)" }}
             data-testid="button-hero-cta"
             onMouseEnter={e => {
               (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.35)";
@@ -228,10 +725,10 @@ export default function LandingPage() {
             }}
             onMouseLeave={e => {
               (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.15)";
-              (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.7)";
+              (e.currentTarget as HTMLElement).style.color = "rgba(255,255,255,0.65)";
             }}
           >
-            Get Started
+            See Pricing <ArrowRight className="w-3.5 h-3.5" />
           </a>
         </div>
       </section>
@@ -353,10 +850,19 @@ export default function LandingPage() {
               ))}
               <p className="text-[8px] uppercase tracking-widest px-2 pt-3 pb-1" style={{ color: "rgba(255,180,0,0.4)" }}>Pipeline</p>
               {[
+                { icon: Kanban, label: "Sales Pipeline", active: true },
                 { icon: Trophy, label: "RFP & Awards" },
-                { icon: ClipboardList, label: "Lane Research" },
+                { icon: Truck, label: "Carrier Lane Search" },
+                { icon: Route, label: "RFP Lane Search" },
               ].map((item, i) => (
-                <div key={i} className="flex items-center gap-2 px-2 py-1.5 rounded text-[10px] font-medium" style={{ color: "rgba(255,255,255,0.55)" }}>
+                <div
+                  key={i}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded text-[10px] font-medium"
+                  style={{
+                    background: item.active ? "rgba(255,180,0,0.12)" : "transparent",
+                    color: item.active ? "#ffb400" : "rgba(255,255,255,0.55)",
+                  }}
+                >
                   <item.icon className="w-3 h-3 flex-shrink-0" />
                   <span>{item.label}</span>
                 </div>
@@ -386,7 +892,7 @@ export default function LandingPage() {
           </div>
 
           {/* Module grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 flex-1">
             {modules.map((mod, i) => {
               const Icon = mod.icon;
               return (
@@ -466,31 +972,137 @@ export default function LandingPage() {
         <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
       </div>
 
-      {/* How it works */}
-      <section className="py-24 px-6 md:px-12 max-w-5xl mx-auto w-full">
+      {/* Why Teams Make the Switch */}
+      <section className="py-24 px-6 md:px-12 max-w-6xl mx-auto w-full" data-testid="section-why-switch">
         <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
-          How It Works
+          Why Teams Switch
         </p>
         <h2
-          className="text-3xl md:text-4xl font-bold text-center mb-16 tracking-tight"
+          className="text-3xl md:text-4xl font-bold text-center mb-4 tracking-tight"
           style={{ letterSpacing: "-0.02em" }}
         >
-          Three steps to winning more freight.
+          Built for the problems freight brokers actually have.
         </h2>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-          {howItWorks.map((step, i) => (
-            <div key={i} className="flex flex-col gap-4" data-testid={`card-step-${i}`}>
-              <div className="flex items-center gap-3">
-                <span className="text-4xl font-extrabold" style={{ color: "rgba(255,180,0,0.2)", letterSpacing: "-0.04em" }}>{step.step}</span>
-                {i < howItWorks.length - 1 && (
-                  <ChevronRight className="w-4 h-4 hidden md:block" style={{ color: "rgba(255,180,0,0.2)" }} />
-                )}
+        <p className="text-center text-sm mb-16 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
+          Generic CRMs were never designed for transportation brokerage. Here's what changes when your team has a tool that understands the business.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {[
+            {
+              before: "Our CRM wasn't built for freight",
+              after: "Freight DNA understands modes, lanes, RFPs, org charts, and wallet share out of the box. No custom fields to configure. No workarounds. It works the way you already think about your accounts.",
+            },
+            {
+              before: "We had no visibility into wallet share",
+              after: "Reps walk into every call knowing exactly how much of an account's freight budget they're winning — and where the gaps are. The whole team goes deeper, not just broader.",
+            },
+            {
+              before: "Accounts were going cold without anyone knowing",
+              after: "Cold contact alerts, health scores, and momentum tracking mean no relationship slips through the cracks. Reps get nudged before accounts become problems — not after.",
+            },
+          ].map((item, i) => (
+            <div
+              key={i}
+              className="flex flex-col gap-5 p-7 rounded-xl"
+              style={{ background: "#0f0f0f", border: "1px solid rgba(255,180,0,0.14)" }}
+              data-testid={`card-why-switch-${i}`}
+            >
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "rgba(255,100,60,0.7)" }} />
+                <p className="text-sm font-semibold leading-snug" style={{ color: "rgba(255,255,255,0.5)" }}>"{item.before}"</p>
               </div>
-              <h3 className="text-lg font-bold">{step.title}</h3>
-              <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>{step.body}</p>
+              <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+              <div className="flex items-start gap-3">
+                <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: "#ffc333" }} />
+                <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.6)" }}>{item.after}</p>
+              </div>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
+      {/* Built Around You */}
+      <section className="py-24 px-6 md:px-12 max-w-5xl mx-auto w-full" data-testid="section-built-around-you">
+        <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
+          Getting Started
+        </p>
+        <h2
+          className="text-3xl md:text-4xl font-bold text-center mb-4 tracking-tight"
+          style={{ letterSpacing: "-0.02em" }}
+          data-testid="text-onboarding-heading"
+        >
+          Up and running in days — not months.
+        </h2>
+        <p className="text-center text-sm mb-16 max-w-lg mx-auto" style={{ color: "rgba(255,255,255,0.4)" }}>
+          No two brokerages operate the same way. We don't expect you to change how you work — we configure the platform to match it.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {[
+            {
+              icon: Zap,
+              title: "Live in ~1 Week",
+              body: "We handle the full setup — data import, team configuration, and role permissions. Most brokerages are up and running within a week. Your team shows up on day one ready to sell.",
+            },
+            {
+              icon: Wrench,
+              title: "Tailored to Your Workflow",
+              body: "Field labels, stages, reporting views, team hierarchy — we configure all of it to match how you actually operate. You shouldn't have to adapt to a tool. The tool should adapt to you.",
+            },
+            {
+              icon: RefreshCw,
+              title: "We Build What You Need",
+              body: "Need a custom report? A new field? A workflow that doesn't exist yet? Tell us. We move fast, and we're easy to work with. The platform evolves alongside your business — not on a six-month release cycle.",
+            },
+          ].map((card, i) => {
+            const Icon = card.icon;
+            return (
+              <div
+                key={i}
+                className="flex flex-col gap-5 p-7 rounded-xl"
+                style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.14)" }}
+                data-testid={`card-onboarding-${i}`}
+              >
+                <div
+                  className="flex items-center justify-center w-10 h-10 rounded"
+                  style={{ background: "rgba(255,195,51,0.1)", border: "1px solid rgba(255,195,51,0.2)" }}
+                >
+                  <Icon className="w-5 h-5" style={{ color: "#ffc333" }} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold mb-2 tracking-tight">{card.title}</h3>
+                  <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.45)" }}>{card.body}</p>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Mid-page CTA */}
+      <section className="py-10 px-6 flex justify-center" data-testid="section-mid-cta">
+        <div
+          className="flex flex-col sm:flex-row items-center gap-5 px-10 py-6 rounded-2xl"
+          style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.18)" }}
+        >
+          <p className="text-sm font-medium text-center sm:text-left" style={{ color: "rgba(255,255,255,0.5)" }}>
+            Seen enough to be curious? Let's walk through it together.
+          </p>
+          <button
+            onClick={() => setDemoOpen(true)}
+            className="flex-shrink-0 text-sm font-bold px-6 py-2.5 rounded transition-all duration-150 whitespace-nowrap"
+            style={{ background: "#ffc333", color: "#0a0a0a" }}
+            data-testid="button-mid-cta-demo"
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#ffc333"; }}
+          >
+            Schedule a Demo
+          </button>
         </div>
       </section>
 
@@ -530,7 +1142,7 @@ export default function LandingPage() {
                 style={{ background: "rgba(255,195,51,0.15)", color: "#ffc333", border: "1px solid rgba(255,195,51,0.3)" }}
                 data-testid="badge-ai-status"
               >
-                Early Access
+                Now Live
               </span>
             </div>
             <h2
@@ -613,82 +1225,149 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Why Freight DNA highlight strip */}
-      <div style={{ background: "#0d0d0d", borderTop: "1px solid rgba(255,180,0,0.12)", borderBottom: "1px solid rgba(255,180,0,0.12)" }}>
-        <div className="max-w-6xl mx-auto py-16 px-6 md:px-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10">
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
+      <PricingSection onScheduleDemo={() => setDemoOpen(true)} />
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
+      </div>
+
+      {/* FAQ */}
+      <section className="py-24 px-6 md:px-12 max-w-3xl mx-auto w-full" data-testid="section-faq">
+        <p className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 text-center" style={{ color: "rgba(255,180,0,0.65)" }}>
+          FAQ
+        </p>
+        <h2
+          className="text-3xl md:text-4xl font-bold text-center mb-16 tracking-tight"
+          style={{ letterSpacing: "-0.02em" }}
+        >
+          Common questions.
+        </h2>
+        <div className="flex flex-col divide-y" style={{ borderTop: "1px solid rgba(255,180,0,0.12)", borderBottom: "1px solid rgba(255,180,0,0.12)" }}>
           {[
-            { check: "Built for freight", body: "Not a generic CRM. Every field, workflow, and report is designed around how transportation brokers actually sell — not retrofitted from a software playbook." },
-            { check: "Grow the book you have", body: "The average broker sees less than 20% of a shipper's total spend. Freight DNA surfaces the wallet share you're missing and gives your team the intelligence to go capture it — without adding a single new logo." },
-            { check: "Develops your people", body: "1:1 tooling, career conversations, and historical report card logs give managers the full development picture. The period toggle on Team Performance turns coaching sessions from opinions into evidence." },
-            { check: "Enterprise-ready", body: "Multi-team and multi-org support means Freight DNA scales with you — from a single brokerage desk to a national enterprise with dozens of teams operating independently under one platform." },
+            {
+              q: "How is Freight DNA different from Salesforce or HubSpot?",
+              a: "Salesforce and HubSpot are built for generic sales teams — they don't understand freight modes, lane research, RFPs, wallet share, or brokerage org structures. Freight DNA was designed from the ground up for transportation brokerage. Every field, module, and workflow reflects how freight brokers actually sell.",
+            },
+            {
+              q: "What does onboarding actually look like?",
+              a: "We handle everything. Most brokerages are fully live within a week — data import, team configuration, role permissions, and training included. You don't need IT, a Salesforce consultant, or a six-month implementation project. Your team shows up on day one ready to work.",
+            },
+            {
+              q: "Do I need IT or consultants to get set up?",
+              a: "No. We configure the platform for you. If you have existing data in spreadsheets, a CRM, or another system, we'll import it. If you want custom fields, reports, or workflows, tell us — we build those too.",
+            },
+            {
+              q: "Is there a long-term contract?",
+              a: "Monthly plans are month-to-month — cancel any time. Annual plans are billed upfront and save you 20%. The trial is a single month with no commitment beyond it. If you continue after the trial, the $1,000 applies toward your first year.",
+            },
+            {
+              q: "What if I need a feature that doesn't exist yet?",
+              a: "Tell us. We build custom features regularly — simple additions start around $500, and larger integrations are scoped per project. We move fast and we're easy to work with. The platform evolves alongside your business, not on a six-month release cycle.",
+            },
+            {
+              q: "How small or large does my team need to be?",
+              a: "Freight DNA works for teams of any size. The Standard plan supports up to 50 team members. Enterprise covers 50+ seats. If you're a solo NAM or a two-person brokerage, the Trial is a low-risk way to evaluate whether it fits.",
+            },
           ].map((item, i) => (
-            <div key={i} className="flex flex-col gap-3" data-testid={`card-why-${i}`}>
-              <div className="flex items-center gap-2">
-                <CheckCircle className="w-4 h-4 flex-shrink-0" style={{ color: "#ffc333" }} />
-                <span className="text-sm font-bold">{item.check}</span>
-              </div>
-              <p className="text-sm leading-relaxed pl-6" style={{ color: "rgba(255,255,255,0.4)" }}>{item.body}</p>
-            </div>
+            <FaqItem key={i} question={item.q} answer={item.a} index={i} />
           ))}
         </div>
+      </section>
+
+      {/* Divider */}
+      <div className="w-full px-6 md:px-12">
+        <div style={{ height: "1px", background: "rgba(255,180,0,0.12)" }} />
       </div>
 
       {/* Footer CTA */}
-      <section className="py-24 px-6 flex flex-col items-center text-center">
-        <p
-          className="text-xs uppercase tracking-[0.22em] font-semibold mb-4"
-          style={{ color: "rgba(255,180,0,0.65)" }}
+      <section className="py-24 px-6 flex flex-col items-center text-center" data-testid="section-footer-cta">
+        <div
+          className="relative w-full max-w-4xl mx-auto rounded-2xl px-10 py-16 md:py-20 flex flex-col items-center overflow-hidden"
+          style={{ background: "#0d0d0d", border: "1px solid rgba(255,180,0,0.2)" }}
         >
-          Ready to go deeper?
-        </p>
-        <h2
-          className="text-3xl md:text-5xl font-extrabold mb-4 tracking-tight"
-          style={{ letterSpacing: "-0.03em" }}
-          data-testid="text-footer-cta-heading"
-        >
-          Build relationships that last.
-        </h2>
-        <p className="text-base mb-10 max-w-md" style={{ color: "rgba(255,255,255,0.4)" }}>
-          DNA · Down Not Across. Your competitive advantage starts with knowing your customer better than anyone else.
-        </p>
-        <div className="flex flex-col sm:flex-row items-center gap-4">
-          <a
-            href="/login"
-            onClick={e => { e.preventDefault(); navigate("/login"); }}
-            className="text-sm font-bold px-8 py-3 rounded transition-all duration-150"
-            style={{ background: "#ffc333", color: "#0a0a0a" }}
-            data-testid="button-footer-cta"
-            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#ffc333"; }}
+          {/* Glow */}
+          <div
+            className="pointer-events-none absolute top-0 left-1/2 -translate-x-1/2 w-[500px] h-[300px] rounded-full"
+            style={{ background: "radial-gradient(ellipse, rgba(255,180,0,0.1) 0%, transparent 70%)" }}
+          />
+          <p
+            className="text-xs uppercase tracking-[0.22em] font-semibold mb-4 relative"
+            style={{ color: "rgba(255,180,0,0.65)" }}
           >
-            Access the Platform
-          </a>
-          <button
-            onClick={() => setDemoOpen(true)}
-            className="text-sm font-semibold px-8 py-3 rounded transition-all duration-150"
-            style={{ border: "1px solid rgba(255,180,0,0.5)", color: "#ffb400", background: "transparent" }}
-            data-testid="button-footer-schedule-demo"
-            onMouseEnter={e => {
-              (e.currentTarget as HTMLElement).style.background = "rgba(255,180,0,0.08)";
-              (e.currentTarget as HTMLElement).style.borderColor = "#ffb400";
-            }}
-            onMouseLeave={e => {
-              (e.currentTarget as HTMLElement).style.background = "transparent";
-              (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,180,0,0.5)";
-            }}
+            Ready to go deeper?
+          </p>
+          <h2
+            className="text-3xl md:text-5xl font-extrabold mb-4 tracking-tight relative"
+            style={{ letterSpacing: "-0.03em" }}
+            data-testid="text-footer-cta-heading"
           >
-            Schedule Demo
-          </button>
+            Build relationships that last.
+          </h2>
+          <p className="text-base mb-10 max-w-md relative" style={{ color: "rgba(255,255,255,0.4)" }}>
+            Your competitive advantage starts with knowing your customers better than anyone else. Let's get you there.
+          </p>
+          <div className="flex flex-col sm:flex-row items-center gap-4 relative">
+            <button
+              onClick={() => setDemoOpen(true)}
+              className="text-sm font-bold px-8 py-3.5 rounded transition-all duration-150"
+              style={{ background: "#ffc333", color: "#0a0a0a" }}
+              data-testid="button-footer-schedule-demo"
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#ffb400"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#ffc333"; }}
+            >
+              Schedule Demo
+            </button>
+            <a
+              href="#pricing"
+              onClick={e => { e.preventDefault(); document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" }); }}
+              className="text-sm font-semibold px-8 py-3.5 rounded transition-all duration-150"
+              style={{ border: "1px solid rgba(255,180,0,0.5)", color: "#ffb400", background: "transparent" }}
+              data-testid="button-footer-cta"
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLElement).style.background = "rgba(255,180,0,0.08)";
+                (e.currentTarget as HTMLElement).style.borderColor = "#ffb400";
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLElement).style.background = "transparent";
+                (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,180,0,0.5)";
+              }}
+            >
+              View Pricing
+            </a>
+          </div>
         </div>
       </section>
 
       {/* Footer bar */}
       <footer
-        className="w-full flex items-center justify-between px-6 md:px-12 py-5 text-xs"
+        className="w-full flex flex-col sm:flex-row items-center justify-between gap-3 px-6 md:px-12 py-5 text-xs"
         style={{ borderTop: "1px solid rgba(255,180,0,0.1)", color: "rgba(255,255,255,0.2)" }}
       >
         <span data-testid="text-footer-wordmark">freight · dna</span>
-        <span>Sales intelligence for freight brokers.</span>
+        <div className="flex items-center gap-5">
+          <a
+            href="/privacy"
+            data-testid="link-footer-privacy"
+            className="hover:text-white transition-colors"
+            style={{ color: "rgba(255,255,255,0.3)" }}
+          >
+            Privacy Policy
+          </a>
+          <a
+            href="/terms"
+            data-testid="link-footer-terms"
+            className="hover:text-white transition-colors"
+            style={{ color: "rgba(255,255,255,0.3)" }}
+          >
+            Terms of Service
+          </a>
+        </div>
         <a
           href="mailto:info@freight-dna.com"
           data-testid="link-footer-email"
@@ -699,6 +1378,7 @@ export default function LandingPage() {
         </a>
       </footer>
 
+      <MarketingChatWidget onScheduleDemo={() => setDemoOpen(true)} />
     </div>
   );
 }

@@ -1,0 +1,91 @@
+I need you to diagnose this as a pipeline health problem first, not a Customer Quotes UI problem.
+
+The screenshot shows the Conversations tab with a visible “Webhook unhealthy” banner.
+That strongly suggests the Customer Quotes issue may be caused by degraded inbound email/webhook/mailbox sync rather than the Customer Quotes page itself.
+
+Your task
+
+Investigate the full path from inbound email → Conversations → quote ingestion → Customer Quotes.
+
+Specifically verify:
+
+Webhook / mailbox health
+
+Why is the Conversations page showing Webhook unhealthy?
+
+Which health check or readiness signal is driving that banner?
+
+Is the issue:
+
+expired/missing Microsoft Graph subscription,
+
+webhook delivery failure,
+
+delta sync failure,
+
+mailbox enrollment problem,
+
+live-sync auth problem,
+
+or stale health state not being cleared?
+
+Conversations freshness
+
+Are new inbound emails still being persisted correctly?
+
+Are new threads appearing in Conversations without manual refresh?
+
+If not, identify the exact failing step.
+
+Customer Quotes dependency chain
+
+For quote-like customer emails, determine whether they are:
+
+not arriving,
+
+arriving but not classified,
+
+classified but not parsed,
+
+parsed but dropped,
+
+or ingested but not rendering in Customer Quotes.
+
+Visible trust issue
+
+Explain whether the Customer Quotes tab is truly broken, or whether it is a downstream symptom of the unhealthy webhook/mailbox pipeline.
+
+Deliver back
+
+I want:
+
+the exact root cause of the Webhook unhealthy banner,
+
+the exact code path / service / route responsible,
+
+whether this is the primary reason Customer Quotes appears broken,
+
+the smallest safe fix,
+
+exact files that need changes,
+
+and what production verification is required after the fix.
+
+Constraints
+
+Treat this as a production-trust incident.
+
+Do not redesign either page.
+
+Focus on diagnosis and the smallest safe repair first.
+
+If multiple issues exist, separate:
+
+primary blocker,
+
+secondary symptoms,
+
+unrelated noise.
+
+The main question is:
+Is Customer Quotes broken directly, or is the webhook/mailbox pipeline unhealthy and making Customer Quotes look broken downstream?

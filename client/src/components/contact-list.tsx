@@ -27,10 +27,18 @@ import {
   Phone,
   PhoneCall,
   ArrowRight,
+  Send,
+  AlertTriangle,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import type { Contact, Touchpoint } from "@shared/schema";
+import { CopyButton } from "@/components/copy-button";
+import { OutlookComposeDialog } from "@/components/outlook-compose-dialog";
+import { DraftEmailModal } from "@/components/DraftEmailModal";
+import { Sparkles, Video } from "lucide-react";
+import { useWebexStatus, useWebexPresenceBatch, getPresenceStyle } from "@/hooks/use-webex";
+import { WebexDisabledHint } from "@/components/webex-disabled-hint";
 
 function countThisWeek(tps: Touchpoint[]) {
   const start = new Date();
@@ -73,6 +81,11 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
   const { toast } = useToast();
   const [searchQuery, setSearchQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
+  const [composeTarget, setComposeTarget] = useState<Contact | null>(null);
+  const [draftTarget, setDraftTarget] = useState<Contact | null>(null);
+  const webexConfigured = useWebexStatus();
+  const contactPhones = contacts.filter(c => c.phone).map(c => c.phone!);
+  const presenceMap = useWebexPresenceBatch(contactPhones, webexConfigured);
 
   const deleteMutation = useMutation({
     mutationFn: async (contactId: string) => {
@@ -139,124 +152,203 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
             <Card
               key={contact.id}
               data-testid={`card-contact-list-${contact.id}`}
-              className={onViewContact ? "cursor-pointer hover-elevate" : ""}
+              className={`group min-h-[140px]${onViewContact ? " cursor-pointer hover-elevate" : ""}`}
               onClick={onViewContact ? () => onViewContact(contact) : undefined}
             >
-              <CardContent className="p-4">
+              <CardContent className="p-3">
                 <div className="flex items-start gap-3">
                   <div className="relative shrink-0">
-                    <Avatar className="h-12 w-12">
-                      <AvatarFallback className="bg-primary/10 text-primary font-medium">
+                    <Avatar className="h-10 w-10">
+                      <AvatarFallback className="bg-primary/10 text-primary font-medium text-sm">
                         {initials}
                       </AvatarFallback>
                     </Avatar>
                     <span
-                      className={`absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-background ${days === null ? "bg-muted-foreground/30" : days <= 7 ? "bg-green-500" : days <= 30 ? "bg-amber-500" : "bg-red-500"}`}
+                      className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${days === null ? "bg-muted-foreground/30" : days <= 7 ? "bg-green-500" : days <= 30 ? "bg-amber-500" : "bg-red-500"}`}
                       title={dayLabel}
                     />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <h4 className="font-medium truncate">{contact.name}</h4>
+                        <h4 className="font-semibold text-sm leading-tight truncate">{contact.name}</h4>
                         {contact.title && (
-                          <p className="text-sm text-muted-foreground truncate">
+                          <p className="text-xs text-muted-foreground truncate mt-0.5" title={contact.title}>
                             {contact.title}
                           </p>
                         )}
                         {manager && (
-                          <p className="text-xs text-muted-foreground mt-1">
+                          <p className="text-xs text-muted-foreground/70 mt-0.5">
                             Reports to: {manager.name}
                           </p>
                         )}
-                        <div className="flex items-center gap-2 mt-1 flex-wrap">
-                          <span className={`inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium ${recClass}`}>
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                          <span className={`inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full font-medium ${recClass}`}>
                             <PhoneCall className="h-2.5 w-2.5" />
                             {dayLabel}
                           </span>
-                          <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
+                          <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
                             {weekCount} this week
                           </span>
-                          <span className="text-xs text-muted-foreground">{monthCount} this month</span>
+                          <span className="text-[11px] text-muted-foreground">{monthCount} this month</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+                        {contact.email && (
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            onClick={(e) => { e.stopPropagation(); setComposeTarget(contact); }}
+                            title="Send email via Outlook"
+                            data-testid={`button-email-contact-list-${contact.id}`}
+                          >
+                            <Send className="h-3.5 w-3.5 text-blue-500" />
+                          </Button>
+                        )}
                         <Button
                           size="icon"
                           variant="ghost"
+                          className="h-7 w-7"
                           onClick={(e) => { e.stopPropagation(); onEditContact(contact); }}
                           data-testid={`button-edit-contact-list-${contact.id}`}
                         >
-                          <Pencil className="h-4 w-4" />
+                          <Pencil className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           size="icon"
                           variant="ghost"
+                          className="h-7 w-7"
                           onClick={(e) => { e.stopPropagation(); setDeleteTarget(contact); }}
                           data-testid={`button-delete-contact-${contact.id}`}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </div>
 
-                    <div className="mt-3 space-y-2">
+                    <div className="mt-2 space-y-1.5">
                       {(contact.email || contact.phone) && (
-                        <div className="flex flex-wrap gap-3 text-sm">
-                          {contact.email && (
-                            <a
-                              href={`mailto:${contact.email}`}
-                              className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
-                            >
-                              <Mail className="h-3.5 w-3.5" />
-                              <span className="truncate">{contact.email}</span>
-                            </a>
-                          )}
-                          {contact.phone && (
-                            <a
-                              href={`tel:${contact.phone}`}
-                              className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
-                            >
-                              <Phone className="h-3.5 w-3.5" />
-                              <span>{contact.phone}</span>
-                            </a>
-                          )}
+                        <div className="space-y-1.5 min-w-0">
+                          <div className="flex flex-wrap gap-3 text-xs min-w-0">
+                            {contact.email && (
+                              <span className="flex items-center gap-1">
+                                <a
+                                  href={`mailto:${contact.email}`}
+                                  onClick={e => e.stopPropagation()}
+                                  className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                                >
+                                  <Mail className="h-3 w-3" />
+                                  <span className="truncate">{contact.email}</span>
+                                </a>
+                                <CopyButton value={contact.email} label="Email" data-testid={`button-copy-contact-email-${contact.id}`} />
+                              </span>
+                            )}
+                            {contact.phone && (
+                              <span className="flex items-center gap-1">
+                                <a
+                                  href={`tel:${contact.phone}`}
+                                  onClick={e => e.stopPropagation()}
+                                  className="flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                                >
+                                  <Phone className="h-3 w-3" />
+                                  <span>{contact.phone}</span>
+                                </a>
+                                {webexConfigured && (() => {
+                                  const ps = getPresenceStyle(presenceMap[contact.phone!] ?? "unknown");
+                                  return (
+                                    <span
+                                      className={`inline-block h-2 w-2 rounded-full ${ps.dot}`}
+                                      title={`Webex: ${ps.label}`}
+                                      data-testid={`presence-dot-${contact.id}`}
+                                    />
+                                  );
+                                })()}
+                                <CopyButton value={contact.phone} label="Phone" data-testid={`button-copy-contact-phone-${contact.id}`} />
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex gap-1.5">
+                            {contact.email && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="flex-1 gap-2 h-7 text-xs text-blue-600 border-blue-200 hover:bg-blue-50 hover:border-blue-400 dark:text-blue-400 dark:border-blue-800 dark:hover:bg-blue-950/40"
+                                  onClick={(e) => { e.stopPropagation(); setComposeTarget(contact); }}
+                                  data-testid={`button-send-email-card-${contact.id}`}
+                                >
+                                  <Send className="h-3 w-3" />
+                                  Send Email
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="gap-1.5 h-7 text-xs text-indigo-600 border-indigo-200 hover:bg-indigo-50 hover:border-indigo-400 dark:text-indigo-400 dark:border-indigo-800 dark:hover:bg-indigo-950/40"
+                                  onClick={(e) => { e.stopPropagation(); setDraftTarget(contact); }}
+                                  data-testid={`button-draft-email-card-${contact.id}`}
+                                >
+                                  <Sparkles className="h-3 w-3" />
+                                  Draft
+                                </Button>
+                              </>
+                            )}
+                            {webexConfigured && contact.phone && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="gap-1.5 h-7 text-xs text-green-600 border-green-200 hover:bg-green-50 hover:border-green-400 dark:text-green-400 dark:border-green-800 dark:hover:bg-green-950/40"
+                                onClick={(e) => { e.stopPropagation(); window.open(`webextel://${contact.phone!.replace(/[^0-9+]/g, "")}`, "_self"); }}
+                                data-testid={`button-webex-call-${contact.id}`}
+                              >
+                                <Video className="h-3 w-3" />
+                                Webex Call
+                              </Button>
+                            )}
+                            {!webexConfigured && contact.phone && (
+                              <WebexDisabledHint
+                                compact
+                                className="self-center px-1"
+                                testId={`hint-webex-disabled-${contact.id}`}
+                              />
+                            )}
+                          </div>
                         </div>
                       )}
 
                       {contact.regions && contact.regions.length > 0 && (
-                        <div className="flex items-start gap-2">
-                          <MapPin className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                          <div className="flex flex-wrap gap-1">
+                        <div className="flex items-start gap-1.5 min-w-0">
+                          <MapPin className="h-3 w-3 text-muted-foreground shrink-0 mt-0.5" />
+                          <div className="flex flex-wrap gap-1 min-w-0 overflow-hidden">
                             {contact.regions.map((region, i) => (
-                              <Badge key={i} variant="secondary" className="text-xs">
-                                {region}
-                              </Badge>
+                              <span key={i} className="inline-flex items-center text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-normal">
+                                {region.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
+                              </span>
                             ))}
                           </div>
                         </div>
                       )}
 
                       {contact.lanes && contact.lanes.length > 0 && (
-                        <div className="flex items-start gap-2">
-                          <Route className="h-3.5 w-3.5 text-muted-foreground shrink-0 mt-0.5" />
-                          <div className="flex flex-wrap gap-1">
+                        <div className="flex items-start gap-1.5 min-w-0">
+                          <Route className="h-3 w-3 text-muted-foreground shrink-0 mt-0.5" />
+                          <div className="flex flex-wrap gap-1 min-w-0 overflow-hidden">
                             {contact.lanes.map((lane, i) => (
-                              <Badge key={i} variant="outline" className="text-xs">
-                                {lane}
-                              </Badge>
+                              <span key={i} className="inline-flex items-center text-[11px] px-2 py-0.5 rounded-full bg-muted/60 text-muted-foreground font-normal border border-border/50">
+                                {lane.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())}
+                              </span>
                             ))}
                           </div>
                         </div>
                       )}
 
                       {contact.freightSpend && (
-                        <div className="flex items-center gap-2">
-                          <DollarSign className="h-3.5 w-3.5 text-muted-foreground" />
-                          <span className="text-sm font-medium">
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <DollarSign className="h-3 w-3 text-muted-foreground shrink-0" />
+                          <span className="text-xs font-medium">
                             ${Number(contact.freightSpend).toLocaleString()}
                           </span>
-                          <span className="text-xs text-muted-foreground">annual freight spend</span>
+                          <span className="text-[11px] text-muted-foreground">annual freight spend</span>
                         </div>
                       )}
 
@@ -279,6 +371,25 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
                         </div>
                       )}
                     </div>
+
+                    {/* Completeness nudge */}
+                    {(() => {
+                      const issues: string[] = [];
+                      if (!contact.email) issues.push("Missing email");
+                      if (!contact.phone) issues.push("Missing phone");
+                      if (days === null) issues.push("Never contacted");
+                      if (issues.length === 0) return null;
+                      return (
+                        <div className="mt-2 flex items-center gap-1.5 flex-wrap pt-2 border-t border-border/60" onClick={e => e.stopPropagation()}>
+                          <AlertTriangle className="h-3 w-3 text-amber-500 shrink-0" />
+                          {issues.map(issue => (
+                            <span key={issue} className="inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                              {issue}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               </CardContent>
@@ -313,6 +424,26 @@ export function ContactList({ contacts, companyId, touchpoints = [], onEditConta
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <OutlookComposeDialog
+        open={!!composeTarget}
+        onClose={() => setComposeTarget(null)}
+        toEmail={composeTarget?.email || ""}
+        toName={composeTarget?.name || ""}
+        companyName=""
+        contactId={composeTarget?.id}
+        companyId={composeTarget?.companyId ?? undefined}
+      />
+
+      {draftTarget && (
+        <DraftEmailModal
+          open={!!draftTarget}
+          onClose={() => setDraftTarget(null)}
+          accountId={companyId}
+          contactId={draftTarget.id}
+          contactName={draftTarget.name}
+        />
+      )}
     </div>
   );
 }

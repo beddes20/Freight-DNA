@@ -1,0 +1,127 @@
+You are working on a large production codebase (FreightDNA). I am **nervous about unintended changes**, so you must follow these constraints exactly.
+
+### HARD CONSTRAINTS (DO NOT VIOLATE)
+
+1. DO NOT:
+   - change any runtime behavior
+   - edit any backend or frontend logic files except the ones I explicitly name
+   - touch server/routes.ts, server/storage.ts, shared/schema.ts
+   - change any tests except the ones I explicitly name
+   - add or remove dependencies
+   - run migrations or change the database schema
+   - touch any scheduler code, email/webex/graph integrations, or auth logic
+
+2. You may **only**:
+   - move specific scratch files in the repo root into a new `local/scratch/` folder, and
+   - append documentation to `replit.md`.
+
+If a requested change would violate these constraints, STOP and ask me before proceeding.
+
+---
+
+### GOAL
+
+Make the root of the repo less noisy and capture important architecture clarifications in `replit.md`, **without** changing how the app runs.
+
+This is a “get things under control” step: tiny, safe, and fully reviewable.
+
+---
+
+### STEP 1 — Create `local/scratch/` and move known scratch files
+
+1. Create a new folder at the repo root named exactly:
+
+   `local/scratch/`
+
+2. Move the following files from the repo root into `local/scratch/`:
+
+   - `admin_debug_fix.tsx`
+   - `bucket_others_fix.tsx`
+   - `bucket_section_badge_fix.tsx`
+   - `bucket_section_items_fix.tsx`
+   - `bucket_section_params_fix.tsx`
+   - `bucket_unassigned_fix.tsx`
+   - `final_fix.cjs`
+   - `header_filter_fix.tsx`
+   - `p1.tsx`
+   - `p2.tsx`
+   - `capture_sidebar.mjs`
+   - `e2e-sharing-test.js`
+
+3. BEFORE moving each file, do a quick usage scan:
+   - Search for each basename in the repo.
+   - If you find **any** import or script reference, LIST it in your explanation but STILL move the file (do not delete or edit it).
+   - The goal is to park these files somewhere obvious but out of the root; they must remain recoverable.
+
+4. Do **not** change the contents of these files. Move only.
+
+5. After moving, show me:
+   - the new `local/scratch/` tree,
+   - confirmation that the root no longer contains these files,
+   - and the results of your usage scan (even if it’s “no references found”).
+
+---
+
+### STEP 2 — Append clarifications to `replit.md` (documentation only)
+
+You may **only** edit `replit.md` in this step.
+
+Append three short sections at the bottom of `replit.md`:
+
+#### 1) Auth boundary
+
+Document clearly:
+
+- In production (`NODE_ENV === "production"`), Clerk is the **only** auth system.
+- `server/auth.ts` always calls `clerkMiddleware()` first.
+- The session + `password_reset_tokens` + bcrypt path in `server/auth.ts` is wrapped in `if (!IS_PROD)` and exists only for:
+  - dev/test login,
+  - `DEV_AUTH_BYPASS_USER_ID`,
+  - keeping the test suite running.
+- This is **not** “hybrid auth in prod”; it is dev/test infrastructure.
+
+Write this in plain English so a future engineer or AI understands they should **not delete** `server/auth.ts` thinking it’s unused legacy prod code.
+
+#### 2) Agent vs agentic layering
+
+Document clearly:
+
+- `server/agent/` is the **LLM tooling runtime**:
+  - prompts, tool dispatch, retrieval/memory, OpenAI client, etc.
+- `server/agentic/` is the **control plane / HITL / autonomy** layer:
+  - agent registry, autonomy levels, outcome tracking, approvals, AI Center routes.
+- They are **complementary layers, not “old vs new.”**
+- Many features depend on both (e.g. weekly account reviews, ValueIQ, conversation summaries, AI Center).
+
+Again, the purpose is to prevent someone from “picking a winner” and deleting the other folder.
+
+#### 3) AI Hub and “today” surfaces
+
+Document clearly:
+
+- `/ai-hub` is the canonical AI user destination.
+- `/daily-priorities`, `/admin/copilot-analytics`, `/admin/ai-engagement` are **aliases** that all render `AiHubPage` with different tabs selected.
+- `/ai/*` (like `/ai/agents`, `/ai/pods`, `/ai/admin`) is the **agentic control plane**, not where reps do their daily work.
+- `/ai-intelligence-legacy` is a defensive fallback to the older AI page; do not delete it without usage telemetry.
+- For “work my day”:
+  - `/today` and `/dashboard` are the **two real options**.
+  - The home route `/` reads the user preference and redirects to one of them.
+  - `/daily-priorities` is *not* a third “today” surface; it is an AI Hub alias.
+
+Keep these sections short (2–4 bullets each), in the same voice as the rest of `replit.md`.
+
+---
+
+### STEP 3 — Show your work, NO EXTRA CHANGES
+
+At the end, output a concise summary:
+
+1. Files moved (old path → new path).
+2. Any references you found to the moved files.
+3. The exact sections you added to `replit.md`.
+4. Confirmation that:
+   - you did **not** touch any other files,
+   - you did **not** change any runtime logic,
+   - you did **not** run migrations or change dependencies.
+
+Do **not** start any additional “cleanup” or “refactor” beyond what is explicitly described above, even if it looks obviously helpful.

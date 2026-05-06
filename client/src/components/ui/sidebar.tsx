@@ -27,6 +27,7 @@ import {
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state"
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7
+const SIDEBAR_LOCALSTORAGE_KEY = "sidebar_desktop_state"
 const SIDEBAR_WIDTH = "16rem"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
@@ -69,9 +70,18 @@ function SidebarProvider({
   const isMobile = useIsMobile()
   const [openMobile, setOpenMobile] = React.useState(false)
 
+  // Read initial state from localStorage (desktop only).
+  const getInitialOpen = () => {
+    try {
+      const stored = localStorage.getItem(SIDEBAR_LOCALSTORAGE_KEY)
+      if (stored !== null) return stored === "true"
+    } catch {}
+    return defaultOpen
+  }
+
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
-  const [_open, _setOpen] = React.useState(defaultOpen)
+  const [_open, _setOpen] = React.useState(getInitialOpen)
   const open = openProp ?? _open
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
@@ -82,7 +92,11 @@ function SidebarProvider({
         _setOpen(openState)
       }
 
-      // This sets the cookie to keep the sidebar state.
+      // Persist to localStorage for desktop sidebar state.
+      try {
+        localStorage.setItem(SIDEBAR_LOCALSTORAGE_KEY, String(openState))
+      } catch {}
+      // Also set the cookie for SSR compatibility.
       document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
     },
     [setOpenProp, open]
@@ -507,7 +521,9 @@ function SidebarMenuButton({
 }: React.ComponentProps<"button"> & {
   asChild?: boolean
   isActive?: boolean
-  tooltip?: string | React.ComponentProps<typeof TooltipContent>
+  tooltip?:
+    | string
+    | (React.ComponentProps<typeof TooltipContent> & { alwaysShow?: boolean })
 } & VariantProps<typeof sidebarMenuButtonVariants>) {
   const Comp = asChild ? Slot : "button"
   const { isMobile, state } = useSidebar()
@@ -527,11 +543,11 @@ function SidebarMenuButton({
     return button
   }
 
-  if (typeof tooltip === "string") {
-    tooltip = {
-      children: tooltip,
-    }
-  }
+  const tooltipObj =
+    typeof tooltip === "string" ? { children: tooltip } : tooltip
+  const { alwaysShow, ...tooltipRest } = tooltipObj as {
+    alwaysShow?: boolean
+  } & React.ComponentProps<typeof TooltipContent>
 
   return (
     <Tooltip>
@@ -539,8 +555,8 @@ function SidebarMenuButton({
       <TooltipContent
         side="right"
         align="center"
-        hidden={state !== "collapsed" || isMobile}
-        {...tooltip}
+        hidden={alwaysShow ? isMobile : state !== "collapsed" || isMobile}
+        {...tooltipRest}
       />
     </Tooltip>
   )

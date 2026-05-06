@@ -1,0 +1,155 @@
+I want to tighten our carrier ranking logic so we suggest the most logical carriers for the lane, not just “anyone who has ever run freight for this customer.”
+
+The analysis you gave me is correct:
+
+We have a Lane Fit score (history + geography + equipment).
+
+We have a Performance Scorecard (Tier A/B/C).
+
+We have a heavier LWQ ranker that adds outreach/intel/recency/customer history.
+
+We have a Recommendation Engine that blends fit and performance for Available Loads.
+
+The problem: in some cases the system leans too hard on customer-specific history, so carriers who have run for this customer on other lanes get suggested even when their lane fit is weak, and can outrank carriers with strong lane history.
+
+I want to re‑bias the logic so:
+
+Lane + location history and carrier profile are the primary gate and weight.
+
+Customer history is a secondary boost / tiebreaker, not a primary inclusion rule.
+
+Carriers with strong lane history and good profile can outrank “customer-only” carriers.
+
+Focus changes on:
+
+server/carrierRankingService.ts (rankCarriersForLane — LWQ, AF cockpit, procurement outreach).
+
+server/carrierRecommendationEngine.ts (recommendCarriersForLoad — Available Loads, AI tools).
+
+carrierLaneFitService.ts and carrierScorecardService.ts (fit + profile core).
+
+Goal
+
+After this change, when we suggest carriers:
+
+Lane fit + carrier profile are the core of the score:
+
+exact lane history (city pair + equipment, runs),
+
+nearby lane history (≤75 miles),
+
+region/state‑pair history,
+
+equipment match,
+
+recency (decay),
+
+realized performance on those lanes (margin, on‑time),
+
+accepted intel/profile (lane prefs, equipment capability, capacity signals, HQ proximity).
+
+Customer history is an additive bonus, only applied after lane fit is established.
+
+A carrier with strong lane history and good profile but no customer history can outrank a weak‑fit carrier with lots of customer history on other lanes.
+
+Carriers are never suggested near the top just because they’ve run for this customer before if they are a poor lane match.
+
+Required logic changes
+
+Minimum lane-fit threshold for serious suggestions
+
+Introduce a minimum lane‑fit score (e.g. 40–50, configurable) below which a carrier cannot appear in the top N suggestions, regardless of customer history, unless:
+
+there are effectively no other candidates. In that thin-lane case, they can appear as fallbacks with a clear weak‑fit reason.
+
+Lane-first blend in both engines
+
+In rankCarriersForLane and recommendCarriersForLoad, adjust the final score formula so:
+
+lane fit + profile (as defined above) contribute the majority of the score (target ≥ 60–70%).
+
+performance/tier and customer history refine ordering, not core inclusion.
+
+In the heavy LWQ ranker:
+
+apply geography/equipment/recency floors and decay before customer history boosts.
+
+Customer history as secondary boost
+
+Keep existing customer‑history boosts, but:
+
+only apply them after the lane‑fit floor is satisfied, and
+
+reduce their relative size so they cannot outweigh strong lane fit.
+
+A strong lane‑fit carrier with no customer history must be able to outrank a mediocre‑fit carrier with strong customer history.
+
+Explicit handling of “customer-only” carriers
+
+If a carrier has customer history but no meaningful lane evidence (e.g., only region‑level/general customer history, weak lane fit below the threshold):
+
+either exclude them from the top N suggestions, or
+
+show them only as fallbacks, clearly flagged as:
+
+“Customer history only on other lanes (weak lane fit)”.
+
+They should not appear above carriers with strong lane history and good profile fit.
+
+Geography priority
+
+Reconfirm the lane‑fit tiers (carrierLaneFitService.ts / ranker constants):
+
+exact lane > nearby (≤75 mi both ends) > state‑pair/region > no evidence.
+
+Ensure exact/nearby lane + correct equipment always beats pure customer history on unrelated lanes.
+
+Tests and explainability
+
+Add tests to pin new behavior
+
+Unit tests for both engines covering scenarios like:
+
+Carrier A: strong lane history + good profile, no customer history.
+
+Carrier B: weak lane fit, strong customer history.
+
+Expect: A outranks B and passes the lane‑fit threshold.
+
+“Customer-only, no lane evidence” carriers do not appear in the top N, or appear only in fallback positions with the weak‑fit reason.
+
+Minimum lane‑fit threshold is respected.
+
+Update “why this carrier” reasons
+
+Ensure the reasons array matches the new logic:
+
+lane‑fit + profile reasons appear first,
+
+customer history appears as a smaller, secondary reason,
+
+“Customer history only on other lanes (weak lane fit)” is shown when applicable.
+
+Non-goals (keep scope tight)
+
+Do not redesign the LWQ or AF UIs.
+
+Do not change “do_not_use/flagged/inactive” hard suppressions.
+
+Do not remove performance scorecard; just rebalance against lane fit.
+
+Do not change admin knobs API except adding a lane‑fit minimum threshold if needed.
+
+Deliver back
+
+Short rep-facing summary of the new behavior (lane‑first, then performance, then customer).
+
+Exact code changes (files + key functions).
+
+New tests and their results.
+
+2–3 concrete before/after examples showing:
+
+how “customer-only” carriers vs strong lane‑history carriers are now ordered, and
+
+how the “why this carrier” reasons read for each.

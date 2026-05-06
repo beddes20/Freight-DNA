@@ -1,3 +1,5 @@
+import { resilientFetch } from "./lib/httpRetry";
+
 const ZOOMINFO_API_BASE = "https://api.zoominfo.com";
 
 const TRANSPORTATION_JOB_TITLES = [
@@ -33,14 +35,15 @@ export interface ZoomInfoContact {
   linkedInUrl: string | null;
 }
 
-interface OAuthTokenResponse {
+interface AuthResponse {
+  jwt?: string;
   access_token?: string;
+  token?: string;
   expires_in?: number;
-  token_type?: string;
 }
 
 interface ZoomInfoSearchResponse {
-  data?: {
+  data?: ZoomInfoContact[] | {
     result?: Array<{
       data?: ZoomInfoContact[];
     }>;
@@ -70,32 +73,32 @@ async function getAuthToken(): Promise<string> {
     throw new Error(`ZoomInfo credentials not configured. Missing: ${missing.join(", ")}`);
   }
 
-  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-
-  const params = new URLSearchParams({ grant_type: "client_credentials" });
-
-  const res = await fetch(`${ZOOMINFO_API_BASE}/gtm/oauth/v1/token`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${credentials}`,
-    },
-    body: params.toString(),
+  // OAuth 2.0 Client Credentials flow per ZoomInfo Dev Portal.
+  const form = new URLSearchParams({
+    grant_type: "client_credentials",
+    client_id: clientId,
+    client_secret: clientSecret,
   });
+  const res = await resilientFetch("zoominfo", () => fetch(`${ZOOMINFO_API_BASE}/oauth/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  }));
 
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`ZoomInfo auth failed (${res.status}): ${text}`);
   }
 
-  const data = (await res.json()) as OAuthTokenResponse;
-  const token = data.access_token;
+  const data = (await res.json()) as AuthResponse;
+  const token = data.access_token || data.jwt || data.token;
 
   if (!token) {
-    throw new Error("ZoomInfo auth returned no access_token");
+    throw new Error("ZoomInfo auth returned no token");
   }
 
   cachedToken = token;
+  // Use expires_in if provided, otherwise default to 1 hour. Refresh 60s early.
   const expiresIn = typeof data.expires_in === "number" && data.expires_in > 0
     ? data.expires_in
     : 3600;
@@ -105,13 +108,13 @@ async function getAuthToken(): Promise<string> {
 
 export async function searchZoomInfoContacts(
   companyName: string,
-  limit = 20
+  limit = 25
 ): Promise<ZoomInfoContact[]> {
   const token = await getAuthToken();
 
   const body = {
     matchCompanyInput: [{ companyName }],
-    jobTitleHierarchyInput: TRANSPORTATION_JOB_TITLES.map((t) => ({ jobTitle: t })),
+    jobTitleInput: TRANSPORTATION_JOB_TITLES.map((t) => ({ jobTitle: t })),
     outputFields: [
       "id",
       "firstName",
@@ -131,32 +134,43 @@ export async function searchZoomInfoContacts(
     sortOrder: "desc",
   };
 
-  const res = await fetch(`${ZOOMINFO_API_BASE}/search/contact`, {
+  const res = await resilientFetch("zoominfo", () => fetch(`${ZOOMINFO_API_BASE}/search/contact`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
     },
     body: JSON.stringify(body),
-  });
+  }));
 
   if (!res.ok) {
     const text = await res.text();
+    // Clear cached token on auth errors so the next call re-authenticates
+    if (res.status === 401 || res.status === 403) {
+      cachedToken = null;
+      tokenExpiry = 0;
+    }
     throw new Error(`ZoomInfo contact search failed (${res.status}): ${text}`);
   }
 
   const data = (await res.json()) as ZoomInfoSearchResponse;
 
-  const contacts: ZoomInfoContact[] =
-    data?.data?.result?.[0]?.data ||
-    (data?.data?.outputFields as unknown as ZoomInfoContact[]) ||
-    [];
+  // Handle both flat array and nested result structures
+  let contacts: ZoomInfoContact[] = [];
+  if (Array.isArray(data?.data)) {
+    contacts = data.data as ZoomInfoContact[];
+  } else if (data?.data && !Array.isArray(data.data)) {
+    const nested = data.data as { result?: Array<{ data?: ZoomInfoContact[] }>; outputFields?: ZoomInfoContact[] };
+    contacts = nested.result?.[0]?.data || nested.outputFields || [];
+  }
 
   return contacts;
 }
 
 export async function testZoomInfoConnection(): Promise<boolean> {
   try {
+    cachedToken = null;
+    tokenExpiry = 0;
     await getAuthToken();
     return true;
   } catch {

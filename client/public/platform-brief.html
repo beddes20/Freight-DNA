@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Freight DNA — Platform Brief</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    background: #fff;
+    color: #111;
+    font-size: 11px;
+    line-height: 1.5;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .page {
+    width: 8.5in;
+    min-height: 11in;
+    margin: 0 auto;
+    padding: 0.45in 0.5in 0.4in;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    border-bottom: 2.5px solid #111;
+    padding-bottom: 10px;
+  }
+  .brand { display: flex; flex-direction: column; gap: 1px; }
+  .brand-name {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: #111;
+  }
+  .brand-name span { color: #d97706; }
+  .brand-tag {
+    font-size: 9.5px;
+    font-weight: 500;
+    color: #6b7280;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .header-right {
+    text-align: right;
+    font-size: 9.5px;
+    color: #6b7280;
+    line-height: 1.7;
+  }
+  .header-right strong { color: #111; font-weight: 700; font-size: 10.5px; }
+
+  /* ── Section titles ── */
+  .section-title {
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #6b7280;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #e5e7eb;
+  }
+
+  /* ── New Features Band ── */
+  .new-features {
+    background: #111;
+    border-radius: 8px;
+    padding: 14px 16px;
+    color: #fff;
+  }
+  .new-features .section-title {
+    color: rgba(255,255,255,0.45);
+    margin-bottom: 10px;
+  }
+  .new-features .section-title::after { background: rgba(255,255,255,0.12); }
+
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .feature-card {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    padding: 10px 11px;
+  }
+  .feature-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #fbbf24;
+    margin-bottom: 5px;
+    letter-spacing: -0.1px;
+  }
+  .feature-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #fbbf24;
+    flex-shrink: 0;
+  }
+  .feature-desc {
+    font-size: 9.5px;
+    color: rgba(255,255,255,0.65);
+    line-height: 1.55;
+  }
+  .new-badge {
+    display: inline-block;
+    background: #d97706;
+    color: #fff;
+    font-size: 7px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 1px 5px;
+    border-radius: 3px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+
+  /* ── Underutilization grid ── */
+  .under-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 9px;
+  }
+  .under-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    padding: 10px 11px;
+    background: #fafafa;
+  }
+  .under-card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    margin-bottom: 5px;
+  }
+  .under-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    background: #fef3c7;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 11px;
+  }
+  .under-title {
+    font-size: 10px;
+    font-weight: 700;
+    color: #111;
+    line-height: 1.3;
+  }
+  .under-why {
+    font-size: 8.5px;
+    font-weight: 600;
+    color: #d97706;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 3px;
+  }
+  .under-body {
+    font-size: 9.5px;
+    color: #4b5563;
+    line-height: 1.5;
+  }
+  .under-action {
+    margin-top: 5px;
+    font-size: 9px;
+    font-weight: 600;
+    color: #111;
+    background: #f3f4f6;
+    border-radius: 3px;
+    padding: 3px 6px;
+    display: inline-block;
+  }
+
+  /* ── Bottom bar ── */
+  .bottom-bar {
+    border-top: 1px solid #e5e7eb;
+    padding-top: 9px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .bottom-mantra {
+    font-size: 9px;
+    font-style: italic;
+    color: #9ca3af;
+  }
+  .bottom-mantra strong { color: #d97706; font-style: normal; font-weight: 700; }
+  .bottom-contact {
+    font-size: 9px;
+    color: #9ca3af;
+  }
+
+  @media print {
+    body { background: #fff; }
+    .page { width: 100%; min-height: auto; padding: 0.4in 0.45in; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="brand">
+      <div class="brand-name">Freight<span>DNA</span></div>
+      <div class="brand-tag">Platform Intelligence Brief &mdash; Internal Use</div>
+    </div>
+    <div class="header-right">
+      <strong>Value Truck Transportation Brokerage</strong><br>
+      Q2 2026 &nbsp;|&nbsp; freight-dna.com<br>
+      Confidential &mdash; Sales Team Distribution
+    </div>
+  </div>
+
+  <!-- NEW FEATURES -->
+  <div class="new-features">
+    <div class="section-title">Recently Released &mdash; Use These Now</div>
+    <div class="feature-grid">
+
+      <div class="feature-card">
+        <div class="feature-label">
+          <div class="feature-dot"></div>
+          Carrier Lane Search <span class="new-badge">New</span>
+        </div>
+        <div class="feature-desc">Pick an origin, destination, and radius &mdash; instantly see every carrier that has run that corridor from your own freight history. Loads hauled, market share %, avg carrier pay, last ship date. Grouped by mode (Van, Reefer, Flatbed, LTL, Drayage, IMDL). Build a call list in under 60 seconds when freight drops.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-label">
+          <div class="feature-dot"></div>
+          RFP Lane Search <span class="new-badge">New</span>
+        </div>
+        <div class="feature-desc">Search across every uploaded RFP in the platform by corridor. Instantly see which customers have freight on specific lanes, grouped by mode. Know which accounts to call before an RFP hits your inbox &mdash; proactive, not reactive.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-label">
+          <div class="feature-dot"></div>
+          DNA Guru Lane Intel <span class="new-badge">New</span>
+        </div>
+        <div class="feature-desc">Ask DNA Guru in plain English: <em>"What carriers run TX to CA for dry vans?"</em> or <em>"How much are we paying CA-TX?"</em> &mdash; get a live answer from your actual freight data. No navigation, no filters. Just ask.</div>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-label">
+          <div class="feature-dot"></div>
+          Procurement Prompt <span class="new-badge">New</span>
+        </div>
+        <div class="feature-desc">When you save a new award that has high-volume lanes (50+ loads/year), the platform now immediately asks if you want to create procurement tasks for your team. One click to launch the sourcing workspace &mdash; no award gets dropped after the win.</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- UNDERUTILIZATION -->
+  <div>
+    <div class="section-title">Where We're Leaving Value on the Table</div>
+    <div class="under-grid">
+
+      <div class="under-card">
+        <div class="under-card-header">
+          <div class="under-icon">🔗</div>
+          <div class="under-title">Contact Lane Attributions</div>
+        </div>
+        <div class="under-why">Highest Impact Gap</div>
+        <div class="under-body">If contacts aren't tied to freight corridors, the Relationship Freight portlets show nothing useful. The 1st/2nd/3rd Base system only generates signal when lanes are actually assigned to contacts.</div>
+        <div class="under-action">→ Assign lanes to your top 10 contacts this week</div>
+      </div>
+
+      <div class="under-card">
+        <div class="under-card-header">
+          <div class="under-icon">📞</div>
+          <div class="under-title">Pre-Call Planner</div>
+        </div>
+        <div class="under-why">60 Seconds That Change the Call</div>
+        <div class="under-body">Synthesizes AI health narrative, last 5 touchpoint notes, lane gap talking points, and relationship intel before you dial. Most reps skip it. Those who use it have better calls.</div>
+        <div class="under-action">→ Open it before every new prospect call</div>
+      </div>
+
+      <div class="under-card">
+        <div class="under-card-header">
+          <div class="under-icon">🤖</div>
+          <div class="under-title">DNA Guru Actions</div>
+        </div>
+        <div class="under-why">It's More Than Search</div>
+        <div class="under-body">DNA Guru can log touchpoints and create tasks through chat &mdash; not just answer questions. Say "Log a call with Jane at Acme, she confirmed the Q3 bid" and it creates the touchpoint with one confirm tap.</div>
+        <div class="under-action">→ Try logging your next call through Guru</div>
+      </div>
+
+      <div class="under-card">
+        <div class="under-card-header">
+          <div class="under-icon">📈</div>
+          <div class="under-title">Relationship Base Advancement</div>
+        </div>
+        <div class="under-why">The "Down, Not Across" Engine</div>
+        <div class="under-body">If contacts are sitting at 1st Base indefinitely, there's no progression data to coach from. Every meaningful conversation is an opportunity to advance a contact. The history timeline tracks every move.</div>
+        <div class="under-action">→ Review base levels on your top 5 accounts</div>
+      </div>
+
+      <div class="under-card">
+        <div class="under-card-header">
+          <div class="under-icon">💬</div>
+          <div class="under-title">Meaningful Conversation Flag</div>
+        </div>
+        <div class="under-why">Data Quality Issue</div>
+        <div class="under-body">Without checking "meaningful conversation" on real touchpoints, the platform can't distinguish 10 voicemails from 10 real conversations. Cold contact alerts and health scores depend on this flag being accurate.</div>
+        <div class="under-action">→ Check the box on real conversations, not every log</div>
+      </div>
+
+      <div class="under-card">
+        <div class="under-card-header">
+          <div class="under-icon">💰</div>
+          <div class="under-title">Wallet Share in Conversations</div>
+        </div>
+        <div class="under-why">The Number That Closes Deals</div>
+        <div class="under-body">The platform calculates wallet share from financial uploads &mdash; but are reps referencing it? Knowing an account does $2M in freight and you're touching $300K is a conversation starter and a coaching lever.</div>
+        <div class="under-action">→ Pull wallet share before every account review</div>
+      </div>
+
+      <div class="under-card">
+        <div class="under-card-header">
+          <div class="under-icon">🎯</div>
+          <div class="under-title">Goals &amp; 1:1 Sessions</div>
+        </div>
+        <div class="under-why">Management Layer</div>
+        <div class="under-body">Are all NAMs setting live goals for all their AMs? Are 1:1 sessions being closed with summaries and morale scores? Auto-tracking only works when targets exist and sessions are completed properly.</div>
+        <div class="under-action">→ Audit open goals and close any pending sessions</div>
+      </div>
+
+      <div class="under-card">
+        <div class="under-card-header">
+          <div class="under-icon">📋</div>
+          <div class="under-title">Account Intelligence Fields</div>
+        </div>
+        <div class="under-why">Institutional Knowledge at Risk</div>
+        <div class="under-body">Portal credentials, tendering processes, account quirks, and operating hours live in the platform &mdash; but only if someone fills them in. Empty fields mean every rep re-discovers the same information from scratch.</div>
+        <div class="under-action">→ Fill in your top 20 accounts this quarter</div>
+      </div>
+
+      <div class="under-card">
+        <div class="under-card-header">
+          <div class="under-icon">📊</div>
+          <div class="under-title">Daily Digest &amp; Trends Feed</div>
+        </div>
+        <div class="under-why">Habits Drive the ROI</div>
+        <div class="under-body">The daily digest delivers AI-prioritized tasks, cold contacts, and RFP deadlines each morning. The Callouts &amp; Trends feed is only valuable if the team posts to it. Both require consistent habits to deliver value.</div>
+        <div class="under-action">→ One post to Trends per week, per rep minimum</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Bottom bar -->
+  <div class="bottom-bar">
+    <div class="bottom-mantra">Platform philosophy: <strong>"Down, not across"</strong> &mdash; unlock wallet share in accounts you already own before chasing new logos.</div>
+    <div class="bottom-contact">Questions: info@freight-dna.com &nbsp;&bull;&nbsp; freight-dna.com</div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,121 @@
+Before making any changes, read replit.md and follow its development guardrails.
+
+I reviewed the current state of email and agree that we should NOT jump into Carrier Hub enrichment yet.
+
+Current state as I understand it:
+- outlookService.ts sends via Microsoft Graph but currently returns no message ID, so we are not capturing a reliable outbound thread/message anchor on send
+- carrier_outreach_logs currently stores outbound-oriented fields like sentAt, deliveryStatus, recipients
+- carrier_outreach_logs is missing or historically lacked the broader inbound/conversation metadata needed for a solid two-way email foundation
+- Task #182 (Inbound Email Reply Tracking) is already implemented in a branch / task context, but not yet fully merged/hardened
+- Task #182 adds core inbound plumbing (subscription service, webhook endpoint, schema additions), but the production-hardening work still needs to be done
+- current tests mostly cover outbound send scenarios, not inbound reply matching / edge cases
+
+I want this task to focus ONLY on hardening and finishing the current two-way email foundation around Task #182 so it is safe to build future features on top of it.
+
+Do NOT start Carrier Hub enrichment yet.
+Do NOT start AI lane extraction yet.
+
+Goal:
+Take the existing inbound reply tracking work and make the full send/receive email process production-solid, test-covered, and auditable.
+
+What I want done:
+
+1. Validate and finish the outbound thread/message anchor story
+- Investigate whether Microsoft Graph send can return or be followed by a retrievable message identifier/thread/conversation id
+- If the current send path cannot directly return a usable anchor, implement the best reliable follow-up retrieval/linking approach available within the current architecture
+- We need the cleanest possible way to associate outbound sends with future inbound replies
+
+2. Harden the data model for two-way email
+Ensure the current schema cleanly supports:
+- outbound and inbound direction
+- provider message id
+- conversation/thread id where available
+- related outreach log / lane / carrier linkage when known
+- sentAt / receivedAt
+- replyReceivedAt if relevant to outreach workflow
+- replySnippet / body preview if relevant
+- raw source metadata or payload reference for auditability
+- delivery / processing / matching status
+Do this with minimal, coherent schema design — not scattered partial fields if there is a better clean structure.
+
+3. Harden inbound reply processing
+Take the existing inbound webhook/subscription flow from Task #182 and make sure it safely handles:
+- duplicate webhook events
+- duplicate provider message delivery
+- unmatched sender addresses
+- ambiguous sender-to-carrier matches
+- malformed payloads
+- replies that do not tie cleanly to a lane
+- replies that do tie to an existing lane outreach thread
+- replies from alternate contacts at the same carrier
+Do not silently drop important inbound messages.
+
+4. Centralize carrier matching logic
+Implement or refactor a clear helper/service for inbound email -> carrier/contact matching.
+I want explicit handling for:
+- exact email match
+- known alternate contact at same carrier
+- ambiguous match
+- no match
+Store enough status/confidence information so we can audit what happened.
+
+5. Preserve lane linkage without forcing it
+If a reply belongs to a lane outreach thread, keep that lane association.
+If an inbound message does not have a reliable lane association, store it safely without inventing one.
+
+6. Improve UI visibility enough for operational trust
+I do not need a full inbox rebuild here.
+But I do need enough visibility that a user can see:
+- outbound email was sent
+- inbound reply was received
+- whether the system matched it to a carrier / lane / outreach thread
+- whether there were failures or unmatched states
+If there is already a History tab or outreach history UI, extend that cleanly rather than creating a parallel UI unless necessary.
+
+7. Add comprehensive tests
+Add/update tests for at least:
+- outbound message persistence with usable identifiers where possible
+- inbound reply persistence
+- reply matched to existing outreach thread
+- reply matched to correct carrier
+- reply from alternate known contact still matches same carrier
+- unmatched sender stored safely
+- ambiguous sender handled safely
+- duplicate webhook event does not duplicate records
+- malformed payload handled safely
+- lane-linked reply retains lane association
+- non-lane inbound message does not get fake lane linkage
+- failure states / processing states are visible and auditable
+
+Important design guidance:
+- Keep this scoped to hardening the current two-way email foundation
+- Reuse Task #182 work where appropriate, do not re-architect from scratch unless clearly necessary
+- Keep schema and code changes coherent and minimal
+- Prefer explicit auditability over hidden magic
+- Preserve existing outbound procurement email workflows
+- Preserve existing lane outreach history behavior, while making it more trustworthy for two-way communication
+
+Deliverables:
+Return:
+1. short summary of the final two-way email architecture
+2. exact files changed
+3. schema changes made
+4. how outbound sends are anchored for future reply matching
+5. how inbound replies are processed
+6. how carrier matching works, including confidence/fallback behavior
+7. how lane association works
+8. how duplicates are prevented
+9. what UI visibility was added/updated
+10. tests added/updated
+11. readiness assessment for phase 2 (Carrier Hub enrichment):
+   - ready now
+   - ready after one small follow-up
+   - not ready yet
+
+Success criteria:
+- outbound and inbound email records are auditable
+- replies are reliably tied back when possible
+- unknown/ambiguous cases are preserved safely, not dropped
+- duplicate inbound events do not create duplicate records
+- operational users can trust what they see in the UI/history
+- the system is actually ready for future carrier intelligence enrichment

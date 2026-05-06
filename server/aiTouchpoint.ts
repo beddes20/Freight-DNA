@@ -71,7 +71,16 @@ Respond with valid JSON only (no markdown, no explanation):
       keyIntel: typeof parsed.keyIntel === "string" ? parsed.keyIntel : null,
       suggestMeaningful: !!parsed.suggestMeaningful,
     };
-  } catch {
+  } catch (err) {
+    // Log full stack so transient OpenAI / JSON-parse failures are visible
+    // instead of silently degrading to EMPTY. Callers still get EMPTY.
+    console.error(
+      "[analyzeTouchpointNote] failed",
+      contactName ? `contact=${contactName}` : "",
+      companyName ? `company=${companyName}` : "",
+      "—",
+      err instanceof Error ? err.stack : err,
+    );
     return EMPTY;
   }
 }

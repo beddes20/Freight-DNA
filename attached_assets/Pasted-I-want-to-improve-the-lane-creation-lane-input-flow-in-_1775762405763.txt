@@ -1,0 +1,282 @@
+I want to improve the lane creation / lane input flow in the Value Truck app so small human errors do NOT break the process.
+
+Objective
+
+Make lane entry in the Lane Work Queue more forgiving and intelligent.
+
+Today, if a user types something slightly wrong like:
+- pheonix, az instead of phoenix, az
+- extra spaces
+- weird comma spacing
+- inconsistent capitalization
+- shorthand / slight formatting differences
+
+the system can fail to match, fail to build the lane correctly, or create unnecessary friction.
+
+I want the app to be smarter about this.
+
+This is not a full geocoding project and not a greenfield rewrite.
+This is a practical typo-tolerant lane input improvement for the existing workflow.
+
+Product intent
+
+The system should:
+- reduce simple human error
+- preserve speed
+- avoid blocking the rep on obvious typos
+- standardize lane location input
+- still keep the user in control when confidence is low
+
+The ideal behavior is:
+- obvious formatting issues get auto-normalized
+- obvious typo corrections get suggested or auto-corrected when confidence is very high
+- ambiguous inputs trigger a lightweight confirmation step
+- clearly invalid inputs still get flagged
+
+Core principle
+
+We should not rely on users to type city/state perfectly every time.
+
+The system should help with:
+- normalization
+- typo tolerance
+- confidence-based matching
+- confirmation when needed
+
+But it should not silently guess when confidence is low.
+
+What I want implemented
+
+Add a lane location normalization + fuzzy matching layer anywhere users create/build lanes in the Lane Work Queue flow.
+
+Focus on fields like:
+- origin city/state
+- destination city/state
+- lane string parsing if users paste full lanes
+
+Examples we should handle well:
+- pheonix, az → Phoenix, AZ
+- phoenix,az → Phoenix, AZ
+- PHOENIX ,  az → Phoenix, AZ
+- st louis, mo → St. Louis, MO or the app’s standard form
+- kansas city ks → Kansas City, KS
+- salt lake city ut → Salt Lake City, UT
+
+Recommended solution shape
+
+Please implement this as a 3-step input pipeline:
+
+1) Normalize obvious formatting issues
+Before any fuzzy logic, normalize:
+- trim leading/trailing whitespace
+- collapse repeated spaces
+- normalize comma spacing
+- normalize capitalization
+- standardize state abbreviations if that logic already exists
+- standardize common lane separators if applicable
+
+This should be deterministic and safe.
+
+2) Fuzzy match against known city/state reference data
+Then compare the normalized user input against a trusted location reference set.
+
+Use whatever source is already available or easiest to add cleanly, such as:
+- existing known lane/city data in the app
+- a city/state reference dataset
+- a lightweight US city/state list
+- existing recurring lane locations as a first-pass reference
+
+The goal is typo tolerance for city/state names, not street-level validation.
+
+Support:
+- transposed letters (pheonix → phoenix)
+- missing punctuation
+- minor spelling mistakes
+- missing comma formatting
+
+3) Confidence-based outcome
+Based on match confidence:
+
+High confidence
+- auto-correct / auto-standardize silently or with subtle inline confirmation
+
+Example:
+- user enters pheonix, az
+- field becomes Phoenix, AZ
+- small helper text: Corrected from “pheonix, az”
+
+Medium confidence
+- show a lightweight suggestion/confirmation:
+  - Did you mean Phoenix, AZ?
+- user can accept or keep original
+
+Low confidence / ambiguous
+- do not guess
+- show validation:
+  - We couldn’t confidently match this city/state
+- prompt the user to correct or choose from suggestions
+
+UX behavior I want
+
+Option A — inline suggestion dropdown
+As user types:
+- show top likely city/state matches
+- typo-tolerant
+- keyboard selectable
+- standardized display format
+
+Option B — post-entry confirmation
+After blur / submit:
+- if the input is close to a known city/state but not exact, show:
+  - Use Phoenix, AZ?
+  - Accept / Edit
+
+You can choose the simpler/better fit for the current UI, but I want some combination of:
+- auto-normalization
+- typo-tolerant suggestions
+- confirmation when ambiguous
+
+Specific behavior rules
+
+Auto-fix without asking when:
+- only formatting is wrong
+- typo confidence is extremely high
+- there is one clear canonical city/state result
+
+Examples:
+- phoenix,az
+- phoenix , az
+- pheonix, az if confidence is very high
+
+Ask for confirmation when:
+- multiple plausible matches exist
+- input is close but not definitive
+- city is common and could map to multiple states
+- state is missing or malformed
+
+Block / error when:
+- no plausible city/state can be found
+- input is too incomplete
+- result would be unsafe to guess
+
+Data/model expectations
+
+I do not want full AI hallucination here.
+I want a bounded, production-safe matcher.
+
+Please use:
+- deterministic normalization
+- fuzzy matching against a known reference list
+- confidence thresholds
+- clear UI states
+
+If you use AI/LLM anywhere, it should be optional and low-risk — not the primary matching engine for core location parsing.
+
+Suggested implementation helpers
+
+Consider creating or updating helpers like:
+- normalizeLaneLocationInput(...)
+- matchLaneLocationCandidate(...)
+- getLaneLocationSuggestions(...)
+- resolveLaneLocationWithConfidence(...)
+- formatCanonicalCityState(...)
+
+Potential return shape:
+- rawInput
+- normalizedInput
+- matchedCity
+- matchedState
+- canonicalLabel
+- confidence
+- status = exact / corrected / suggested / ambiguous / invalid
+
+Suggested confidence model
+
+You can implement a simple confidence model like:
+- exact = normalized exact match
+- high = minor typo but one obvious result
+- medium = likely match but should confirm
+- low = ambiguous / not safe
+
+For example:
+- exact/format-only issues → auto-accept
+- edit distance 1 with strong unique match → auto-correct
+- multiple candidates with similar score → ask user
+- weak fuzzy match → reject and prompt correction
+
+Scope boundaries
+
+Do this:
+- city/state normalization
+- typo tolerance
+- canonical formatting
+- lightweight inline UX improvements
+- improved lane creation reliability
+
+Do not do right now:
+- full address validation
+- geocoding every lane
+- heavy external API dependency unless clearly needed
+- magical silent guesses with low confidence
+
+Important product rules
+
+- keep speed high
+- keep user trust high
+- never silently guess on low confidence
+- make the corrected result visible when changed
+- standardize output format for downstream matching/ranking
+- reuse this normalization logic wherever lane O/D strings matter, if practical
+
+Edge cases to handle
+
+Please think through:
+- typo in city, valid state
+- correct city, typo in state abbreviation
+- missing comma
+- extra spaces
+- mixed case
+- two cities with similar spelling
+- cities that exist in multiple states
+- st louis vs saint louis
+- ft worth vs fort worth
+- invalid city/state combinations
+- pasted full lane strings with arrow separators
+
+Tests required
+
+Add/update tests for at least:
+
+Normalization
+- PHOENIX , az → Phoenix, AZ
+- phoenix,az → Phoenix, AZ
+
+Typo tolerance
+- pheonix, az suggests or resolves to Phoenix, AZ
+- minor typo in state still resolves correctly if confidence is high
+
+Confirmation behavior
+- ambiguous input does not auto-correct silently
+- medium-confidence match requires confirmation
+
+Failure behavior
+- invalid or unrecognized input shows validation
+- system does not invent a city when confidence is low
+
+Reuse / consistency
+- canonical output is consistent across lane creation and downstream matching logic where used
+
+Deliverables
+
+Please return:
+1. summary of the lane input improvement
+2. exact files changed
+3. what reference data source you used for city/state matching
+4. confidence rules used for auto-correct vs suggestion vs rejection
+5. examples of before/after behavior for at least 5 lane inputs
+
+Important:
+- prioritize practical typo tolerance
+- keep this production-safe
+- make simple human mistakes still work
+- do not rely on users typing city/state perfectly every time

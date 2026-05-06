@@ -1,0 +1,327 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+Context:
+We have completed Email Intelligence Layer v1.
+
+Already implemented:
+- email_messages table
+- email_signals table
+- outbound email hooks in laneCarrierOutreach.ts
+- inbound reply hooks
+- email intelligence scheduler using node-cron
+- providerMessageId-based inbound idempotency
+- extraction pipeline with quote/signature stripping
+- structured intents/signals for customer/carrier email contexts
+- tests are passing and app runs cleanly
+
+Goal of this task:
+Build the **first real consumers** of email intelligence signals so email-derived information affects the operating system in useful, explainable, and safe ways.
+
+This is not a generic analytics feature.
+This is about turning email signals into:
+- score inputs,
+- actionable NBAs,
+- carrier profile suggestions,
+- and win/loss evidence.
+
+Do NOT redesign the whole scoring or NBA framework.
+Integrate incrementally and transparently with what already exists.
+
+--------------------------------------------------
+1. SCOPE
+--------------------------------------------------
+
+Implement v1 consumers for these signal categories:
+
+Customer-side:
+- meaningful_touchpoint
+- pricing_request
+- objection
+- service_complaint
+- new_opportunity
+- stalled_thread
+- urgency_signal
+- closed_won_indicator
+- closed_lost_indicator
+
+Carrier-side:
+- lane_offer
+- capacity_available
+- capacity_unavailable
+- new_lane_preference
+- new_equipment_or_region
+- price_pushback
+- service_issue
+- soft_commitment
+- hard_commitment
+
+We want these signals to affect:
+1) account scoring inputs / explanation
+2) account/customer NBAs
+3) carrier hub enrichment suggestions
+4) carrier NBAs
+5) win/loss evidence capture
+
+--------------------------------------------------
+2. ACCOUNT SCORE CONSUMERS
+--------------------------------------------------
+
+Use email signals to strengthen account scoring.
+
+Do NOT rewrite the full score model.
+Instead, add email-derived inputs in a clean, bounded way.
+
+Desired account-score behavior:
+- meaningful_touchpoint:
+  - counts as a qualifying customer touchpoint where appropriate
+  - should improve touchpoint health if recent and legitimate
+- stalled_thread:
+  - should create a negative signal / penalty or at least visible warning input
+- service_complaint:
+  - should negatively affect account health / risk
+- urgency_signal:
+  - should not permanently inflate score, but should create visible urgency metadata
+- new_opportunity:
+  - should positively affect momentum / opportunity readiness
+- closed_won_indicator / closed_lost_indicator:
+  - should feed outcome/history context, not directly spike score in a naive way
+
+Implementation expectations:
+- Add a helper/service that summarizes recent email signals for an account:
+  - e.g. getRecentAccountEmailSignalSummary(accountId, windowDays)
+- Update account scoring so it can consume that summary safely.
+- Update score explanation/breakdown objects to show:
+  - recent meaningful email touchpoints
+  - stalled thread warnings
+  - service complaint flags
+  - opportunity signals
+
+Do not let one noisy email tank or inflate the score unrealistically.
+
+--------------------------------------------------
+3. ACCOUNT / CUSTOMER NBA CONSUMERS
+--------------------------------------------------
+
+Use email signals to create or strengthen account-side NBAs.
+
+Examples:
+- pricing_request ⇒ NBA: respond with pricing / follow up on quote
+- objection ⇒ NBA: address objection / follow-up task
+- service_complaint ⇒ NBA: service recovery / escalation
+- stalled_thread ⇒ NBA: re-engage thread
+- urgency_signal ⇒ NBA: prioritize outreach now
+- new_opportunity ⇒ NBA: qualify and pursue expansion opportunity
+
+Requirements:
+- Reuse existing NBA/task system where possible.
+- Add deterministic mappings from email intents to:
+  - nbaType
+  - urgency
+  - outcomeType (Protect / Grow / Execute, etc.)
+- Dedupe:
+  - do not create repeated NBAs for the same thread/intent every scheduler run
+- Add explanation payload:
+  - what email signal triggered the NBA
+  - message/thread context
+  - why this action is recommended
+
+If there is already account-market-NBA logic, coexist cleanly with it.
+These are email-driven NBAs, not market-driven NBAs.
+
+--------------------------------------------------
+4. CARRIER HUB ENRICHMENT CONSUMERS
+--------------------------------------------------
+
+Use carrier-side email signals to create **staged carrier intelligence suggestions**.
+
+Important:
+Do NOT directly overwrite core carrier profile fields from email.
+Instead, create or reuse a staging/suggestion table.
+
+Signals that should feed this:
+- lane_offer
+- capacity_available
+- new_lane_preference
+- new_equipment_or_region
+- capacity_unavailable
+- price_pushback
+- service_issue
+- soft_commitment / hard_commitment
+
+Desired behavior:
+- If a carrier email indicates a new lane preference or equipment capability:
+  - create a structured suggestion linked to:
+    - carrierId
+    - source emailMessageId / threadId
+    - extracted lane/equipment/region payload
+    - confidence
+    - status: pending / accepted / rejected / auto_accepted
+- If a carrier says they do NOT cover a region or are unavailable:
+  - create a suppression-style suggestion or negative preference signal
+- If they make a soft/hard commitment:
+  - this should be queryable for procurement and carrier NBAs
+
+If a carrier lane-intelligence staging table already exists, reuse it.
+If not, add a clean one.
+
+--------------------------------------------------
+5. CARRIER NBA CONSUMERS
+--------------------------------------------------
+
+Use carrier-side email signals to create or update carrier NBAs.
+
+Examples:
+- capacity_available in a hot region ⇒ stronger carrier-market outreach / follow-up NBA
+- lane_offer ⇒ procurement follow-up NBA if not acted on
+- price_pushback ⇒ negotiate / review pricing NBA
+- service_issue ⇒ review / caution / carrier management NBA
+- hard_commitment ⇒ active follow-up or assignment-ready signal
+- capacity_unavailable ⇒ suppress or down-rank for short-term outreach
+
+Requirements:
+- Reuse the carrier-side NBA system from the Market Signal work if possible.
+- Keep email-driven carrier NBAs distinct enough from market-driven ones to explain source.
+- Add explanation payload:
+  - source email signal,
+  - carrier context,
+  - any linked lane/region/equipment.
+- Dedupe repeated signals from the same thread.
+
+--------------------------------------------------
+6. WIN / LOSS EVIDENCE CAPTURE
+--------------------------------------------------
+
+We want the system to learn what is working.
+
+In this task, do not build dashboards yet.
+But do build the data hooks so wins/losses can be analyzed later.
+
+Implement:
+- When a thread or signal is associated to:
+  - a CRM opportunity,
+  - a load,
+  - or a lane outcome,
+  capture that relationship in a queryable way.
+
+Desired examples:
+- closed_won_indicator email on an opportunity thread ⇒ stored as evidence for that win
+- objection + later closed_won ⇒ lets us analyze how objections were overcome
+- pricing_request + hard_commitment + won load ⇒ evidence chain
+- service_complaint + lost/churn ⇒ evidence chain
+
+At minimum:
+- Make it easy to query all email signals tied to a won/lost opportunity/load.
+- Ensure the linked entity IDs are populated where possible.
+
+If a simple join table is needed, add it.
+If existing linked fields are enough, use them.
+
+--------------------------------------------------
+7. EXPLANATION & AUDITABILITY
+--------------------------------------------------
+
+Everything produced from email signals must be explainable.
+
+For every score input / NBA / carrier suggestion:
+- store a reference to:
+  - emailMessageId
+  - threadId
+  - signal id / intent
+- include human-readable explanation fields like:
+  - "Customer asked for pricing in thread X on 2026-04-10"
+  - "Carrier declared AZ->PNW dry van preference in reply on 2026-04-10"
+  - "Service complaint detected from customer reply; follow-up recommended"
+
+Do not create black-box mutations.
+
+--------------------------------------------------
+8. DEDUPE / SAFETY RULES
+--------------------------------------------------
+
+Implement practical guardrails:
+
+- Account NBAs:
+  - at most one active NBA per (threadId, intent family, accountId)
+- Carrier NBAs:
+  - at most one active NBA per (threadId, intent family, carrierId)
+- Carrier profile suggestions:
+  - dedupe same lane/equipment/region suggestion from the same thread
+- Score inputs:
+  - dedupe same-day repeated equivalent signals where appropriate
+
+Signals should be:
+- durable enough to be useful,
+- conservative enough to avoid spam/noise.
+
+--------------------------------------------------
+9. ROUTES / ACCESSORS
+--------------------------------------------------
+
+Add the minimum needed internal/API accessors for debugging and future UI.
+
+Examples:
+- GET /internal/accounts/:accountId/email-signals
+- GET /internal/carriers/:carrierId/email-signals
+- GET /internal/email-intelligence/thread/:threadId
+- GET /internal/carriers/:carrierId/email-suggestions
+
+Apply the same INTERNAL_SERVICE_TOKEN pattern where appropriate.
+
+--------------------------------------------------
+10. TESTS
+--------------------------------------------------
+
+Add tests for at least:
+
+A. Account score consumers
+- meaningful_touchpoint email improves touchpoint-related summary
+- stalled_thread creates negative summary input
+- service_complaint is captured and visible in breakdown
+
+B. Account/customer NBA consumers
+- pricing_request creates a follow-up NBA
+- objection creates an objection-handling NBA
+- duplicate scheduler runs do not create duplicate NBAs for same thread/intent
+
+C. Carrier enrichment consumers
+- lane_offer / new_lane_preference creates staged carrier suggestion
+- capacity_unavailable creates negative/suppression-style suggestion
+- duplicate processing does not create duplicate staged suggestions
+
+D. Carrier NBA consumers
+- price_pushback creates a pricing review NBA
+- hard_commitment creates follow-up/assignment-ready signal or NBA
+- duplicate signals from same thread are deduped
+
+E. Win/loss evidence
+- closed_won_indicator linked to opportunity/load is queryable later
+- objection + later win can both be retrieved from related email signals
+
+F. Integration safety
+- if no linked account/carrier exists, signals fail gracefully
+- signal consumption does not crash the scheduler
+- existing market-signal-driven NBAs still work
+
+--------------------------------------------------
+11. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. short summary of changes
+2. exact files changed
+3. new/updated schemas or staging tables
+4. how account score consumes email signals
+5. what email-driven NBAs are created on customer side
+6. what carrier enrichment suggestions are created
+7. what email-driven carrier NBAs are created
+8. how win/loss evidence is linked
+9. dedupe/safety behavior
+10. tests added/updated
+11. assumptions and edge cases
+
+Success criteria:
+- Email signals now materially affect the operating system in the right places
+- Changes are explainable and auditable
+- Carrier/customer profile mutation remains safe and staged
+- Duplicate/noisy email threads do not spam the system
+- The app gets smarter from email without becoming brittle

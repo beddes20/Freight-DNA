@@ -1,53 +1,70 @@
-# OrgChart CRM - Transportation Brokerage Sales Tool
+# FreightDNA
+FreightDNA is a mini CRM application designed to empower transportation brokerage sales teams by managing customer accounts, contacts, and shipping data to boost sales efficiency and revenue.
 
-## Overview
-OrgChart CRM is a mini CRM application for transportation brokerage sales teams. Its primary purpose is to empower sales representatives to efficiently manage customer accounts, build organizational charts, track contacts, and oversee shipping-related data such as lanes, regions, freight spend, and spot bidding. The system includes dedicated RFP and Award management with Excel upload and analytical capabilities. The overarching goal is to streamline sales workflows, enhance customer relationship management, and ultimately drive increased sales efficiency, strategic account penetration, and revenue growth for transportation brokers. It features robust role-based access control (RBAC) for various management levels.
+## Run & Operate
+- **Run:** `npm start`
+- **Build:** `npm run build`
+- **Typecheck:** `npm run typecheck`
+- **Codegen:** `npm run codegen`
+- **DB Push:** `drizzle-kit push:pg`
+- **Environment Variables:** `DATABASE_URL`, `OPENAI_API_KEY`, `MICROSOFT_GRAPH_CLIENT_ID`, `MICROSOFT_GRAPH_CLIENT_SECRET`, `RESEND_API_KEY`
 
-## User Preferences
+## Stack
+- **Frontend:** React, TypeScript, Tailwind CSS, `shadcn/ui`
+- **Backend:** Express.js
+- **Database:** PostgreSQL (Drizzle ORM)
+- **Runtime:** Node.js (specific version not specified, infer from `package.json`)
+- **Build Tool:** Vite (implied by React setup, confirm with `package.json`)
+
+## Where things live
+- `/client`: Frontend source code.
+- `/server`: Backend source code.
+- `/server/db/schema.ts`: Database schema definition (source of truth).
+- `/server/routes`: API endpoints.
+- `/server/services`: Business logic and data access.
+- `/server/agent`: AI agent runtime components.
+- `/server/agentic`: AI agent control and autonomy layers.
+- `/docs`: Project documentation and architectural contracts.
+- `/tests`: Code quality guardrails and test suite.
+
+## Architecture decisions
+- **"Zero-new-error" philosophy:** Express handlers are designed for robust request parameter normalization.
+- **Role-Based Access Control (RBAC):** Dynamic RBAC implemented for secure access to features.
+- **AI-first Integration:** AI functionalities (`/ai-hub`) deeply integrated for insights, automation, and communication.
+- **Unified Data Source:** `freight_daily_upload_fact` table serves as a single source of truth for financials, available freight, and lane work queue data.
+- **Stability Contracts:** Critical functionalities like Customer Quotes & Account Ownership are enforced by documented stability contracts and automated tests.
+- **Inbound Email Preservation:** Prevents silent dropping of inbound emails from unknown senders by persisting them with null account/carrier links, differentiating from noise.
+
+## Product
+- Comprehensive CRM for customer accounts, contacts, and shipping.
+- AI-assisted RFP and Award management via Excel uploads.
+- Advanced analytics for lane research, coverage gaps, and wallet share.
+- User and team management with role-based access.
+- Real-time communication and collaboration tools (notes, Webex Calling).
+- AI-powered features: talking points, health scores, touchpoint summaries, email drafting, Next Best Action (NBA) engine.
+- Lane Work Queue (LWQ) for managing assignable lane workflows.
+- Integration with external services for market intelligence (FreightWaves SONAR/TRAC, ZoomInfo).
+- Automated processes for email syncing, account reviews, and quote processing.
+- Admin consoles for monitoring system health and triaging data (e.g., Email-Derived Companies).
+
+## User preferences
 I prefer clear and concise information. I like iterative development with regular updates. Please ask for my approval before implementing any major architectural changes or significant feature modifications. I value clean code and well-documented solutions.
 
-## System Architecture
+## Gotchas
+- **Customer Quotes & Account Ownership:** Modifying `applyFilters`, `loadContext`, `enrich`, `attachResponseTimes`, or the `__none__` resolver in `server/services/customerQuotes.ts` requires updating `docs/customer-quotes-stability-contract.md` and `tests/code-quality-guardrails.test.ts` (Section 1100).
+- **Unified ReplitDailyUpload:** Changes to financials or available freight upload logic (Task #1051) must maintain consistency with `freight_daily_upload_fact` and pass Section 1051 guardrails.
+- **Email Ingestion:** The `processUserMailboxEmail` helper has specific logic for `PERSIST-UNKNOWN` and `TOMBSTONE-DROP` emails; do not reintroduce `DROP-GATE` behavior.
+- **Carrier Ranking:** The carrier ranking engine prioritizes lane fit; AI adjustments cannot violate the lane-first ordering.
 
-### UI/UX Decisions
-The application utilizes React, TypeScript, and Tailwind CSS with `shadcn/ui` to deliver a modern and responsive user interface. It incorporates dark/light mode switching, uses blue and green accent colors, features a gradient hero banner, and displays KPI stat cards on the dashboard. Navigation is managed through a responsive sidebar, complemented by interactive elements like confetti animations. The theme predominantly features a black sidebar/header with amber gold accents, specific branding elements like the Value Truck logo, and mantras displayed in the top header.
-
-### Technical Implementations
-- **Frontend**: Built with React, TypeScript, TanStack Query for data fetching, and Wouter for routing.
-- **Backend**: An Express.js server developed with TypeScript handles API requests, authentication, and file processing.
-- **Database**: PostgreSQL is used as the primary data store, managed with Drizzle ORM.
-- **Authentication**: The system employs session-based authentication using `express-session`, `connect-pg-simple`, and `bcrypt` for secure password hashing. Role-based access control (RBAC) dynamically filters data visibility based on user roles (Admin, Director, National Account Manager, Account Manager, Logistics Manager, Logistics Coordinator).
-- **File Processing**: Excel and CSV parsing are handled by `xlsx` (SheetJS), while `multer` is used for file uploads.
-- **Mapping & Geocoding**: Interactive maps are powered by Leaflet, integrated with custom server-side geocoding and Haversine distance calculations for features like delivery heatmaps.
-- **Data Models**: Core entities include Users, Companies, Contacts, RFPs, Awards, and Tasks, designed to support hierarchical relationships and specific transportation industry data.
-- **Key Features**:
-    - **CRM Capabilities**: Comprehensive CRUD operations for company and contact management, including organizational chart visualization and transportation-specific fields.
-    - **RFP & Award Management**: Modules for managing RFPs and awards, featuring Excel upload with AI-assisted column mapping.
-    - **Analytical Tools**: Includes lane research, facility coverage gap analysis, lane pattern analysis, historical data analysis, top opportunities identification, and a lane matching portlet. Wallet share calculation is dynamically presented based on RFP data or estimated spend.
-    - **User and Team Management**: Tools for user administration, team hierarchy management, and company reassignment, along with features for PTO passoff and account handback.
-    - **Data Integration & Sync**: Global search functionality, OneDrive synchronization for financial data, and a system for attaching files to various entities.
-    - **Communication & Collaboration**: Task assignment and tracking, a shared callouts/trends feed, and 1:1 discussion topics between managers and their reports.
-    - **Goal Setting & Tracking**: A system for National Account Managers (NAMs) to set and track goals for Account Managers (AMs), including automated and manual metrics.
-    - **Customer Interaction Tracking**: Logging of contact touchpoints (calls, emails, texts, site visits) with recency tracking, "Contacts Needing Attention" alerts, and the ability to mark "meaningful" conversations.
-    - **Account Intelligence**: Dedicated fields within company profiles for critical operational and financial details, including portal credentials, tendering processes, and account quirks.
-    - **Customer Scorecard**: Secure upload and download of customer scorecard documents.
-    - **Dashboard Enhancements**: Contextual alerts for RFP deadlines, goal progress, and pending 1:1 topics, along with specialized dashboard portlets for LMs, AMs, and NAMs, providing role-specific insights and metrics.
-    - **AI-Powered Insights**: AI-generated talking points for lane gap insights, incorporating account context for enhanced daily brief emails and chatbot prompts. Includes: AI health score narrative (2-sentence GPT-4o-mini "why" explanation shown in company detail and pre-call planner), AI touchpoint note summary (auto-summarizes last 5 touchpoint notes in pre-call planner), proactive nudge alerts in DNA Guru chatbot (goals behind, cold contacts, urgent RFPs, tasks due today), and lane gap priority scoring (High/Medium/Low badges on corridor rows ranked by volume, multi-RFP presence, award status, and count).
-    - **DNA Guru Action Execution**: Chatbot supports OpenAI function calling for `log_touchpoint` (call/email/text/site_visit) and `create_task` actions — AI proposes inline confirmation cards, user confirms to execute against the CRM.
-    - **Health and Momentum Scoring**: Automated calculation of company health and momentum scores based on various interaction and activity factors.
-    - **Shipping Mode Management**: Categorization and filtering of companies by shipping modes (LTL, FTL, Drayage, IMDL).
-    - **Relationship Freight Reporting**: `contact_lane_attributions` table lets reps assign lane patterns (origin/dest state+city) to individual contacts. Freight loads from financial uploads are then matched and attributed to each contact's relationship base level (1st/2nd/3rd/Home Run). Portlets appear on the dashboard and on each company's overview tab, showing loads, margin, contracted %, and spot % per level. The `ContactLaneManager` component in contact detail sheets handles add/remove of lane attributions.
-    - **Relationship Advancement History**: `contact_base_history` table tracks every base change (from/to/who/when). History logs on every PATCH /contacts/:id when relationshipBase changes, and is displayed as a timeline in the contact detail sheet.
-    - **Dashboard Consolidation**: Single `/api/dashboard-relationship-summary` endpoint replaces 3 separate relationship API calls on the dashboard. `RelationshipDashboardSection` wrapper passes pre-fetched data to both portlets via props, eliminating redundant queries.
-    - **Greenfield Visibility**: Coverage portlet shows "Unworked Accounts" count — companies with no contacts assigned to any relationship base level.
-    - **Pre-call Planner Relationship Intel**: Contact cards in the pre-call planner now display relationship base badge (1st/2nd/3rd/HR), lane count, loads, and margin sourced from the company's freight summary.
-    - **Feedback Inbox Admin Responses**: Admins can type a response to any feedback submission. Response is saved, displayed in the inbox, and the submitter is notified by email (using their username as the email address).
-
-## External Dependencies
-- **PostgreSQL**: Used for database management and session storage.
-- **xlsx (SheetJS)**: Employed for parsing Excel and CSV files.
-- **multer**: Handles file uploads.
-- **Leaflet**: Provides interactive mapping capabilities.
-- **OneDrive API (Microsoft Graph API)**: Facilitates synchronization of financial data.
-- **node-cron**: Used for scheduling recurring jobs, such as report generation and daily digest emails.
-- **Resend / GoDaddy SMTP**: For sending transactional and report emails, with Resend as the primary and GoDaddy SMTP as a fallback.
-- **OpenAI (GPT-4o-mini)**: Integrated for AI-assisted features like RFP column mapping suggestions, lane gap insights, and AI-generated "Priority for Today" in daily briefs.
+## Pointers
+- **Drizzle ORM:** [https://orm.drizzle.team/](https://orm.drizzle.team/)
+- **Tailwind CSS:** [https://tailwindcss.com/](https://tailwindcss.com/)
+- **shadcn/ui:** [https://ui.shadcn.com/](https://ui.shadcn.com/)
+- **Microsoft Graph API:** [https://learn.microsoft.com/en-us/graph/](https://learn.microsoft.com/en-us/graph/)
+- **OpenAI API:** [https://platform.openai.com/docs/api-reference](https://platform.openai.com/docs/api-reference)
+- **FreightWaves SONAR:** _Populate as you build_
+- **Webex Calling API:** _Populate as you build_
+- **Clerk Documentation:** _Populate as you build_
+- **Customer Quotes Stability Contract:** `docs/customer-quotes-stability-contract.md`
+- **Unified ReplitDailyUpload Documentation:** `docs/unified-replit-daily-upload.md`
+- **Contact Promotion Design:** `docs/contact-promotion-design.md`

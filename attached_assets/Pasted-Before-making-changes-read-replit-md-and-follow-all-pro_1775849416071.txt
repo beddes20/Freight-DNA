@@ -1,0 +1,263 @@
+Before making changes, read replit.md and follow all project guardrails.
+
+Context:
+- Task #185: Market Signal Intelligence Layer is implemented and stable.
+  - market_events + market_signals tables with CHECK constraints + partial unique index
+  - marketSignalThresholds.ts centralizes thresholds
+  - MarketSignalEngine with correct baseline math, cooldown enforcement, suppression lifecycle, imbalance detection, and deterministic explanations
+  - 6-hour scheduler, internal routes protected by INTERNAL_SERVICE_TOKEN, full storage layer, 43/43 tests passing
+
+- Task #186: Customer-side NBA consumer is implemented and stable.
+  - Account exposure service
+  - syncMarketSignalNbas service
+  - market NBA routes
+  - migrations for nba_cards.market_signal_id
+  - 49/49 tests passing
+
+Goal of this task:
+Implement the **carrier-side consumer** of Market Signals.
+
+When a regional/equipment market heats up (e.g., outbound GA/FL dry van), the system should:
+- identify carriers that are a good fit for that market (based on lane history + declared preferences)
+- generate clear, actionable NBAs for procurement/ops (who to call/email to add capacity)
+- do this using the same MarketSignalEngine, without duplicating signal logic
+
+Scope for this task:
+1) Define a carrier-side NBA / recommendation structure (reuse existing concepts where possible)
+2) Implement a carrier exposure service: map active signals → candidate carriers
+3) Implement a syncCarriersForMarketSignals (or similar) service that:
+   - runs after the MarketSignalEngine
+   - upserts carrier-level NBAs/recommendations
+4) Add minimal internal routes or storage accessors to fetch these for future UI
+5) Add tests
+
+Do NOT change the MarketSignalEngine in this task.
+Only read from active/cooling signals.
+
+--------------------------------------------------
+1. DATA MODEL FOR CARRIER-SIDE OUTPUT
+--------------------------------------------------
+
+Prefer reusing existing tables if the product already has:
+- carrier recommendation / bench / outreach suggestion tables
+- or a generic NBA / task concept that can be shared
+
+If reuse is too messy, add a focused table, e.g. carrier_market_nbas or carrier_market_recommendations.
+
+Minimum fields for a carrier-market NBA:
+- id
+- carrierId
+- ownerUserId or teamOwnerId (if appropriate)
+- marketSignalId
+- recommendationType (e.g., market_surge_carrier_outreach)
+- status (pending, in_progress, completed, dismissed)
+- createdAt
+- updatedAt
+- firstSeenAt (optional)
+- lastActionAt (optional)
+- explanation JSON (why this carrier, why this signal)
+- urgencyScore (optional numeric)
+- suppressionReason nullable
+
+Keep it aligned with the customer-side NBA patterns:
+- status semantics should match: pending, in_progress, completed, dismissed
+
+Add necessary schema + migrations using the same patterns as Tasks #185 and #186:
+- runMigrations.ts block for new table/columns with IF NOT EXISTS + ALTER TABLE as needed
+- a matching Drizzle SQL migration & journal entry if required by the project pattern
+
+--------------------------------------------------
+2. CARRIER EXPOSURE MATCHING
+--------------------------------------------------
+
+Create a service (e.g., carrierMarketExposureService.ts) that determines which carriers are a good fit for a given Market Signal.
+
+It should consider:
+- Carrier lane history:
+  - lanes they have run in the last N days/weeks
+  - especially origin/destination regions related to the signal’s scopeKey/scopeType
+- Carrier-declared lane preferences / capacity:
+  - from your carrier hub intelligence tables
+  - from the email-parsed declared lanes if those exist
+- Equipment type:
+  - match carrier equipment capabilities to signal.equipmentType
+
+Basic version of exposure rules:
+
+For a demand_surge / regional_heat signal:
+- A carrier is “exposed/fit” if:
+  - they have run loads originating from the signal’s originRegion in the last 90 days
+  OR
+  - they have declared lane preferences including that originRegion and equipment
+  OR
+  - they have run similar corridors (e.g., GA→anywhere with matching equipment) frequently
+
+For a demand_capacity_imbalance signal:
+- Focus on carriers who:
+  - have coverage in the hot region but low recent volume from you (capacity under-utilized),
+  - OR have strong relevant history but are not currently in your top outreach lists for that region.
+
+Implement exposure matching as a separate helper/service so we can tune it later.
+
+Rules should be:
+- deterministic and explainable
+- configured with constants (e.g., lookback windows, min run count, recency cutoff) in one place
+
+--------------------------------------------------
+3. CARRIER NBA GENERATION SERVICE
+--------------------------------------------------
+
+Implement a service, e.g., carrierMarketNbaService.ts, that:
+
+- Fetches active Market Signals:
+  - primarily demand_surge, regional_heat, demand_capacity_imbalance
+- For each signal, uses the carrier exposure service to:
+  - find candidate carriers
+  - compute an urgency score based on:
+    - signal severity
+    - carrier’s fit strength (history count, preference match)
+    - recency
+
+- Upserts carrier-side NBAs:
+  - one row per (carrierId, marketSignalId, recommendationType)
+  - status default: pending
+  - store explanation JSON:
+    - signal summary: type, severity, percentChange, supportingEventCount
+    - carrier fit summary: runs in region, declared lanes, last-run date, etc.
+
+Dedup rules:
+- For a given (carrierId, marketSignalId, recommendationType), do not create duplicates:
+  - if there is already a pending or in_progress record, update it as needed (e.g., urgencyScore, explanation) but do not create a new row
+- If a previous NBA is completed or dismissed:
+  - a new *signal* with a new id can create a new NBA in the future
+  - but do not re-open the same signal’s NBA once it’s completed/dismissed
+
+Status interactions with signals:
+- When a signal resolves:
+  - you may leave completed/dismissed records as history
+  - for any still-pending carrier NBAs, you can either:
+    - leave them as “stale pending” (simpler for v1)
+    - or auto-dismiss them
+  - choose the simplest option consistent with the customer NBA behavior
+
+--------------------------------------------------
+4. INTEGRATION WITH SCHEDULER / ENGINE
+--------------------------------------------------
+
+Integrate this service with the existing scheduler:
+
+- After the MarketSignalEngine evaluation cron runs (every 6 hours), call:
+  - syncCarrierMarketNbas (or equivalent) to refresh carrier NBAs based on the latest signals.
+
+Follow the same pattern used for syncMarketSignalNbas (customer side):
+- no duplicate scheduling logic
+- reuse existing logs and error handling patterns
+
+We do NOT want the carrier-side service to:
+- re-evaluate signals
+- change signal lifecycle
+
+It should only read active/cooling signals and produce NBAs.
+
+--------------------------------------------------
+5. ROUTES / FETCHING
+--------------------------------------------------
+
+Add minimal internal/API accessors so we can retrieve carrier NBAs later for UI and debugging.
+
+For example:
+- GET /internal/market-signals/carrier-nbas?marketSignalId=...
+- GET /internal/carriers/:carrierId/market-nbas
+
+Apply the same INTERNAL_SERVICE_TOKEN auth pattern as the other internal routes.
+
+Follow existing routing patterns in server/routes.
+
+--------------------------------------------------
+6. EXPLANATION PAYLOADS
+--------------------------------------------------
+
+Each carrier NBA should include a structured explanation with:
+
+- signal:
+  - signalId, signalType, scopeType, scopeKey
+  - severity
+  - percentChange
+  - supportingEventCount
+- carrier fit:
+  - number of runs in region in the lookback window
+  - last run date
+  - whether they have declared preferences in that region
+  - equipment match
+
+Sample explanation string (deterministic, not AI):
+
+“Carrier XYZ has run 7 outbound GA dry van loads in the last 60 days and has declared preference for GA outbound dry van. Current GA outbound dry van demand is 42% above baseline (9 events across 4 accounts). Consider proactive outreach to secure capacity in this corridor.”
+
+Keep this explanation built from data, not LLMs.
+This will feed into UI and gives ops/procurement an immediate, trustable story.
+
+--------------------------------------------------
+7. GUARDRAILS
+--------------------------------------------------
+
+- Do not flood procurement with NBAs:
+  - impose per-signal caps (e.g., top N carriers per signal)
+  - or apply a minimum fit score threshold
+
+- Keep config (lookbacks, caps, thresholds) clearly centralized.
+
+- Avoid heavy joins that will blow up runtime on large datasets.
+  - If necessary, start with a simpler subset of carriers (e.g., active bench) and expand later.
+
+- Ensure that carrier NBAs do not interfere with existing lane-based procurement workflows:
+  - this is an additional intelligence layer, not a replacement.
+
+--------------------------------------------------
+8. TESTS
+--------------------------------------------------
+
+Add tests for:
+
+1) Exposure matching:
+   - carriers with recent runs in signal region are selected
+   - carriers with only old runs fall out
+   - carriers with declared preferences but no history are still considered (if the rule says so)
+
+2) NBA creation & dedupe:
+   - first run creates pending NBAs
+   - subsequent runs do not duplicate NBAs for the same (carrier, signal, type)
+   - new signal id can create a new NBA after previous one is completed
+
+3) Explanation correctness:
+   - explanation JSON includes both signal and carrier fit details
+   - string / summary is deterministic for a given input
+
+4) Scheduler integration:
+   - syncCarrierMarketNbas is called from the scheduled Market Signal pipeline
+   - NBAs are created from active signals only
+
+5) Migration correctness:
+   - new table/columns created if missing
+   - ALTER TABLE handles existing deployments with prior schemas cleanly
+
+--------------------------------------------------
+9. DELIVERABLES
+--------------------------------------------------
+
+Return:
+1. short summary of changes
+2. exact files changed
+3. new/updated schema for carrier-side NBAs
+4. exposure rules + configuration
+5. how syncCarrierMarketNbas integrates with the Market Signal scheduler
+6. how dedupe and lifecycle work for carrier NBAs
+7. any new routes or accessors
+8. tests added/updated
+9. assumptions and edge cases
+
+Success criteria:
+- Active Market Signals now produce carrier-side NBAs for relevant carriers
+- NBAs are targeted, explainable, and deduplicated
+- MarketSignalEngine remains unchanged and is the single source of signal truth
+- Scheduler produces both customer and carrier NBAs off the same middle layer

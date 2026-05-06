@@ -1,0 +1,57 @@
+Stop. You are working on the wrong thing.
+Your recent work on lane-first carrier ranking, minLaneFitForTopRank, LWQ sort comparators, and guardrail tests is not what I asked for and is not the current priority. That work may be fine, but it does not address the P0 incident I am dealing with right now.
+
+New directive (overrides all previous tasks):
+
+Drop the carrier-ranking / lane-first / LWQ ranking work. Do not propose more ranking tweaks, weights, thresholds, or guardrails in that area. Consider that task closed for now unless I explicitly reopen it.
+
+Refocus on the P0 problem: email → Conversations → Customer Quotes is not trustworthy today.
+
+Some days, Conversations shows 0 threads for “today” under normal filters even though Outlook mailboxes are active.
+
+Customer Quotes / Quote Requests can show 0 open / 0 auto‑captured today even when customers have clearly emailed quote requests.
+
+We have attempted to fix this many times; I now need an end‑to‑end, production‑verified fix, not more local optimizations.
+
+Your job now is ONLY this chain:
+Outlook / M365 mailbox → webhook or delta sync → email_messages → conversations / conversation_messages → quote capture / materialization → Customer Quotes / Quote Requests UI.
+
+What to do
+
+Pick a real email from today in a monitored mailbox and trace it end‑to‑end in production:
+
+Prove it exists in Outlook.
+
+Prove (or disprove) it exists in email_messages.
+
+Prove (or disprove) it has the correct conversations / conversation_messages rows.
+
+Prove whether the Conversations API for “Customers / All open / Today” returns it.
+
+If it is quote‑shaped, prove whether it creates/links the expected quote/quote‑request record that should appear in Customer Quotes.
+
+Identify the first place in that chain where this specific email disappears or is misclassified. That first break is the root problem you must fix before touching anything else.
+
+Implement the smallest safe code/config change to fix that break, then re‑trace the same email to confirm it now flows end‑to‑end.
+
+Provide production proof that the fix works:
+
+exact tables/columns/rows you inspected or changed,
+
+the exact API/query showing the email in Conversations and in Customer Quotes (when applicable),
+
+and screenshots or equivalent showing it visible under a normal “today” view.
+
+Add a minimal guardrail/canary so this cannot silently regress (for example, a synthetic probe email + health check that verifies it appears in email_messages and in Conversations for “today”).
+
+Deliverables back to me
+
+A short root‑cause description tied to specific files/services/tables.
+
+The concrete fix you applied (with file names).
+
+The production evidence that the end‑to‑end path now works for at least one real email from today.
+
+What guardrail you added to detect future breakage.
+
+Do not return to carrier ranking, lane-first weights, or LWQ sorting unless I explicitly ask. The only acceptable outcome here is a trustworthy, production‑verified email → Conversations → Quotes pipeline.

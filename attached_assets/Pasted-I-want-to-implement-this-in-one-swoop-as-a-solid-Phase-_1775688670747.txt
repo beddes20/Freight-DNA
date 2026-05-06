@@ -1,0 +1,232 @@
+I want to implement this in one swoop as a solid Phase 1, then we will tighten and refine after.
+
+Goal:
+Turn the Lane Work Queue / lane detail drawer into a true carrier procurement workflow:
+- smarter carrier recommendations
+- AI-generated procurement/sourcing emails
+- ability to send those emails directly from the platform
+- logging so the system gets smarter over time
+
+Current problem:
+The drawer is a good start, but “Generate Carrier Outreach” is not completing the workflow. I need the user to be able to identify recommended carriers, generate outreach, edit it, and send it from inside the product.
+
+Important product rule:
+The platform should not just show carriers in the region.
+It should learn from exact lane history, similar lane history, customer history, equipment history, and outreach outcomes so this becomes smarter over time and that data can be reused elsewhere.
+
+Please implement the lowest-risk but complete Phase 1 version.
+
+==================================================
+1. SMARTER CARRIER RECOMMENDATIONS
+==================================================
+
+Keep current regional carrier suggestions, but add ranking signals for:
+- exact lane history
+- similar lane / corridor history
+- same origin market history
+- same destination market history
+- same equipment history
+- same customer history if available
+- recent activity / active in last 90 days
+- prior outreach outcomes if available
+- prior booking / award success if available
+
+For each suggested carrier, show a small “why this carrier” explanation such as:
+- Ran this exact lane before
+- Ran similar AZ → CO freight
+- Active in destination market
+- Hauled this equipment before
+- Has worked with this customer before
+- Positive response history
+
+Add a simple scoring/ranking approach that is explainable and easy to adjust later.
+
+==================================================
+2. REUSABLE LANE-CARRIER INTELLIGENCE
+==================================================
+
+Create/store reusable intelligence that can support future recommendations and other workflows.
+
+At minimum track or derive:
+- carrier ↔ exact lane history
+- carrier ↔ similar lane/corridor history
+- carrier ↔ customer history
+- carrier ↔ equipment history
+- outreach attempts
+- outreach generated yes/no
+- outreach sent yes/no
+- delivery/send status if available
+- reply outcome (no reply / interested / declined / bad fit / booked)
+- booked / awarded result if available
+- timestamps and acting user
+
+Design this so it can later be reused in:
+- carrier suggestions
+- lane scoring
+- account planning
+- procurement analytics
+- follow-up workflows
+
+==================================================
+3. GENERATE CARRIER OUTREACH FLOW
+==================================================
+
+When the user clicks “Generate Carrier Outreach,” do not let it silently fail or do nothing.
+
+Expected behavior:
+- If no carriers are selected, show a clear prompt to select at least one
+- If carriers are selected, open a second modal/drawer for outreach composition
+- This modal should show:
+  - selected carrier(s)
+  - lane details
+  - generated subject line
+  - generated email body
+  - editable content before send
+  - copy button
+  - regenerate button
+  - send button
+  - cancel/close button
+
+Keep the current lane drawer structure. No big redesign.
+
+==================================================
+4. AI-GENERATED PROCUREMENT / SOURCING EMAILS
+==================================================
+
+I want AI-generated general procurement emails that sound like:
+- we get this lane regularly
+- here are the lane details
+- we are looking for a carrier partner who can support this lane consistently
+
+Tone:
+- professional
+- concise
+- carrier-friendly
+- partnership-oriented
+- not overly polished or robotic
+
+The draft should intelligently use available lane data:
+- origin
+- destination
+- equipment
+- avg loads/week
+- any consistency signal like weeks active / recurring status
+- any relevant note if available
+
+Direction for draft content:
+- tell the carrier we move this lane consistently / regularly
+- state the lane details
+- say we are looking to build consistent carrier support / partnership
+- ask if they are interested in discussing availability / coverage / rates
+- keep it practical and sendable
+
+Do not hardcode one static template only.
+Generate from lane data, but include a fallback template if AI generation fails.
+
+==================================================
+5. SEND EMAILS DIRECTLY FROM THE PLATFORM
+==================================================
+
+I need users to be able to send these procurement/sourcing emails from inside the platform.
+
+Please implement a Phase 1 send flow with the lowest-risk architecture:
+- send from the platform using the existing or configured outbound email service/provider
+- support one-to-one and one-to-many carrier outreach if possible
+- show send status clearly:
+  - draft
+  - sending
+  - sent
+  - failed
+- store sent timestamp and sender
+- store recipients
+- store subject/body snapshot that was sent
+- log failures with useful error message
+
+If a full production-grade email integration is not yet wired, still build the complete UI and server flow so it works with the configured provider or a stubbed provider boundary that can be finalized quickly.
+
+Important:
+- users must be able to review/edit before sending
+- sending should happen from the platform, not require copy/paste into external email
+
+==================================================
+6. OUTREACH LOGGING + LEARNING LOOP
+==================================================
+
+Every outreach action should create reusable data.
+
+Log:
+- lane id
+- carrier id(s)
+- user id
+- generated draft yes/no
+- sent yes/no
+- sent timestamp
+- email subject/body snapshot
+- delivery/send status
+- response outcome when updated later
+- whether the carrier was eventually booked on that lane or a similar lane if available
+
+This data should improve future ranking and follow-up.
+
+==================================================
+7. FOLLOW-UP / TASKS / VISIBILITY
+==================================================
+
+Make the workflow visible after outreach:
+- if outreach is generated but not sent, allow returning to draft
+- if outreach is sent, show it in history on the lane
+- optionally create or update a task/follow-up reminder for that lane/carrier outreach
+- show basic statuses like:
+  - draft created
+  - sent to X carriers
+  - awaiting reply
+  - replied / interested
+  - declined
+  - booked
+
+Do this in a lightweight way without building a giant CRM module here.
+
+==================================================
+8. UX / RELIABILITY EXPECTATIONS
+==================================================
+
+- No dead clicks
+- No silent failures
+- Every button should produce visible feedback
+- Show success toast after send
+- Show clear error state if send fails
+- Preserve user edits when possible
+- Keep changes scoped to current workflow, avoid major redesign
+- Make recommendation reasons visible so users trust the list
+
+==================================================
+9. TESTS
+==================================================
+
+Add tests for:
+- exact-lane history boosts/ranks carriers
+- similar-lane history boosts/ranks carriers
+- “why this carrier” reasons render correctly
+- Generate Carrier Outreach opens the composition modal/drawer
+- no selected carriers shows validation state
+- AI draft includes lane details
+- fallback template appears if generation fails
+- send-from-platform flow works through provider boundary
+- sent outreach is logged
+- failed send shows usable error state
+- outreach history appears on the lane
+- no regression to current lane drawer behavior
+
+==================================================
+10. OUTPUT FORMAT
+==================================================
+
+When done, respond in this format:
+1. CURRENT STATE / GAPS
+2. CHANGES MADE
+3. HOW CARRIER RANKING NOW WORKS
+4. HOW OUTREACH GENERATION WORKS
+5. HOW SEND-FROM-PLATFORM WORKS
+6. WHAT DATA IS NOW BEING STORED FOR FUTURE INTELLIGENCE
+7. TESTS ADDED
+8. KNOWN LIMITATIONS / NEXT TIGHTENING STEPS

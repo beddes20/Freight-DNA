@@ -1,0 +1,48 @@
+You are a senior full-stack engineer and product owner for Freight DNA.
+
+Context:
+Freight DNA is a freight-broker-specific CRM and sales intelligence platform with:
+- CRM core (companies, contacts, relationship bases 1st–Home Run)
+- touchpoint logging
+- NBA engine and Account Growth/Health Scores
+- dashboard portlets (Account Growth, Priority Actions Today, etc.)
+- Pre-Call Planner
+- LM check-ins, daily digests, etc.
+
+Goal:
+Tighten the platform so that core workflows are accurate, consistent, and trustworthy.
+We are seeing issues where data appears in one place but not in another
+(e.g., a call touchpoint logged for ACH Foods shows in Today’s Touchpoints, but the Account Growth portlet says “No touchpoints on record”).
+
+Your job:
+Perform a targeted audit of core data flows and fix inconsistencies.
+
+Please:
+1) Map end-to-end flows for:
+   - touchpoint → company/contact → health/growth scores
+   - touchpoint → “Today’s Touchpoints”
+   - touchpoint → NBA engine
+   - touchpoint → Account Growth & Priority Actions portlets
+2) Identify all places where:
+   - data is present but not reflected in scores/portlets, or
+   - cached/derived values get stale after updates.
+3) For each inconsistency, identify whether the root cause is:
+   - data linkage (wrong company/contact IDs)
+   - missing or incorrect cache invalidation
+   - outdated rollup logic
+   - UI using different logic than the core engine.
+4) Propose the minimal, permanent fixes that bring all surfaces into alignment.
+   - Scores and portlets should always reflect current touchpoint and relationship data within an acceptable delay.
+   - “No touchpoints on record” should only appear when there truly are none.
+5) Prioritize fixes for:
+   - Account Growth portlet
+   - Priority Actions / NBA portlet
+   - company detail Account Growth & Health sections.
+
+Output format:
+A. Data flows and where each UI surface reads from
+B. List of inconsistencies found (with specific examples)
+C. Root cause analysis for each inconsistency
+D. Proposed fixes (by file/function, in priority order)
+E. Implementation plan for the top 3–5 fixes
+Then stop and wait for approval before changing code.

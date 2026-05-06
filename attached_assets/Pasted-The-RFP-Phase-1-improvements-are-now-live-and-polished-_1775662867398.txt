@@ -1,0 +1,66 @@
+The RFP Phase 1 improvements are now live and polished (auto-coverage-review task on upload, Coverage Gaps dashboard portlet, NBA Phase 1 R9 for uncovered RFP facilities).
+
+Next, I want to do a similar Phase 1 pass for the award → growth workflow, using the existing schema where possible.
+
+Goal:
+Make award creation and awarded lanes drive AM-facing “activation and growth” work, not just LM procurement work.
+
+Please:
+
+1. Audit the current award workflow in code:
+- How awards are created (manual vs RFP conversion)
+- How award.lanes[] is represented today
+- What procurement tasks get created and how they flow to LMs
+- Whether any AM-facing award tasks already exist
+- Any existing NBA or growth score signals that reference awards
+
+2. Propose a Phase 1 workflow (no big schema redesign yet) that mirrors what we just did for RFP:
+- Auto-create an AM-facing "award_onboarding" task when:
+  - an award is created via Convert to Award, or
+  - an RFP is marked awarded with lane data
+- Add a small “Award Health” dashboard surface for AMs:
+  - show awards where lanes have 0 matching loads after N days from award date
+  - only for active customers, suppress low-value noise
+- Add a Phase 1 NBA rule for “stalled awarded lanes”:
+  - fire when an account has an award that’s older than N days
+  - AND 1+ awarded lanes have no matching financial loads
+  - AND the AM hasn’t touched the account in > 7 days
+  - clearly explain the opportunity and suggest a next action
+
+3. Then implement the minimum viable version of these three changes:
+
+A. award_onboarding task:
+- Task type: award_onboarding (or similar)
+- Assigned to: the company’s AM
+- Trigger: on award creation / RFP→award conversion
+- Description: explain which lanes were won and what the AM should verify or set up with the customer
+- Include award id and company id in metadata
+- Make it idempotent for the same award (no dup tasks)
+
+B. Award Health dashboard surface:
+- For AMs only
+- Show their top N awards where:
+  - awardAgeDays >= configurable threshold (e.g., 30)
+  - total awarded volume is meaningful
+  - and current matched loads on those corridors are 0 (or very low)
+- Clicking should navigate the AM to the best context (company awards tab, or an award detail view)
+
+C. New NBA Phase 1 rule:
+- outcomeType should reflect “execute” or “grow” depending on how you classify stalled awarded lanes in nextBestActionEngine / nbaPhase1Engine
+- Only consider active/open awards, not closed/expired
+- Use daysSinceLastTouch and a sensible volume threshold to avoid noise
+- Provide:
+  - a card label
+  - brief explanation
+  - a suggested action (e.g., schedule an onboarding call on the award, confirm lanes are moving, ask for additional sites/lanes tied to the award)
+
+Constraints:
+- Do NOT attempt a full award_lanes schema redesign yet; work with the current awards.lanes[] and financial data as best as possible
+- Keep changes additive and low-risk, mirroring the RFP Phase 1 approach
+- Preserve existing procurement task behavior for LMs
+
+After coding:
+- list files changed
+- describe each change in plain English (trigger, behavior, guardrails)
+- run typecheck
+- confirm no new TypeScript errors beyond the existing baseline

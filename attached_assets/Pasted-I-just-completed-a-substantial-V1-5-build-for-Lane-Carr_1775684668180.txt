@@ -1,0 +1,97 @@
+I just completed a substantial V1.5 build for Lane Carrier Outreach, and I want a focused verification / hardening pass before I rely on it operationally.
+
+Context:
+This build is intended to turn recurring lane data into an actual lane-ownership workflow.
+
+What was added:
+- sourceType on lane bench rows so historical carriers can be distinguished from suggested/manual ones
+- assignedAt + assignedByUserId on recurring lanes
+- recurring lane engine now auto-attaches historical carriers from actual freight history after the engine runs
+- getLaneWorkQueue in storage
+- assignLaneOwner in storage
+- getCarriersByIds in storage for bench enrichment
+- POST /api/recurring-lanes/:laneId/assign
+- GET /api/recurring-lanes/work-queue
+- CarrierOutreachPanel enhancements:
+  - “Ran this lane” badge for historical carriers
+  - “No contact info” badge when missing phone/email
+  - historical-carrier callout block
+  - orange warning when zero bench carriers are contactable
+  - “Assign to me” for managers when lane is unassigned
+  - director assignment dropdown
+- New Lane Work Queue page:
+  - bucketed into Unassigned / No Contactable / Assigned Untouched / In Progress
+  - summary chips
+  - lane rows show corridor, equipment, confidence, loads/week, lane score, bench stats, contactability count, progress bar, owner chip, assignment date, quick assign action
+- Sidebar entry added under Lane Tools
+- Route ordering fixed so /api/recurring-lanes/work-queue is not swallowed by the :id route
+
+What I need from you:
+Do a strict verification pass on this V1.5 workflow with emphasis on correctness, org safety, and queue accuracy.
+
+Please check:
+
+1) Route correctness
+- Verify GET /api/recurring-lanes/work-queue is defined before any conflicting /:id route
+- Verify POST /api/recurring-lanes/:laneId/assign works correctly and cannot be intercepted or shadowed
+- Verify no broken route ordering remains in recurring-lanes routes
+
+2) Auth / role / org safety
+- Verify assignment cannot cross orgs
+- Verify only authorized roles can view the work queue
+- Verify AM assignment permissions behave correctly:
+  - AM can assign lanes they own (if intended)
+  - managers/directors can assign any lane in-org
+- Verify assignedByUserId and owner checks are always scoped to user.organizationId
+
+3) Historical carrier attachment
+- Verify recurring lane engine attaches historical carriers correctly from load history
+- Verify it does not create duplicate bench rows for the same lane/carrier
+- Verify sourceType is set correctly for historical carriers
+- Verify historical carriers are attached only within the correct org and lane
+
+4) Work queue accuracy
+- Verify lanes are bucketed correctly into:
+  - Unassigned
+  - No Contactable
+  - Assigned Untouched
+  - In Progress
+- Verify bucket logic handles edge cases:
+  - assigned lane with 0 carriers
+  - assigned lane with carriers but no phone/email
+  - assigned lane with 1–2 contacted carriers
+  - lane already complete / snoozed
+- Verify manager summary counts match the row data
+
+5) CarrierOutreachPanel behavior
+- Verify badges and warnings show correctly:
+  - “Ran this lane”
+  - “No contact info”
+  - zero-contactable warning
+- Verify assignment UI behaves correctly for managers/directors/non-managers
+- Verify bench enrichment from getCarriersByIds is correct and does not break existing panel behavior
+- Verify clicking a lane from the work queue opens the correct outreach context
+
+6) Data integrity
+- Verify no duplicate lane-carrier bench rows are created by the new historical attach path
+- Verify sourceType values are consistent and safe
+- Verify assignment timestamps and assignedByUserId are written correctly
+- Verify existing outreach completion logic (3 carriers contacted => resolve/snooze 30 days) still behaves correctly after these changes
+
+7) Type safety / runtime safety
+- Check for any new TypeScript errors in touched files
+- Check for null/undefined risks in the work queue page and CarrierOutreachPanel
+- Check for server-side runtime risks from missing owner names, missing carrier data, or empty benches
+
+Deliverables:
+- Make any safe, low-risk fixes you find
+- Do not redesign the feature or expand scope
+- Output:
+  1. READY TO PUSH or DO NOT PUSH
+  2. bullet list of fixes made
+  3. bullet list of any remaining risks / phase 2 items
+  4. brief explanation of whether this is operationally safe for internal rollout
+
+Most important question:
+Can a manager now reliably use this workflow to say:
+“This lane is recurring, this person owns it, these are the carriers we’ve run, these are the carriers we can contact, and this is the next lane that needs bench work”?

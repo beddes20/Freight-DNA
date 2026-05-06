@@ -1,0 +1,117 @@
+I want to add a specific rep owner concept to the Customer profile and use it as the default ownership fallback for Quote Requests and customer email routing.
+
+Goal
+
+Make customer ownership explicit and trustworthy so the system can consistently answer:
+
+Who owns this account?
+
+Which rep should this quote/default workflow belong to?
+
+If an email comes from a shared/distribution customer address, who should it default to?
+
+What I want built
+1. Add a primary owner rep to each customer
+
+In the Customer profile, add a field for:
+
+Owner rep (single primary owner)
+
+This should link to the correct internal user / rep record already used elsewhere in the system.
+
+If there are both users and quote_reps / rep-like entities in the schema, choose the cleanest canonical owner reference and explain the choice.
+
+2. Use owner rep as the default fallback for quote assignment
+
+When an inbound quote/request is matched to a customer but there is no more specific rep assignment, default the quote/opportunity to the customer’s owner rep.
+
+Assignment precedence should become:
+
+explicit existing quote owner if already assigned,
+
+exact contact-level owner match if one exists,
+
+exact customer-linked shared/distribution email match if supported,
+
+customer owner rep fallback,
+
+Needs Routing / unassigned only if there is truly no safe owner.
+
+The owner rep fallback should improve the Rep column in Quote Requests so it shows the expected owner instead of blank / — where the customer is known.
+
+3. Surface owner rep clearly in the UI
+
+In the Customer profile:
+
+show the current Owner rep prominently,
+
+allow admin/authorized users to set or change it,
+
+and show an empty state if none is assigned yet.
+
+In Quote Requests / Customer Quotes:
+
+show the owner rep in the Rep column when that fallback is being used,
+
+and make sure this does not conflict with explicit per-quote ownership if a quote has already been manually assigned.
+
+4. Keep it simple and safe
+
+Do not reopen the email plumbing work.
+
+Do not redesign the customer profile.
+
+Do the smallest clean schema + UI + assignment change needed to make owner rep real and usable.
+
+What I need you to do
+
+Inspect the current schema and determine:
+
+where customer records live,
+
+what rep/user entity should be the canonical owner target,
+
+and where Quote Requests currently gets the Rep column value.
+
+Implement the smallest clean change:
+
+schema field(s) for customer owner,
+
+backend read/write support,
+
+customer profile UI for setting/editing owner,
+
+Quote Requests fallback display/assignment logic.
+
+Preserve existing behavior:
+
+if a quote already has an explicit assigned rep, keep that,
+
+only use customer owner as a fallback/default.
+
+Add guardrails/tests:
+
+customer with owner rep shows owner correctly in profile,
+
+quote tied to customer with no explicit rep uses customer owner fallback,
+
+explicit assigned rep still overrides customer owner,
+
+customer with no owner remains visibly unassigned (not silently wrong).
+
+Deliverables back
+
+The schema/field you added and why.
+
+The assignment precedence in plain English.
+
+The files changed.
+
+One concrete before/after example showing:
+
+a known customer with a blank rep before,
+
+then after the owner rep is set, Quote Requests shows the correct rep.
+
+The desired outcome is simple:
+Every customer can have one clear owner rep, and Quote Requests can use that owner as the default fallback instead of showing a blank rep when the customer is already known.

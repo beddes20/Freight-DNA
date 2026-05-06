@@ -1,0 +1,271 @@
+I want you to do a deep extraction and audit of these 4 Freight-DNA tabs so we can break the work into 4 separate implementation tasks afterward:
+
+Customer Quotes
+
+Conversations
+
+Lane Work Queue
+
+Available Freight
+
+Do not start fixing them yet.
+This task is discovery, extraction, and audit only.
+I want you to inspect the current code, data flow, UX behavior, filters, dependencies, live-sync behavior, and failure points for each tab so we can create clean follow-up tasks with the right scope.
+
+Objective
+
+I need a structured, honest picture of:
+
+how each tab works today,
+
+what data powers it,
+
+what shared primitives or systems it depends on,
+
+what is broken, weak, inconsistent, stale, or inefficient,
+
+what the highest-value fixes are,
+
+and what should become a dedicated task for each tab.
+
+I want this to help me create 4 separate implementation tasks, one per tab, with minimal guesswork.
+
+Tabs in scope
+
+Customer Quotes
+
+Conversations
+
+Lane Work Queue
+
+Available Freight
+
+What I want extracted for EACH tab
+
+For each tab, produce the same structured output.
+
+A. Purpose and workflow
+
+What is this tab supposed to do in the product?
+
+Who is the primary user?
+
+What are the main workflows performed here?
+
+What decisions/actions is the tab supposed to support?
+
+B. Current UI structure
+
+Main page layout
+
+Key filters
+
+Key controls/actions
+
+Tables/cards/side sheets/workspaces/modals
+
+What shared Workflow OS primitives it uses (if any)
+
+Where the UX is consistent vs inconsistent with other tabs
+
+C. Data flow and technical dependencies
+
+Which APIs/queries power the page
+
+Which database tables or server services feed it
+
+Any dependency on:
+
+email ingestion,
+
+live-sync/SSE,
+
+background jobs,
+
+Workflow OS shared primitives,
+
+saved views,
+
+ownership filters,
+
+selection/bulk actions,
+
+classification/parsing pipelines,
+
+external services/integrations
+
+What is shared vs tab-specific
+
+D. Reliability / trust issues
+
+Where can this tab fail silently?
+
+Where can data be stale, delayed, hidden, misattributed, or misleading?
+
+What conditions make a rep think “this should be here and isn’t”?
+
+What current alerts/watchdogs/health checks exist, if any?
+
+What is missing in observability?
+
+E. Performance / efficiency issues
+
+Slow queries
+
+Excessive refetching
+
+Inefficient rendering
+
+Data-shaping issues
+
+Duplicate logic
+
+Filters that are expensive or inconsistent
+
+Opportunities to reduce cognitive load or rep effort
+
+F. UX friction
+
+Confusing labels
+
+Inconsistent filter behavior
+
+Missing default states
+
+Too many clicks
+
+Weak empty states
+
+Weak recoverability/error handling
+
+Missing batch/selection workflows
+
+Places where workflow breaks or feels non-operational
+
+G. Highest-priority improvements
+
+For each tab, identify:
+
+quick wins,
+
+medium-value fixes,
+
+structural fixes,
+
+and what should be included in the first dedicated task for that tab.
+
+H. Acceptance criteria suggestions
+
+For each tab, propose what “fixed” should mean in practical terms:
+
+user-visible behavior,
+
+reliability expectations,
+
+performance expectations,
+
+and any test/guardrail coverage that should exist.
+
+Important context by tab
+
+Use these as expectations while auditing:
+
+Customer Quotes
+
+This tab is trust-critical.
+
+Every relevant customer quote email should funnel here when appropriate.
+
+It should capture quote details, attribution, customer resolution, win/loss, and most recent activity cleanly.
+
+We recently added quote-pipeline observability and a drops queue, so include that in your audit.
+
+Distinguish between:
+
+page freshness / SSE updates,
+
+and deeper ingestion/classification/parsing/attribution problems.
+
+Conversations
+
+This tab is email-driven and must feel continuously live.
+
+Manual browser refresh should not be required for normal use.
+
+Audit both backend freshness and frontend auto-refresh/live-sync behavior.
+
+Call out any auth, SSE, mailbox, or thread invalidation risks.
+
+Lane Work Queue
+
+This should align to the Workflow OS model and shared primitives where appropriate.
+
+Audit owner filter behavior, actionability/stale logic, selection grammar, bulk actions, layout progression, and any mismatches with the spec.
+
+Focus on operational flow and cognitive load.
+
+Available Freight
+
+This is a high-throughput operational tab and should feel fast, trustworthy, and action-oriented.
+
+Audit pickup freshness defaults, owner/team filtering, queue math/KPI behavior, outreach workflows, selection behavior, side sheets/workspaces, and any inconsistencies with the Workflow OS direction.
+
+Deliverable format
+
+I want the output in 5 parts:
+
+Part 1 — Cross-tab summary
+
+What patterns are shared across the four tabs
+
+What common technical or UX problems repeat
+
+What should become shared fixes vs tab-specific fixes
+
+Part 2 — Customer Quotes audit
+
+Structured using sections A–H above
+
+Part 3 — Conversations audit
+
+Structured using sections A–H above
+
+Part 4 — Lane Work Queue audit
+
+Structured using sections A–H above
+
+Part 5 — Available Freight audit
+
+Structured using sections A–H above
+
+Then finish with:
+
+Recommended task split
+
+Propose 4 separate follow-up implementation tasks, one for each tab, with:
+
+clear task name,
+
+scope,
+
+exclusions,
+
+dependencies,
+
+and recommended order.
+
+Constraints
+
+Do not implement fixes in this task.
+
+Do not redesign unrelated parts of the app.
+
+Do not give me vague product advice.
+
+Ground everything in the actual current codebase and behavior.
+
+Be explicit about what is already good vs what is weak.
+
+Be honest about what is a shared-system problem versus a tab-local problem.
+
+The goal is to leave me with a clean, actionable audit that I can turn into 4 separate build tasks immediately.

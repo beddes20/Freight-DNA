@@ -1,0 +1,247 @@
+I want to do a full discovery / audit pass on the Available Freight tab before we start changing the UI or logic.
+
+This tab is important, but right now I do not trust the data quality enough:
+
+it appears to be missing some same-day loads,
+
+and some of the loads or values it does show are incorrect.
+
+I need a serious investigation so we can understand the current state, the data path, the gaps, and the right roadmap to move it closer to the product vision.
+
+My goal
+
+I want Available Freight to become a trustworthy operating surface for available loads:
+
+complete enough that reps can rely on it,
+
+accurate enough that it reflects reality,
+
+timely enough for same-day decisions,
+
+and eventually useful for prioritization, analytics, and AI assistance.
+
+What I want from this task
+
+Before coding, do a full audit and diagnosis of the Available Freight tab.
+
+Please investigate:
+
+1. Product / workflow intent
+
+What is the tab currently trying to represent?
+
+What exact business question is it answering today?
+
+Is it intended to show:
+
+all open freight opportunities,
+
+only a filtered subset,
+
+only certain statuses,
+
+only loads from certain systems,
+
+or only loads matching specific timing/business rules?
+
+2. Data sources
+
+Identify every upstream source involved in Available Freight:
+
+tables,
+
+services,
+
+APIs,
+
+scheduled jobs,
+
+cache layers,
+
+denormalized views/materialized data,
+
+and any business-rule filters applied before the UI sees the data.
+
+For each source, explain:
+
+what it contributes,
+
+whether it is authoritative or derived,
+
+how fresh it is,
+
+and what known weaknesses it has.
+
+3. Full data path
+
+Trace the full path from source to UI:
+
+raw source system / inbound feed,
+
+ingestion,
+
+transformation,
+
+filtering,
+
+ranking / sorting,
+
+API response,
+
+frontend rendering.
+
+I want to know exactly where loads can be:
+
+dropped,
+
+delayed,
+
+misclassified,
+
+duplicated,
+
+or shown incorrectly.
+
+4. Completeness audit
+
+This is very important:
+investigate why same-day loads are missing.
+
+I want concrete analysis of:
+
+what counts as a same-day load in current logic,
+
+whether same-day loads are excluded by date/time rules,
+
+timezone handling,
+
+stale sync/latency,
+
+status filters,
+
+customer/rep ownership filters,
+
+dedupe/merge logic,
+
+pagination / cursor / sort issues,
+
+or bad joins / null handling.
+
+Please quantify where possible:
+
+how many loads should appear vs how many do appear,
+
+and what categories of loads are most likely to go missing.
+
+5. Accuracy audit
+
+Investigate why displayed loads are sometimes incorrect.
+
+Look for:
+
+stale records,
+
+wrong status,
+
+wrong dates/times,
+
+wrong customer/load metadata,
+
+bad rep/owner attribution,
+
+incorrect lane/equipment/weight details,
+
+duplicate or merged records,
+
+or mismatch between source-of-truth and rendered values.
+
+6. Freshness / timeliness
+
+I need to know whether Available Freight is sufficiently current for real operational use.
+
+Investigate:
+
+update cadence,
+
+event latency,
+
+polling / refresh behavior,
+
+whether users have to manually refresh,
+
+whether cached data is sticking around too long,
+
+and whether same-day load visibility is impacted by processing lag.
+
+7. UX / trust issues
+
+Separate from pure data correctness:
+
+what in the UI makes the tab hard to trust or understand?
+
+are there labels, filters, timestamps, or statuses that are technically true but operationally misleading?
+
+what key fields are missing that would help a user quickly decide whether a load is actionable?
+
+8. Current constraints
+
+Identify:
+
+architectural limitations,
+
+source-data limitations,
+
+schema limitations,
+
+API limitations,
+
+and any business-rule ambiguity
+that prevent this tab from matching the intended vision today.
+
+Deliverable I want back before implementation
+
+Come back with:
+
+a current-state summary of what Available Freight actually is today,
+
+a source/data-path map,
+
+a completeness diagnosis for missing same-day loads,
+
+an accuracy diagnosis for incorrect loads/fields,
+
+a trust/freshness diagnosis,
+
+the top root causes ranked by business impact,
+
+and a phased roadmap to improve it.
+
+Roadmap format
+
+Please separate the roadmap into:
+
+Phase A: trust/correctness fixes
+
+Phase B: completeness/freshness fixes
+
+Phase C: workflow/UX redesign
+
+Phase D: analytics / AI / prioritization opportunities
+
+Important
+
+Do not jump straight into UI polish.
+
+Do not assume the current filters/logic are correct.
+
+Start with source-of-truth and data-path validation.
+
+Where possible, quantify the problem with real numbers and examples.
+
+If the current tab is fundamentally representing the wrong thing, say that directly.
+
+This needs to help us answer two questions:
+
+where are we really today,
+
+and what is the right path to get Available Freight closer to the product vision?

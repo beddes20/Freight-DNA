@@ -1,0 +1,2 @@
+                  highFreqOnly={highFreqOnly}
+                />

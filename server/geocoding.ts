@@ -31,7 +31,7 @@ const CITIES: Record<string, [number, number]> = {
   "hayward,ca":[37.6688,-122.0808],"orange,ca":[33.7879,-117.8531],"fullerton,ca":[33.8704,-117.9242],
   "roseville,ca":[38.7521,-121.2880],"visalia,ca":[36.3302,-119.2921],"oxnard,ca":[34.1975,-119.1771],
   "concord,ca":[37.9779,-122.0311],"santa rosa,ca":[38.4404,-122.7141],"rancho cucamonga,ca":[34.1064,-117.5931],
-  "ontario,ca":[34.0633,-117.6509],"vallejo,ca":[38.1041,-122.2566],"rialto,ca":[34.1064,-117.3703],
+  "vallejo,ca":[38.1041,-122.2566],"rialto,ca":[34.1064,-117.3703],
   "antioch,ca":[37.9963,-121.7805],"temecula,ca":[33.4936,-117.1484],"victorville,ca":[34.5361,-117.2912],
   "murrieta,ca":[33.5539,-117.2139],"richmond,ca":[37.9358,-122.3478],"santa clara,ca":[37.3541,-121.9552],
   "berkeley,ca":[37.8716,-122.2727],"el monte,ca":[34.0686,-118.0276],"downey,ca":[33.9401,-118.1331],
@@ -195,7 +195,7 @@ const CITIES: Record<string, [number, number]> = {
   "lewisville,tx":[33.0462,-97.0641],"tyler,tx":[32.3513,-95.3011],"allen,tx":[33.1037,-96.6706],
   "pearland,tx":[29.5633,-95.2861],"sugar land,tx":[29.6197,-95.6349],"round rock,tx":[30.5083,-97.6789],
   "richardson,tx":[32.9483,-96.7298],"new braunfels,tx":[29.7030,-98.1245],"longview,tx":[32.5007,-94.7405],
-  "port arthur,tx":[29.8849,-93.9399],"wichita falls,tx":[33.9137,-98.4934],"cedar park,tx":[30.5052,-97.8203],
+  "port arthur,tx":[29.8849,-93.9399],"cedar park,tx":[30.5052,-97.8203],
   "temple,tx":[31.0982,-97.3428],"missouri city,tx":[29.6186,-95.5374],"harlingen,tx":[26.1906,-97.6961],
   // Utah
   "salt lake city,ut":[40.7608,-111.8910],"west valley city,ut":[40.6916,-112.0010],"provo,ut":[40.2338,-111.6585],

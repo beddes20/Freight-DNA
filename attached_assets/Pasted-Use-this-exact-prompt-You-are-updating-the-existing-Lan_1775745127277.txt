@@ -1,0 +1,560 @@
+Use this exact prompt:
+
+You are updating the existing Lane Work Queue in the Value Truck app.
+
+This is not a greenfield feature. Extend the current lane workflow so users can recognize when a lane already has a small, proven carrier pool that consistently covers it, and can move faster without reworking the lane from scratch every time.
+
+Objective
+Add a lane-level capability for consistent / incumbent carrier coverage.
+
+Business idea:
+
+Some lanes already have 2–3 carriers that reliably run them every time
+
+In those cases, the user should be able to treat the lane as having an established coverage strategy
+
+The system should still preserve accountability, history, ranking, and fallback behavior if those carriers are unavailable
+
+Example:
+
+Lane: Macon, GA → Marietta, PA
+
+If the same 2–3 carriers have covered this lane repeatedly and successfully, the system should reflect that
+
+The user should be able to see that this lane is effectively “stable” from a procurement perspective and act accordingly
+
+Important:
+Do not implement this as a vague one-off “mark complete” button with no structure.
+This should be a real lane coverage state, backed by history and visible in the Lane Work Queue and right-side carrier panel.
+
+Product intent
+The goal is to reduce unnecessary manual procurement work on repeat lanes that already have proven carrier coverage.
+
+This feature should:
+
+speed up lane handling
+
+make proven lane history more actionable
+
+help users distinguish between:
+
+lanes that need active procurement
+
+lanes that already have a stable incumbent carrier bench
+
+preserve fallback paths when incumbents fail, decline, or become ineligible
+
+This should tie directly into:
+
+Lane Work Queue
+
+right-side carrier suggestions panel
+
+existing ranking logic
+
+lane tasks
+
+carrier status filters
+
+existing distinction between claimed fit and proven fit
+
+Use proven historical coverage, not claimed lane preferences, to drive this feature.
+
+Feature to add
+Add a lane-level concept called something like:
+
+Stable Coverage
+
+or Consistent Carrier Coverage
+
+or Incumbent Coverage
+
+Pick the clearest product name, but implement the concept as a formal status/state, not just a tag.
+
+Meaning of the state
+A lane with Stable Coverage means:
+
+this lane has a small pool of proven carriers
+
+they have covered this lane repeatedly and successfully
+
+procurement on this lane should typically start with those carriers
+
+the lane may require less open-market search unless an exception occurs
+
+This does not mean the lane is permanently done.
+It means the coverage strategy is established.
+
+Core requirements
+1) Add a lane coverage status
+Add a lane-level status for coverage stability.
+
+Suggested statuses:
+
+unstable
+
+watch
+
+stable
+
+Or, if easier:
+
+none
+
+developing
+
+stable
+
+The system must be able to distinguish:
+
+no proven recurring carrier pool
+
+some repeat success but not enough confidence yet
+
+clearly established recurring coverage
+
+2) Stable status must be driven by historical proof
+Use historical load / coverage data to determine lane stability.
+
+Do not base this on:
+
+claimed lane preferences
+
+user guesswork alone
+
+one successful move
+
+manual tagging with no evidence
+
+At minimum, the logic should look at:
+
+exact lane or normalized corridor match
+
+equipment / service compatibility
+
+recent successful load coverage
+
+repeat usage of the same carriers
+
+carrier eligibility (active / inactive / flagged / do_not_use)
+
+service quality / fallout signals if available
+
+3) Add a reviewable/manual override path
+Even if we auto-detect stability, the user should be able to:
+
+confirm the lane as stable
+
+remove stable status
+
+force broader procurement if the current incumbents are failing
+
+This should be a reviewable workflow, not a hidden automatic black box.
+
+Proposed qualification logic
+Implement a first-pass rules-based version.
+
+A lane can qualify as stable if all or most of the following are true:
+
+there is enough recent sample size, for example:
+
+at least 8–10 similar historical loads
+
+the same 2–3 carriers account for a high share of successful coverage, for example:
+
+70%+ of recent successful moves
+
+those carriers are still eligible:
+
+not do_not_use
+
+not inactive
+
+not disqualified by equipment / region / compliance filters
+
+the lane pattern is consistent enough:
+
+same normalized origin / destination corridor
+
+same equipment / trailer type
+
+same general service pattern
+
+A lane should fall into watch if:
+
+there is some repeat history
+
+but not enough consistency yet
+
+or the incumbent pool is shrinking
+
+or there are reliability concerns
+
+A lane should be unstable if:
+
+there is not enough proven repeat coverage
+
+or historical carriers are no longer viable
+
+or load outcomes show the lane needs active procurement
+
+Make threshold values configurable as constants if possible.
+
+Suggested data model
+Do not bolt this onto random ad hoc fields if a cleaner table is reasonable.
+
+Preferred approach: create a lane coverage profile concept.
+
+Suggested table: lane_coverage_profiles
+Fields could include:
+
+id
+
+lane_key or normalized lane identifier
+
+origin_key
+
+destination_key
+
+equipment_type
+
+coverage_status (unstable, watch, stable)
+
+sample_size
+
+successful_coverage_rate
+
+primary_carrier_count
+
+qualified_at
+
+last_evaluated_at
+
+manually_confirmed_by_user_id nullable
+
+manual_override_status nullable
+
+manual_override_reason nullable
+
+notes nullable
+
+Suggested table: lane_coverage_profile_carriers
+Fields could include:
+
+id
+
+lane_coverage_profile_id
+
+carrier_id
+
+rank
+
+successful_load_count
+
+recent_load_count
+
+coverage_share
+
+last_used_at
+
+last_success_at
+
+falloff_count nullable
+
+service_issue_count nullable
+
+is_current_primary boolean
+
+If you can do this with existing tables and clean derived logic, that is okay, but keep the concept explicit and testable.
+
+Lane Work Queue UI changes
+Add clear UI in the Lane Work Queue so the user can tell when a lane already has stable coverage.
+
+Queue row / list behavior
+Show a visible status indicator on each lane row, such as:
+
+Stable
+
+Watch
+
+Unstable
+
+If stable, also show a short supporting stat such as:
+
+“3 proven carriers”
+
+“Covered by same pool on 12 of last 15 loads”
+
+“Incumbent-first”
+
+Lane detail / right-side panel
+Add a section in the right-side panel for stable coverage evidence.
+
+Show:
+
+coverage status
+
+why it has that status
+
+top incumbent carriers
+
+recent usage counts
+
+success / recency summary
+
+Example:
+
+Stable Coverage
+
+3 proven carriers covered 14 of last 16 matching loads
+
+Last used 2 days ago
+
+Recommended mode: incumbent-first outreach
+
+Actions
+If the lane is stable, provide actions like:
+
+Use incumbent flow
+
+Broaden search
+
+Remove stable status
+
+Confirm stable coverage
+
+Do not make this a dead label; it needs actionability.
+
+Ranking changes
+Stable lane coverage must affect existing ranking logic.
+
+When a lane is stable:
+
+heavily boost carriers with proven exact-lane history on that lane
+
+heavily boost recency and success on that lane
+
+heavily boost customer-specific lane history
+
+preserve existing carrier status rules (active, inactive, flagged, do_not_use)
+
+still allow non-incumbent carriers to appear as fallback options
+
+Important:
+Do not turn stable coverage into a hard lock that hides the rest of the market.
+This should be:
+
+incumbent-first
+
+not incumbent-only
+
+The right panel should still allow:
+
+load more carriers
+
+alternate options
+
+discovery if incumbents fail
+
+Workflow behavior
+If lane is stable
+Default workflow should be:
+
+Show stable coverage evidence
+
+Rank proven incumbents first
+
+Let user reach out / tender to those carriers first
+
+If no response / decline / failure within normal SLA, broaden search and revert to normal procurement motion
+
+If lane is watch
+Default workflow should be:
+
+still show likely incumbents
+
+still allow faster handling
+
+but make it clear the lane is not fully proven yet
+
+If lane is unstable
+Default workflow should remain the current normal procurement flow
+
+Task behavior
+This feature should interact with existing lane tasks.
+
+If a lane is stable:
+
+tasking should reflect that procurement may be “incumbent-first” rather than “full search”
+
+if incumbents accept and lane is covered, resolution should work normally
+
+if incumbents fail, task should remain open or escalate appropriately
+
+Potential task statuses / metadata:
+
+coverage_strategy = incumbent_first
+
+coverage_strategy = open_procurement
+
+Do not auto-complete important work just because a lane is marked stable.
+Stable means faster path, not guaranteed success.
+
+Manual controls and guardrails
+Add manual controls, but keep them constrained.
+
+User should be able to:
+
+confirm stable status
+
+remove / downgrade stable status
+
+force broader procurement on a specific lane occurrence
+
+Guardrails:
+
+do not allow do_not_use or ineligible carriers to be treated as incumbents
+
+if a stable carrier pool goes stale, the lane should downgrade automatically or surface a warning
+
+if the lane changes materially (equipment, appointment type, service complexity), stable status should not blindly carry over
+
+Edge cases to handle
+Please think through and account for:
+
+lane has repeat history, but one of the incumbents is now flagged or do_not_use
+
+lane has repeat history, but only one carrier is actually carrying all the loads
+
+lane has stable dry van history, but current load is reefer / flatbed / different equipment
+
+lane history exists, but customer-specific history conflicts with general lane history
+
+lane was stable historically, but no incumbent has covered it recently
+
+lane is stable, but current pricing / market conditions make incumbents less reliable
+
+lane has too little historical volume to make a strong determination
+
+user manually confirms stable status, but system evidence later degrades
+
+Engineering expectations
+Keep it production-oriented
+Do not rewrite the whole Lane Work Queue.
+Implement this as an additive improvement on top of the current system.
+
+Reuse current ranking inputs
+You already have:
+
+region/equipment fit
+
+exact lane history
+
+customer history
+
+prior outreach outcomes
+
+carrier status filtering
+
+Build on that instead of introducing an unrelated scoring model.
+
+Keep claimed vs proven fit separate
+This is a hard requirement.
+Stable lane coverage must be based on proven coverage history, not carrier-claimed preferences.
+
+Make thresholds configurable
+Put thresholds in constants or config where reasonable, for example:
+
+min historical sample
+
+stable coverage threshold
+
+watch threshold
+
+incumbent carrier count cap
+
+Suggested implementation helpers
+Consider adding or updating helpers like:
+
+getLaneCoverageProfile(lane)
+
+evaluateLaneCoverageStatus(laneHistory)
+
+getIncumbentCarriersForLane(lane)
+
+isStableCoverageEligible(load, carrier)
+
+shouldUseIncumbentFirstFlow(lane)
+
+Use clear names and centralize the logic so this does not get spread across UI components.
+
+Tests required
+Add or update tests for at least:
+
+Coverage status logic
+lane with strong repeated coverage by 2–3 carriers becomes stable
+
+lane with partial repeat history becomes watch
+
+lane with weak / scattered history stays unstable
+
+Carrier eligibility
+do_not_use carrier cannot qualify as incumbent
+
+flagged / inactive carrier handling is correct
+
+Equipment / lane specificity
+stable dry van lane does not incorrectly apply to reefer load
+
+exact / normalized lane matching works as intended
+
+Ranking impact
+stable lane ranks proven incumbents above generic fit carriers
+
+fallback carriers still remain visible
+
+stable status does not completely suppress broader carrier options
+
+Manual controls
+user can confirm stable coverage
+
+user can remove / downgrade stable coverage
+
+forcing broader procurement works and does not corrupt history
+
+UI behavior
+stable status appears in queue row and right panel
+
+incumbent evidence text renders correctly
+
+proper actions are shown for stable vs watch vs unstable
+
+Task interaction
+stable lane can still go through normal resolution flow
+
+failed incumbent-first attempt keeps or escalates the task appropriately
+
+Deliverables
+Please return:
+
+summary of what you changed
+
+exact files changed
+
+data model / migration changes
+
+threshold assumptions used
+
+any follow-up recommendations
+
+Important:
+
+keep scope focused
+
+do not create disconnected admin screens
+
+make this live inside the existing Lane Work Queue + carrier suggestion workflow
+
+optimize for speed, consistency, and better use of lane history
+
+If implementation tradeoffs come up, prefer the version that makes proven lane history operationally useful inside the queue without hiding fallback options or collapsing claimed/proven distinctions.

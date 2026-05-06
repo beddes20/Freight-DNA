@@ -21,6 +21,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 type PeriodOption = "current" | "last" | "ytd";
+type ScopeOption = "mine" | "all";
 
 function getPeriodLabel(period: PeriodOption): string {
   const now = new Date();
@@ -382,7 +383,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
         )}
 
         {!isLmRole && (
-          <div className="grid grid-cols-5 gap-1.5 mb-2">
+          <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5 mb-2">
             <StatPill value={rep.openTasks} label="Open" color={rep.openTasks > 5 ? "text-amber-600" : "text-foreground"} />
             <StatPill value={rep.overdueTasks} label="Overdue" color={rep.overdueTasks > 0 ? "text-red-600" : "text-foreground"} />
             <StatPill value={rep.companyCount} label="Accounts" color="text-blue-600" />
@@ -419,7 +420,7 @@ function RepCard({ rep, totalLoads, totalMargin, totalRevenue, criteria, nominat
           </div>
         )}
 
-        <div className="grid grid-cols-5 gap-1.5 mb-1.5">
+        <div className="grid grid-cols-3 md:grid-cols-5 gap-1.5 mb-1.5">
           <StatPill value={rep.callTouchpoints} label="Calls" color="text-blue-600" icon={<Phone className="h-3 w-3 text-blue-500" />} />
           <StatPill value={rep.textTouchpoints} label="Texts" color="text-green-600" icon={<MessageSquare className="h-3 w-3 text-green-500" />} />
           <StatPill value={rep.emailTouchpoints} label="Emails" color="text-purple-600" icon={<Mail className="h-3 w-3 text-purple-500" />} />
@@ -529,6 +530,81 @@ function sortReps(arr: RepPerf[], by: SortOption): RepPerf[] {
 }
 
 type BulkSendResult = { sent: number; failed: number; total: number; results: { name: string; email: string | null; ok: boolean }[] };
+type DispatcherSummaryRow = { dispatcherName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+type RepeatCarrierRow = { dispatcherName: string; totalLoads: number; repeatCarrierLoads: number; repeatCarrierPct: number };
+type SalespersonSummaryRow = { salespersonName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+type GapEntry = { name: string; loads: number; column: string };
+type GoalShape = { id: string; amId: string; metric: string; startDate: string; endDate: string; currentValue: string | null; target: string };
+type CadenceAlert = { companyId: string; companyName: string; repName: string; repId: string; daysSinceTouch: number; orgId: string };
+
+function CadenceAccountabilitySection() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin" || user?.role === "director";
+  const [expanded, setExpanded] = useState(false);
+
+  const { data: alerts = [], isLoading } = useQuery<CadenceAlert[]>({
+    queryKey: ["/api/team/cadence-alerts"],
+    enabled: isAdmin,
+  });
+
+  if (!isAdmin) return null;
+  if (isLoading) return null;
+  if (alerts.length === 0) return null;
+
+  const preview = expanded ? alerts : alerts.slice(0, 5);
+
+  return (
+    <div
+      className="border rounded-xl p-5 space-y-4 bg-red-50/30 dark:bg-red-950/10 border-red-200 dark:border-red-800"
+      data-testid="section-cadence-alerts"
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <CalendarClock className="w-4 h-4 text-red-600 dark:text-red-400" />
+          <h2 className="font-semibold text-sm">Cadence Accountability</h2>
+          <Badge className="bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 text-[10px] px-1.5 py-0">
+            {alerts.length} account{alerts.length !== 1 ? "s" : ""} overdue
+          </Badge>
+        </div>
+        <span className="text-xs text-muted-foreground">No touchpoints in 30+ days</span>
+      </div>
+
+      <div className="space-y-2">
+        {preview.map(alert => (
+          <div
+            key={`${alert.repId}-${alert.companyId}`}
+            className="flex items-center justify-between gap-3 p-3 rounded-lg border bg-background hover:bg-muted/30 transition-colors"
+            data-testid={`row-cadence-alert-${alert.companyId}`}
+          >
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Building2 className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                <span className="text-sm font-medium truncate">{alert.companyName}</span>
+                <Badge variant="outline" className="text-[10px] px-1 py-0 text-muted-foreground">
+                  {alert.repName}
+                </Badge>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs font-medium text-red-600 dark:text-red-400 shrink-0">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              {alert.daysSinceTouch}d ago
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {alerts.length > 5 && (
+        <button
+          onClick={() => setExpanded(e => !e)}
+          className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          data-testid="button-cadence-expand"
+        >
+          {expanded ? <><ChevronUp className="w-3 h-3" /> Show less</> : <><ChevronDown className="w-3 h-3" /> Show {alerts.length - 5} more</>}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function TeamPerformancePage() {
   const { user } = useAuth();
@@ -536,12 +612,20 @@ export default function TeamPerformancePage() {
   const [, navigate] = useLocation();
   const search = useSearch();
   const urlPeriod = new URLSearchParams(search).get("period") as PeriodOption | null;
+  const urlScope = new URLSearchParams(search).get("scope") as ScopeOption | null;
   const [period, setPeriod] = useState<PeriodOption>(urlPeriod || "current");
+  // Task #1060 — Team Performance is open to all users; non-admins default to
+  // their own reporting tree ("mine") and can opt into the org-wide view ("all").
+  const [scope, setScope] = useState<ScopeOption>(urlScope === "all" ? "all" : "mine");
   const [sortBy, setSortBy] = useState<SortOption>("alpha");
 
   useEffect(() => {
-    const p = new URLSearchParams(search).get("period") as PeriodOption | null;
+    const params = new URLSearchParams(search);
+    const p = params.get("period") as PeriodOption | null;
     if (p && p !== period) setPeriod(p);
+    const s = params.get("scope") as ScopeOption | null;
+    const nextScope: ScopeOption = s === "all" ? "all" : "mine";
+    if (nextScope !== scope) setScope(nextScope);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
   const [showBulkSend, setShowBulkSend] = useState(false);
@@ -549,14 +633,20 @@ export default function TeamPerformancePage() {
   const [bulkResult, setBulkResult] = useState<BulkSendResult | null>(null);
   const [nominationTarget, setNominationTarget] = useState<RepPerf | null>(null);
 
-  const { data: reps = [], isLoading } = useQuery<RepPerf[]>({
-    queryKey: ["/api/team/performance", period],
+  const { data: teamPerfResponse, isLoading } = useQuery<{ reps: RepPerf[]; teamMappingMissing: boolean }>({
+    queryKey: ["/api/team/performance", period, scope],
     queryFn: async () => {
-      const res = await fetch(`/api/team/performance?period=${period}`, { credentials: "include" });
+      const res = await fetch(`/api/team/performance?period=${period}&scope=${scope}`, { credentials: "include" });
       if (!res.ok) throw new Error(`Failed to fetch team performance: ${res.status}`);
-      return res.json();
+      const json = await res.json();
+      // Back-compat: tolerate either the legacy bare-array shape or the new
+      // `{ reps, teamMappingMissing }` envelope.
+      if (Array.isArray(json)) return { reps: json as RepPerf[], teamMappingMissing: false };
+      return { reps: json.reps ?? [], teamMappingMissing: !!json.teamMappingMissing };
     },
   });
+  const reps: RepPerf[] = teamPerfResponse?.reps ?? [];
+  const teamMappingMissing = !!teamPerfResponse?.teamMappingMissing;
 
   const { data: accountSummary = [] } = useQuery<AccountSummaryRow[]>({
     queryKey: ["/api/financials/account-summary", period],
@@ -567,7 +657,6 @@ export default function TeamPerformancePage() {
     },
   });
 
-  type DispatcherSummaryRow = { dispatcherName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
   const { data: dispatcherSummary = [] } = useQuery<DispatcherSummaryRow[]>({
     queryKey: ["/api/financials/dispatcher-summary", period],
     queryFn: async () => {
@@ -577,7 +666,6 @@ export default function TeamPerformancePage() {
     },
   });
 
-  type RepeatCarrierRow = { dispatcherName: string; totalLoads: number; repeatCarrierLoads: number; repeatCarrierPct: number };
   const { data: repeatCarriersData = [] } = useQuery<RepeatCarrierRow[]>({
     queryKey: ["/api/financials/repeat-carriers", period],
     queryFn: async () => {
@@ -587,7 +675,6 @@ export default function TeamPerformancePage() {
     },
   });
 
-  type SalespersonSummaryRow = { salespersonName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
   const { data: salespersonSummary = [] } = useQuery<SalespersonSummaryRow[]>({
     queryKey: ["/api/financials/salesperson-summary", period],
     queryFn: async () => {
@@ -602,7 +689,6 @@ export default function TeamPerformancePage() {
   });
 
   const [showGaps, setShowGaps] = useState(false);
-  type GapEntry = { name: string; loads: number; column: string };
   const { data: attributionGaps } = useQuery<{
     opsUserGaps: GapEntry[];
     dispatcherGaps: GapEntry[];
@@ -630,7 +716,6 @@ export default function TeamPerformancePage() {
 
   const [viewMode, setViewMode] = useState<"grid" | "leaderboard">("grid");
 
-  type GoalShape = { id: string; amId: string; metric: string; startDate: string; endDate: string; currentValue: string | null; target: string };
   const { data: goals = [] } = useQuery<GoalShape[]>({
     queryKey: ["/api/goals"],
     staleTime: 60000,
@@ -639,7 +724,6 @@ export default function TeamPerformancePage() {
   // Opportunity / Win summary for current period
   const oppPeriodStart = (() => {
     const now = new Date();
-    if (period === "weekly") { const d = new Date(now); d.setDate(d.getDate() - 7); return d.toISOString().split("T")[0]; }
     if (period === "last") { const d = new Date(now.getFullYear(), now.getMonth() - 1, 1); return d.toISOString().split("T")[0]; }
     if (period === "ytd") { return `${now.getFullYear()}-01-01`; }
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
@@ -654,6 +738,7 @@ export default function TeamPerformancePage() {
     queryFn: async () => {
       if (!repIdsParam) return [];
       const res = await fetch(`/api/opportunity-logs/summary?repIds=${repIdsParam}&startDate=${oppPeriodStart}&endDate=${oppPeriodEnd}`, { credentials: "include" });
+      if (!res.ok) return [];
       return res.json();
     },
     enabled: reps.length > 0,
@@ -693,10 +778,13 @@ export default function TeamPerformancePage() {
     },
   });
 
-  if (!user || user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
+  // Task #1060 — Team Performance is open to all authenticated users. The
+  // legacy "Access denied" early-return for account_manager / logistics_manager
+  // / logistics_coordinator has been removed. We still need a `user` to render.
+  if (!user) {
     return (
       <div className="flex items-center justify-center h-full text-muted-foreground">
-        <p>Access denied</p>
+        <p>Loading…</p>
       </div>
     );
   }
@@ -827,24 +915,25 @@ export default function TeamPerformancePage() {
   };
 
   return (
-    <div className="p-6 space-y-6 max-w-6xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-lg bg-blue-100 dark:bg-blue-900/40 flex items-center justify-center">
-            <BarChart3 className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-          </div>
+    <div className="p-4 md:p-6 space-y-4 md:space-y-6 max-w-6xl mx-auto">
+      <div className="relative overflow-hidden rounded-xl px-6 py-5 text-white" style={{ background: "#0d0d0d", border: "1px solid #1f1f1f" }}>
+        <div className="pointer-events-none absolute -top-10 -right-10 h-48 w-48 rounded-full" style={{ background: "rgba(255,180,0,0.04)" }} />
+        <div className="pointer-events-none absolute -bottom-8 -right-4 h-32 w-32 rounded-full" style={{ background: "rgba(255,180,0,0.03)" }} />
+        <div className="relative flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
           <div>
-            <h1 className="text-xl font-semibold" data-testid="text-page-title">Team Performance</h1>
-            <p className="text-sm text-muted-foreground">KPIs across your team — tasks, accounts, and activity</p>
+            <h1 className="text-xl font-bold flex items-center gap-2" data-testid="text-page-title">
+              <BarChart3 className="h-5 w-5" style={{ color: "#ffb400" }} />
+              Team Performance
+            </h1>
+            <p className="text-white/60 text-sm mt-1">KPIs across your team — tasks, accounts, and activity</p>
           </div>
-        </div>
         <div className="flex flex-col items-start sm:items-end gap-2">
           <div className="flex items-center gap-2">
-            <div className="flex items-center rounded-lg border bg-muted/40 p-0.5 gap-0.5" data-testid="toggle-view-mode">
+            <div className="flex items-center rounded-lg border border-white/15 bg-white/5 p-0.5 gap-0.5" data-testid="toggle-view-mode">
               <button
                 onClick={() => setViewMode("grid")}
                 data-testid="button-view-grid"
-                className={`p-1.5 rounded-md transition-all ${viewMode === "grid" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                className={`p-1.5 rounded-md transition-all ${viewMode === "grid" ? "bg-white/15 text-white shadow-sm" : "text-white/60 hover:text-white hover:bg-white/10"}`}
                 title="Card grid view"
               >
                 <LayoutGrid className="h-3.5 w-3.5" />
@@ -852,7 +941,7 @@ export default function TeamPerformancePage() {
               <button
                 onClick={() => setViewMode("leaderboard")}
                 data-testid="button-view-leaderboard"
-                className={`p-1.5 rounded-md transition-all ${viewMode === "leaderboard" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                className={`p-1.5 rounded-md transition-all ${viewMode === "leaderboard" ? "bg-white/15 text-white shadow-sm" : "text-white/60 hover:text-white hover:bg-white/10"}`}
                 title="Leaderboard view"
               >
                 <List className="h-3.5 w-3.5" />
@@ -861,7 +950,7 @@ export default function TeamPerformancePage() {
             <Button
               size="sm"
               variant="outline"
-              className="h-8 text-xs gap-1.5"
+              className="h-8 text-xs gap-1.5 border-white/20 bg-white/5 text-white hover:bg-white/10 hover:text-white"
               onClick={handleExportCsv}
               data-testid="button-export-csv"
             >
@@ -871,7 +960,7 @@ export default function TeamPerformancePage() {
             <Button
               size="sm"
               variant="outline"
-              className="h-8 text-xs gap-1.5 border-blue-200 text-blue-700 hover:bg-blue-50 dark:border-blue-800 dark:text-blue-400 dark:hover:bg-blue-950/30"
+              className="h-8 text-xs gap-1.5 border-blue-400/40 bg-blue-500/10 text-blue-200 hover:bg-blue-500/20 hover:text-blue-100"
               onClick={() => { setBulkResult(null); setShowBulkSend(true); }}
               data-testid="button-send-all-reports"
             >
@@ -879,8 +968,8 @@ export default function TeamPerformancePage() {
               Email All Reports
             </Button>
             <Select value={sortBy} onValueChange={v => setSortBy(v as SortOption)}>
-              <SelectTrigger className="h-8 w-44 text-xs" data-testid="select-sort-by">
-                <ArrowUpDown className="h-3 w-3 mr-1 text-muted-foreground shrink-0" />
+              <SelectTrigger className="h-8 w-44 text-xs border-white/20 bg-white/5 text-white hover:bg-white/10 [&>svg]:text-white/70" data-testid="select-sort-by">
+                <ArrowUpDown className="h-3 w-3 mr-1 text-white/70 shrink-0" />
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -891,16 +980,41 @@ export default function TeamPerformancePage() {
                 <SelectItem value="accounts">Most Accounts</SelectItem>
               </SelectContent>
             </Select>
-            <div className="flex items-center rounded-lg border bg-muted/40 p-0.5 gap-0.5" data-testid="toggle-period">
+            {/* Task #1060 — My Team / All Teams scope toggle. Default is "mine"
+                (the caller's reporting tree); flipping to "all" returns the
+                org-wide rep set. Persisted to the URL so deep-links survive. */}
+            <div className="flex items-center rounded-lg border border-white/15 bg-white/5 p-0.5 gap-0.5" data-testid="toggle-team-scope">
+              {([
+                { v: "mine", label: "My Team" },
+                { v: "all", label: "All Teams" },
+              ] as Array<{ v: ScopeOption; label: string }>).map(opt => (
+                <button
+                  key={opt.v}
+                  data-testid={`toggle-team-scope-${opt.v}`}
+                  onClick={() => {
+                    setScope(opt.v);
+                    navigate(`/team-performance?period=${period}&scope=${opt.v}`, { replace: true });
+                  }}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
+                    scope === opt.v
+                      ? "bg-white/15 text-white shadow-sm"
+                      : "text-white/60 hover:text-white hover:bg-white/10"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center rounded-lg border border-white/15 bg-white/5 p-0.5 gap-0.5" data-testid="toggle-period">
               {(["current", "last", "ytd"] as PeriodOption[]).map((opt) => (
                 <button
                   key={opt}
                   data-testid={`button-period-${opt}`}
-                  onClick={() => { setPeriod(opt); navigate(`/team-performance?period=${opt}`, { replace: true }); }}
+                  onClick={() => { setPeriod(opt); navigate(`/team-performance?period=${opt}&scope=${scope}`, { replace: true }); }}
                   className={`px-3 py-1.5 text-xs font-medium rounded-md transition-all ${
                     period === opt
-                      ? "bg-background shadow-sm text-foreground"
-                      : "text-muted-foreground hover:text-foreground"
+                      ? "bg-white/15 text-white shadow-sm"
+                      : "text-white/60 hover:text-white hover:bg-white/10"
                   }`}
                 >
                   {opt === "current" ? "This Month" : opt === "last" ? "Last Month" : "YTD"}
@@ -909,17 +1023,18 @@ export default function TeamPerformancePage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <p className="text-xs text-muted-foreground" data-testid="text-period-label">
+            <p className="text-xs text-white/70" data-testid="text-period-label">
               {getPeriodLabel(period)}
             </p>
             {lastUploadInfo?.uploadedAt && (
-              <span className="flex items-center gap-1 text-[11px] text-muted-foreground/70 border border-dashed border-muted-foreground/30 rounded px-1.5 py-0.5" data-testid="text-data-as-of">
+              <span className="flex items-center gap-1 text-[11px] text-white/70 border border-dashed border-white/30 rounded px-1.5 py-0.5" data-testid="text-data-as-of">
                 <CalendarClock className="h-3 w-3" />
                 Data as of {new Date(lastUploadInfo.uploadedAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
               </span>
             )}
           </div>
         </div>
+      </div>
       </div>
 
       {isLoading ? (
@@ -928,6 +1043,37 @@ export default function TeamPerformancePage() {
         </div>
       ) : (
         <>
+          {/* Task #1060 — Honest empty-state for users without a resolvable
+              reporting line. The All Teams toggle remains available so they
+              can still pivot to the org-wide view. */}
+          {teamMappingMissing && scope === "mine" && (
+            <Card className="border-amber-300/40 bg-amber-50/40 dark:bg-amber-950/20" data-testid="card-team-mapping-missing">
+              <CardContent className="pt-4 pb-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-amber-900 dark:text-amber-200" data-testid="text-team-mapping-missing-title">
+                    We couldn't find a team mapping for you
+                  </p>
+                  <p className="text-xs text-amber-800/80 dark:text-amber-200/80">
+                    Ask your manager or an admin to set your reporting line.
+                    In the meantime you can switch to All Teams to browse the
+                    full org view.
+                  </p>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 text-xs border-amber-400 text-amber-900 dark:text-amber-100 hover:bg-amber-100 dark:hover:bg-amber-900/40"
+                  data-testid="button-switch-to-all-teams"
+                  onClick={() => {
+                    setScope("all");
+                    navigate(`/team-performance?period=${period}&scope=all`, { replace: true });
+                  }}
+                >
+                  Switch to All Teams
+                </Button>
+              </CardContent>
+            </Card>
+          )}
           <div className="space-y-3">
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               {[
@@ -940,7 +1086,7 @@ export default function TeamPerformancePage() {
                 <Card
                   key={stat.label}
                   className="cursor-pointer hover:shadow-md hover:border-primary/30 transition-all"
-                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}`)}
+                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}&scope=${scope}`)}
                   data-testid={`portlet-${stat.metric}`}
                 >
                   <CardContent className="pt-4 pb-3">
@@ -964,7 +1110,7 @@ export default function TeamPerformancePage() {
                 <Card
                   key={stat.label}
                   className="cursor-pointer hover:shadow-md hover:border-primary/30 transition-all"
-                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}`)}
+                  onClick={() => navigate(`/team-performance/detail/${stat.metric}?period=${period}&scope=${scope}`)}
                   data-testid={`portlet-${stat.metric}`}
                 >
                   <CardContent className="pt-4 pb-3">
@@ -1069,7 +1215,7 @@ export default function TeamPerformancePage() {
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2">
                               <span className="font-medium text-sm">{rep.name}</span>
-                              {isLagging && <Lightbulb className="h-3 w-3 text-amber-500 shrink-0" title="Needs coaching attention" />}
+                              {isLagging && <span title="Needs coaching attention"><Lightbulb className="h-3 w-3 text-amber-500 shrink-0" /></span>}
                             </div>
                             <span className="text-[10px] text-muted-foreground capitalize">{rep.role.replace(/_/g, " ")}</span>
                           </td>
@@ -1391,6 +1537,9 @@ export default function TeamPerformancePage() {
           )}
         </div>
       )}
+
+      {/* Cadence Accountability */}
+      <CadenceAccountabilitySection />
 
       {/* Nominate Dialog */}
       <Dialog open={!!nominationTarget} onOpenChange={(open) => { if (!open) setNominationTarget(null); }}>
