@@ -445,7 +445,7 @@ export function AppSidebar() {
           <SidebarGroupContent>
             <SidebarMenu>
               {navItems
-                .filter(item => isFeatureVisibleFor(item, user?.role))
+                .filter(item => item.status !== "admin_preview" && isFeatureVisibleFor(item, user?.role))
                 .map(item => (
                   <NavLink
                     key={item.title}
@@ -464,7 +464,7 @@ export function AppSidebar() {
 
         {/* ── Customer-Facing ── */}
         {(() => {
-          const visible = customerFacingItems.filter(item => isFeatureVisibleFor(item, user?.role));
+          const visible = customerFacingItems.filter(item => item.status !== "admin_preview" && isFeatureVisibleFor(item, user?.role));
           if (visible.length === 0) return null;
           return (
             <CollapsibleGroup label="Customer-Facing">
@@ -499,7 +499,7 @@ export function AppSidebar() {
             render this as a label-less SidebarGroup so it sits as a single
             clean row between the Customer-Facing and Carrier-Facing groups
             without earning its own collapsible header. */}
-        {isFeatureVisibleFor(aiHubItem, user?.role) && (() => {
+        {aiHubItem.status !== "admin_preview" && isFeatureVisibleFor(aiHubItem, user?.role) && (() => {
           const aiDisabled = isFeatureDisabledFor(aiHubItem, user?.role);
           const aiPreviewLabel = featurePreviewLabel(aiHubItem.status);
           const aiPreviewTooltip = featurePreviewTooltip(aiHubItem.title, aiHubItem.status, user?.role);
@@ -554,7 +554,7 @@ export function AppSidebar() {
 
         {/* ── Carrier-Facing ── */}
         {(() => {
-          const visible = carrierFacingItems.filter(item => isFeatureVisibleFor(item, user?.role));
+          const visible = carrierFacingItems.filter(item => item.status !== "admin_preview" && isFeatureVisibleFor(item, user?.role));
           if (visible.length === 0) return null;
           return (
             <CollapsibleGroup label="Carrier-Facing">
@@ -764,6 +764,90 @@ export function AppSidebar() {
                 )}
           </CollapsibleGroup>
         )}
+
+        {/* ── Future Rollouts ──
+            Aggregates every nav entry currently marked `admin_preview`
+            into a single collapsible group rendered directly under the
+            Admin group. Only admins see this group (every entry inside
+            is `admin_preview`, which is hidden for non-admins by
+            `isFeatureVisibleFor`). The group never renders empty. */}
+        {(() => {
+          const futureRolloutItems: NavItem[] = [
+            ...navItems.filter(i => i.status === "admin_preview"),
+            ...customerFacingItems.filter(i => i.status === "admin_preview"),
+            ...(aiHubItem.status === "admin_preview" ? [aiHubItem] : []),
+            ...carrierFacingItems.filter(i => i.status === "admin_preview"),
+          ];
+          const visible = futureRolloutItems.filter(item => isFeatureVisibleFor(item, user?.role));
+          if (visible.length === 0) return null;
+          return (
+            <CollapsibleGroup
+              label="Future Rollouts"
+              defaultOpen={false}
+              storageKey="sidebar-group-future-rollouts"
+            >
+              {visible.map(item => {
+                // Preserve the AI hub's custom testid (`link-ai-hub`),
+                // tour anchor, and broader active-route matching so
+                // existing tests / muscle memory keep working.
+                if (item === aiHubItem) {
+                  const aiDisabled = isFeatureDisabledFor(aiHubItem, user?.role);
+                  const aiPreviewLabel = featurePreviewLabel(aiHubItem.status);
+                  const aiPreviewTooltip = featurePreviewTooltip(aiHubItem.title, aiHubItem.status, user?.role);
+                  const aiTooltip = aiPreviewTooltip
+                    ?? navTooltip(aiHubItem.title, resolveDescription(aiHubItem.title, aiHubItem.description, tooltipOverrides));
+                  const aiGreyed = !!aiPreviewLabel;
+                  return (
+                    <SidebarMenuItem key={aiHubItem.title}>
+                      <SidebarMenuButton
+                        asChild
+                        isActive={!aiDisabled && (isActive(aiHubItem.url) || isActive("/daily-priorities") || isActive("/valueiq") || location.startsWith("/ai/") || location === "/ai" || isActive("/admin/ai-engagement") || isActive("/admin/copilot-analytics"))}
+                        tooltip={aiTooltip}
+                        aria-disabled={aiDisabled || undefined}
+                        className={aiGreyed ? "opacity-60" : undefined}
+                      >
+                        <Link
+                          href={aiHubItem.url}
+                          data-testid="link-ai-hub"
+                          data-tour="tour-ai-hub"
+                          className="relative"
+                          aria-disabled={aiDisabled || undefined}
+                          tabIndex={aiDisabled ? -1 : undefined}
+                          onClick={aiDisabled ? (e) => e.preventDefault() : undefined}
+                        >
+                          <BotMessageSquare className="h-4 w-4" />
+                          <span>{aiHubItem.title}</span>
+                          {aiPreviewLabel && (
+                            <span
+                              className="ml-auto text-[9px] uppercase tracking-wide font-semibold text-muted-foreground/70 border border-muted-foreground/30 rounded px-1 py-0.5"
+                              data-testid="badge-feature-ai"
+                            >
+                              {aiPreviewLabel}
+                            </span>
+                          )}
+                          {!aiDisabled && dailyWorkspaceCount > 0 && DAILY_PRIORITIES_ROLES.includes(user?.role ?? "") && (
+                            <NotificationBadge count={dailyWorkspaceCount} color="green" />
+                          )}
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                }
+                return (
+                  <NavLink
+                    key={item.title}
+                    item={item}
+                    isActive={isActive(item.url)}
+                    overrides={tooltipOverrides}
+                    disabled={isFeatureDisabledFor(item, user?.role)}
+                    previewLabel={featurePreviewLabel(item.status)}
+                    previewTooltip={featurePreviewTooltip(item.title, item.status, user?.role)}
+                  />
+                );
+              })}
+            </CollapsibleGroup>
+          );
+        })()}
       </SidebarContent>
 
       <SidebarFooter className="p-3 border-t border-sidebar-border space-y-3">
