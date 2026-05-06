@@ -11,6 +11,34 @@ import {
 } from "../financialHelpers";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "../cache";
 
+// ── Shared goal visibility helper ───────────────────────────────────────────
+// Single source of truth for "can this user see this goal?" — used by every
+// goal subroute (comments, progress, margin-trend, PATCH) so widening the
+// list endpoint at GET /api/goals can never get out of sync with the detail
+// reads. Mirrors the GET /api/goals visibility tiers:
+//   • admin / director / sales_director → any goal in the user's org
+//   • national_account_manager → goals tied to themselves or their team tree
+//   • account_manager / logistics_manager / sales / etc. → own + goals they set
+type GoalLike = { id: string; namId: string; amId: string };
+type ViewerLike = { id: string; role: string; managerId: string | null; organizationId: string };
+async function canViewGoal(user: ViewerLike, goal: GoalLike): Promise<boolean> {
+  // Org-bound first: an admin from another tenant must never be able to
+  // read/mutate a goal just by knowing its UUID. The goal "belongs to" the
+  // org if either its namId or amId is a user in that org.
+  const orgUsers = await storage.getUsers(user.organizationId);
+  const orgUserIds = new Set(orgUsers.map(u => u.id));
+  const goalInOrg = (goal.namId ? orgUserIds.has(goal.namId) : false) ||
+                    (goal.amId ? orgUserIds.has(goal.amId) : false);
+  if (!goalInOrg) return false;
+  // Within the org:
+  //   • admin / director / sales_director → every goal in the org
+  //   • everyone else (NAM, AM, sales, LM, LC) → only goals they're personally on
+  // The NAM tier intentionally matches GET /api/goals (no team-tree expansion)
+  // so list and detail visibility never drift.
+  if (user.role === "admin" || user.role === "director" || user.role === "sales_director") return true;
+  return goal.namId === user.id || goal.amId === user.id;
+}
+
 export function registerGoalRoutes(app: Express): void {
   // ── Goals ─────────────────────────────────────────────────────────────────
   app.get("/api/goals", requireAuth, async (req, res) => {
@@ -133,6 +161,17 @@ export function registerGoalRoutes(app: Express): void {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.json([]);
+      // Admins, directors, and sales_directors see org-wide monthly-goal
+      // gaps; directors/sales_directors are then narrowed to AMs in their
+      // team tree. NAMs continue to see only their direct reports.
+      if (user.role === "director" || user.role === "sales_director") {
+        const [allMissing, teamIds] = await Promise.all([
+          storage.getAmsMissingMonthlyGoals(user.organizationId),
+          storage.getTeamMemberIds(user.id, user.organizationId),
+        ]);
+        const teamSet = new Set(teamIds);
+        return res.json(allMissing.filter(m => teamSet.has(m.amId)));
+      }
       const namId = user.role === "admin" ? undefined : user.id;
       const missing = await storage.getAmsMissingMonthlyGoals(user.organizationId, namId);
       res.json(missing);
@@ -383,13 +422,15 @@ export function registerGoalRoutes(app: Express): void {
       if (!existing) return res.status(404).json({ error: "Goal not found" });
       let canEdit = user.role === "admin" || existing.namId === user.id || existing.amId === user.id;
       if (!canEdit && (user.role === "director" || user.role === "sales_director")) {
-        // Directors can edit margin goals for users in their own organization
-        const orgId = req.session.organizationId;
-        if (orgId && existing.metric === "margin") {
-          const orgUsers = await storage.getUsers(orgId);
-          const orgUserIds = new Set(orgUsers.map(u => u.id));
-          canEdit = (existing.namId ? orgUserIds.has(existing.namId) : false) ||
-                    (existing.amId ? orgUserIds.has(existing.amId) : false);
+        // Directors can edit margin goals — but only for reps inside their
+        // validated team tree, not arbitrary org users. Tighter than the
+        // earlier org-wide check (caught by code review on the May 2026
+        // director visibility audit).
+        if (existing.metric === "margin") {
+          const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+          const teamSet = new Set<string>([...teamIds, user.id]);
+          canEdit = (existing.namId ? teamSet.has(existing.namId) : false) ||
+                    (existing.amId ? teamSet.has(existing.amId) : false);
         }
       }
       if (!canEdit) return res.status(403).json({ error: "Access denied" });
@@ -476,6 +517,9 @@ export function registerGoalRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const existing = await storage.getGoal(pStr(req.params.id));
       if (!existing) return res.status(404).json({ error: "Goal not found" });
+      // Org-bound first (admin from another tenant cannot delete by UUID),
+      // then role check: only the assigning NAM or an org admin may delete.
+      if (!(await canViewGoal(user, existing))) return res.status(403).json({ error: "Access denied" });
       if (user.role !== "admin" && existing.namId !== user.id) return res.status(403).json({ error: "Access denied" });
       await storage.deleteGoal(pStr(req.params.id));
       cacheInvalidatePrefix(`leaderboard:`);
@@ -489,6 +533,9 @@ export function registerGoalRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const goal = await storage.getGoal(pStr(req.params.id));
+      if (!goal) return res.status(404).json({ error: "Goal not found" });
+      if (!(await canViewGoal(user, goal))) return res.status(403).json({ error: "Access denied" });
       const comments = await storage.getGoalComments(pStr(req.params.id));
       res.json(comments);
     } catch (error) {
@@ -502,8 +549,10 @@ export function registerGoalRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const goal = await storage.getGoal(pStr(req.params.id));
       if (!goal) return res.status(404).json({ error: "Goal not found" });
-      const canComment = user.role === "admin" || goal.namId === user.id || goal.amId === user.id;
-      if (!canComment) return res.status(403).json({ error: "Access denied" });
+      // Comment visibility tier mirrors goal visibility — directors/admins
+      // can comment on team goals, others only on goals they are part of.
+      // Org-bound via canViewGoal (no cross-tenant comment poisoning).
+      if (!(await canViewGoal(user, goal))) return res.status(403).json({ error: "Access denied" });
       const body = (req.body.body || req.body.text || "").trim();
       if (!body) return res.status(400).json({ error: "Comment body is required" });
       const comment = await storage.createGoalComment({
@@ -539,6 +588,12 @@ export function registerGoalRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const comment = await storage.getGoalComment(pStr(req.params.id));
       if (!comment) return res.status(404).json({ error: "Comment not found" });
+      // Org-bind via the parent goal — an admin from another tenant cannot
+      // delete a comment by UUID without org membership on the parent goal.
+      const parentGoal = await storage.getGoal(comment.goalId);
+      if (!parentGoal || !(await canViewGoal(user, parentGoal))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
       if (user.role !== "admin" && comment.authorId !== user.id) return res.status(403).json({ error: "Access denied" });
       await storage.deleteGoalComment(pStr(req.params.id));
       res.json({ ok: true });
@@ -553,6 +608,7 @@ export function registerGoalRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const goal = await storage.getGoal(pStr(req.params.id));
       if (!goal) return res.status(404).json({ error: "Goal not found" });
+      if (!(await canViewGoal(user, goal))) return res.status(403).json({ error: "Access denied" });
       let autoValue: number | null = null;
       const allUsers = await storage.getUsers(req.session.organizationId!);
       const targetUser = allUsers.find(u => u.id === goal.amId);
@@ -648,8 +704,11 @@ export function registerGoalRoutes(app: Express): void {
   // Margin trend: last 6 months of actual margin for the rep tied to a goal
   app.get("/api/goals/:id/margin-trend", requireAuth, async (req, res) => {
     try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
       const goal = await storage.getGoal(pStr(req.params.id));
       if (!goal) return res.status(404).json({ error: "Goal not found" });
+      if (!(await canViewGoal(user, goal))) return res.status(403).json({ error: "Access denied" });
       const allUsers = await storage.getUsers(req.session.organizationId!);
       const amUser = allUsers.find(u => u.id === goal.amId);
       const repKey = amUser ? amUser.financialRepId as string | null : null;
