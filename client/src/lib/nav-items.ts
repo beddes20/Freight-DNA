@@ -211,6 +211,7 @@ export const adminItems: NavItem[] = [
   { title: "Sidebar Tooltips",    url: "/admin/sidebar-tooltips",            icon: HelpCircle, description: "Edit per-item sidebar tooltip overrides.", roles: ["admin"] },
   { title: "Hero Slice",          url: "/admin/hero-slice",                  icon: Truck,      description: "Configure customer/lane slices where won quotes auto-create freight delegated to a logistics manager.", roles: ["admin"] },
   { title: "Feedback Inbox",      url: "/feedback-inbox",                    icon: Inbox,      description: "User feedback and app suggestions.", roles: ["admin", "director"] },
+  { title: "Conversations v2 (Dev preview)", url: "/conversations-v2",        icon: MessageSquare, description: "Dev-only cockpit prototype of the Conversations tab. Read-only, admins only.", roles: ["admin", "director", "sales_director", "national_account_manager"] },
   { title: "Notifications",       url: "/notifications",                     icon: Inbox,      description: "Full notification history.", roles: ADMIN_GROUP_ROLES },
 ];
 

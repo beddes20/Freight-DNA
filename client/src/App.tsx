@@ -87,6 +87,7 @@ import CallsPage from "@/pages/calls";
 import TodayQueuePage from "@/pages/today";
 import MyProcurementPage from "@/pages/my-procurement";
 import ConversationsPage from "@/pages/conversations";
+import ConversationsV2Page from "@/pages/conversations-v2";
 import ProvenTacticsPage from "@/pages/proven-tactics";
 import PlaybookPage from "@/pages/playbook";
 import CoachingPage from "@/pages/coaching";
@@ -283,6 +284,7 @@ function Router() {
       <Route path="/my-procurement" component={MyProcurementPage} />
       <Route path="/intel">{() => { window.location.replace("/valueiq?tab=insights"); return null; }}</Route>
       <Route path="/conversations" component={ConversationsPage} />
+      <Route path="/conversations-v2" component={ConversationsV2Page} />
       <Route path="/contact-suggestions" component={ContactSuggestionsPage} />
       <Route path="/freight-triage" component={FreightTriagePage} />
       <Route path="/architecture-sketch" component={ArchitectureSketchPage} />
