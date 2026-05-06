@@ -1,0 +1,160 @@
+I want to harden and polish one end-to-end hero loop across four tabs:
+
+Conversations (email)
+
+Customer Quotes
+
+Available Freight
+
+Lane Work Queue
+
+The loop is:
+Customer email → Quote captured & replied → Quote marked Won → Load ready in Available Freight for the right LM, visible in Lane Work Queue.
+
+Core wiring and a hero-slice config already exist (Task #1069 + #1073 + #1074). I now want you to:
+
+Close the remaining UX/visibility gaps.
+
+Make this loop feel obvious and trustworthy to reps and LMs.
+
+Prepare these four tabs for a broader rollout with minimal surprises.
+
+Step 1 – Map the current UX across the 4 tabs (read-only)
+
+For the hero slice(s) configured in the new admin page:
+
+Trace what a rep sees in:
+
+Conversations when a quote email comes in.
+
+Customer Quotes when that email is captured.
+
+Customer Quotes when they mark the quote Won.
+
+Trace what an LM sees in:
+
+Available Freight when a hero-slice quote is won.
+
+Lane Work Queue when the “Active won” chip appears.
+Summarize this as “What a rep sees” and “What an LM sees” narratives in docs/hero-loop-email-to-load.md, without changing any code.
+
+Step 2 – Identify the top UX breaks / confusion points
+
+From those narratives, list no more than 3 issues per tab that:
+
+make the loop hard to follow,
+
+cause reps or LMs to doubt the system,
+
+or force them to hunt across tabs to understand what’s happening.
+
+Examples (do not invent all-new features):
+
+missing or unclear state chips,
+
+ambiguous “what happened when I clicked Won?” feedback,
+
+hard-to-find hero-slice opportunities in Available Freight / LWQ,
+
+small copy/label gaps that break the mental model.
+
+Return one short, prioritized list per tab:
+
+Conversations: [top 1–3 improvements]
+
+Customer Quotes: [top 1–3 improvements]
+
+Available Freight: [top 1–3 improvements]
+
+Lane Work Queue: [top 1–3 improvements]
+
+Step 3 – Implement only the highest-impact, low-risk improvements
+
+For this pass, I want small, surgical changes that:
+
+make the hero loop easier to follow,
+
+do not change business rules or contracts,
+
+and are safe to ship before wider rollout.
+
+Examples of acceptable changes:
+
+Better inline status / chips / tooltips that explain:
+
+why a quote is or isn’t in the hero slice,
+
+what “ready_to_send” means for the LM,
+
+what the “Active won” chip actually counts.
+
+Clearer navigation or filters that jump a user from:
+
+a quote row → its corresponding freight opportunity,
+
+an “Active won” chip → the matching opportunities,
+
+an Available Freight row → its originating quote/email.
+
+Minor layout/copy tweaks that surface the hero loop without adding new flows.
+
+Do not:
+
+change email ingestion behavior (Graph/webhook/etc. is still frozen),
+
+redesign entire tabs,
+
+introduce new major concepts (entities, queues) beyond what’s already in place.
+
+Step 4 – Add minimal guardrails for the UX
+
+Where changes rely on specific states, add focused tests/guardrails, for example:
+
+a test that the “Active won” chip count matches the hero-loop opportunities it links to.
+
+a test that hero-slice opportunities show a clear state in Available Freight and LWQ.
+
+a test that new navigation links correctly preserve IDs / context across tabs.
+
+Keep these small and tied directly to the improvements you ship.
+
+Step 5 – Update the doc for rollout
+
+Update docs/hero-loop-email-to-load.md with:
+
+final “Rep view” and “LM view” walkthroughs including the new UX touches.
+
+a short checklist for go-live:
+
+which hero slices are configured,
+
+which tabs are considered ready for broader rollout,
+
+any known limitations or edge cases to communicate.
+
+Constraints
+
+No email-plumbing changes.
+
+No broad refactors.
+
+Focus on clarity, trust, and smooth handoff inside these four tabs.
+
+Prefer “make the existing loop obvious” over “add a brand new capability.”
+
+Deliverables
+
+Updated UX in the 4 tabs (small, high-impact changes only).
+
+Any added tests/guardrails tied to these changes.
+
+Updated docs/hero-loop-email-to-load.md with:
+
+rep/LM narratives,
+
+before/after notes on the 4 tabs,
+
+a simple rollout checklist.
+
+Desired outcome:
+The existing hero loop feels clear, trustworthy, and easy to follow in Conversations, Customer Quotes, Available Freight, and Lane Work Queue, so we can roll these tabs out more broadly with confidence instead of confusion.

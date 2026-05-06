@@ -5389,3 +5389,84 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     `found=${earlyReturns}`,
   );
 })();
+
+// ── Section 1076: Hero Loop UX polish (cross-tab navigation) ───────────────
+//
+// Locks the three small UX touches that make the hero loop visible across
+// tabs without changing any business rules:
+//   (1) Available Freight `WonQuoteBadge` wraps in a wouter <Link> to
+//       /quote-requests?quote=<quoteId> when the source quoteId is present
+//       (so the LM can jump from a freight row → the originating quote).
+//   (2) Lane Work Queue "Active won" chip wraps in a wouter <Link> to
+//       /available-freight?lane=<encoded laneSignature> when laneSignature
+//       is present (so the count → rows handoff is one click, matching the
+//       sibling LiveOppsChip behaviour).
+//   (3) Quote Requests `describeEvent` has an explicit `af_handoff` case
+//       (no longer falls back to the bare "af handoff" string).
+(() => {
+  console.log("\n── Section 1076: Hero Loop UX polish ──────────────────────────────\n");
+
+  const afSrc = readFileSync("client/src/pages/available-freight.tsx", "utf8");
+  // Locate the WonQuoteBadge function body so we don't accidentally match
+  // text in unrelated badges.
+  const wonStart = afSrc.indexOf("function WonQuoteBadge");
+  const wonEnd = afSrc.indexOf("\nfunction ", wonStart + 10);
+  const wonBody = wonStart >= 0 ? afSrc.slice(wonStart, wonEnd > 0 ? wonEnd : afSrc.length) : "";
+  assert(
+    "available-freight.tsx — WonQuoteBadge derives quoteHref from sourceRef.quoteId",
+    /quoteHref\s*=[\s\S]*ref\.quoteId/.test(wonBody) &&
+      /\/quote-requests\?quote=/.test(wonBody),
+    "expected WonQuoteBadge to build a /quote-requests?quote=… href off ref.quoteId",
+  );
+  assert(
+    "available-freight.tsx — WonQuoteBadge wraps in <Link> with link-from-won-quote-${oppId} testid",
+    /<Link\s+href=\{quoteHref\}/.test(wonBody) &&
+      /link-from-won-quote-\$\{oppId\}/.test(wonBody),
+    "expected WonQuoteBadge to render a wouter <Link> with a link-from-won-quote-… data-testid",
+  );
+
+  const lwqSrc = readFileSync("client/src/pages/lane-work-queue.tsx", "utf8");
+  // Locate the active-won chip block. It's keyed off `wonQuoteCount > 0`.
+  const wonChipIdx = lwqSrc.indexOf("wonQuoteCount > 0");
+  assert(
+    "lane-work-queue.tsx — active-won chip block exists",
+    wonChipIdx > 0,
+    "could not locate `wonQuoteCount > 0` chip block",
+  );
+  const wonChipWindow = lwqSrc.slice(wonChipIdx, wonChipIdx + 2000);
+  assert(
+    "lane-work-queue.tsx — active-won chip wraps in <Link> to /available-freight?lane=… when laneSignature is present",
+    /item\.laneSignature\s*\?\s*\(\s*<Link/.test(wonChipWindow) &&
+      /\/available-freight\?lane=\$\{encodeURIComponent\(item\.laneSignature\)\}/.test(wonChipWindow),
+    "expected the active-won chip to deep-link into Available Freight filtered by lane",
+  );
+  assert(
+    "lane-work-queue.tsx — active-won link carries link-active-won-${item.laneId} testid",
+    /link-active-won-\$\{item\.laneId\}/.test(wonChipWindow),
+    "missing link-active-won-… data-testid",
+  );
+
+  const qrSrc = readFileSync("client/src/pages/quote-requests.tsx", "utf8");
+  const describeStart = qrSrc.indexOf("function describeEvent");
+  const describeEnd = qrSrc.indexOf("\nfunction ", describeStart + 10);
+  const describeBody = describeStart >= 0 ? qrSrc.slice(describeStart, describeEnd > 0 ? describeEnd : qrSrc.length) : "";
+  assert(
+    "quote-requests.tsx — describeEvent has explicit af_handoff case",
+    /case\s+"af_handoff"\s*:/.test(describeBody),
+    "describeEvent must have a case for 'af_handoff' so the timeline doesn't render the bare fallback",
+  );
+  assert(
+    "quote-requests.tsx — af_handoff case surfaces 'Auto-routed to Available Freight'",
+    /Auto-routed to Available Freight/.test(describeBody),
+    "expected the af_handoff case to render the 'Auto-routed to Available Freight' narrative",
+  );
+
+  // The doc that explains the loop must keep referencing all three
+  // surfaces so a future reader knows where to look.
+  const heroDoc = readFileSync("docs/hero-loop-email-to-load.md", "utf8");
+  assert(
+    "docs/hero-loop-email-to-load.md — references the cross-tab navigation polish",
+    /WonQuoteBadge|active won chip|Auto-routed to Available Freight/i.test(heroDoc),
+    "doc must mention the new cross-tab affordances",
+  );
+})();

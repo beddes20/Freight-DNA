@@ -1092,17 +1092,32 @@ function LaneRow({
             {/* Task #1069 — Hero loop "Active won load(s)" chip. Surfaces
                 the subset of live AF opps that originated from a won
                 customer quote so the LM can see inbound-email-driven
-                loads on the same row as the lane they belong to. */}
-            {item.liveOpps && item.liveOpps.wonQuoteCount > 0 && (
-              <Badge
-                variant="outline"
-                className="text-[10px] py-0 px-1.5 border-emerald-500/50 text-emerald-400 bg-emerald-500/10 gap-0.5 font-semibold"
-                data-testid={`chip-active-won-${item.laneId}`}
-                title={`${item.liveOpps.wonQuoteCount} active won load${item.liveOpps.wonQuoteCount > 1 ? "s" : ""} sourced from a customer-quote win — open in Available Freight`}
-              >
-                {item.liveOpps.wonQuoteCount} active won
-              </Badge>
-            )}
+                loads on the same row as the lane they belong to.
+                Hero-loop polish: when we have a laneSignature, deep-link
+                the chip into Available Freight filtered to this lane —
+                same pattern the live-opps chip uses — so the LM goes from
+                "I see the count" to "I see the rows" in one click. */}
+            {item.liveOpps && item.liveOpps.wonQuoteCount > 0 && (() => {
+              const wonChip = (
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] py-0 px-1.5 border-emerald-500/50 text-emerald-400 bg-emerald-500/10 gap-0.5 font-semibold${item.laneSignature ? " hover:bg-emerald-500/20 hover:border-emerald-500 cursor-pointer transition-colors" : ""}`}
+                  data-testid={`chip-active-won-${item.laneId}`}
+                  title={`${item.liveOpps.wonQuoteCount} active won load${item.liveOpps.wonQuoteCount > 1 ? "s" : ""} sourced from a customer-quote win — ${item.laneSignature ? "click to open in Available Freight" : "open in Available Freight"}`}
+                >
+                  {item.liveOpps.wonQuoteCount} active won
+                </Badge>
+              );
+              return item.laneSignature ? (
+                <Link
+                  href={`/available-freight?lane=${encodeURIComponent(item.laneSignature)}`}
+                  onClick={e => e.stopPropagation()}
+                  data-testid={`link-active-won-${item.laneId}`}
+                >
+                  {wonChip}
+                </Link>
+              ) : wonChip;
+            })()}
             {/* Frequency badge — prominent, always first */}
             <FrequencyBadge val={item.avgLoadsPerWeek} />
             {/* High-frequency lane badge (Task #188): shown when ≥2 loads/week */}

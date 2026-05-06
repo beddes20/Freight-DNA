@@ -3351,6 +3351,14 @@ function describeEvent(ev: QuoteEvent): string {
     case "email_lost": return "Auto-flipped to Lost (email signal)";
     case "tms_won": return "Auto-flipped to Won (TMS-confirmed)";
     case "tms_lost": return "Auto-flipped to Lost (TMS-confirmed)";
+    case "af_handoff": {
+      // Hero loop polish — the timeline used to render this as the bare
+      // "af handoff" fallback. Surface the canonical narrative so the rep
+      // can see exactly where the won quote went without flipping tabs.
+      const oppId = (ev.payload?.opportunityId as string | undefined) ?? "";
+      const tail = oppId ? ` (opportunity ${oppId.slice(0, 8)}…)` : "";
+      return `Auto-routed to Available Freight${tail}`;
+    }
     default: return ev.eventType.replace(/_/g, " ");
   }
 }

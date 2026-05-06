@@ -4535,23 +4535,44 @@ function WonQuoteBadge({ sourceRef, oppId }: { sourceRef: unknown; oppId: string
   if (ref.type !== "won_quote") return null;
   const buy = fmtCurrency(ref.buy);
   const sell = fmtCurrency(ref.sell);
+  // Hero-loop polish: when the source quote id is present, wrap the badge in a
+  // Link that deep-links into Quote Requests filtered to that quote so the LM
+  // can confirm "this freight came from THAT email" in one click. Falls back
+  // to a static badge when the id is missing (older rows / partial sourceRef).
+  const quoteHref = typeof ref.quoteId === "string" && ref.quoteId.length > 0
+    ? `/quote-requests?quote=${encodeURIComponent(ref.quoteId)}`
+    : null;
+  const badge = (
+    <Badge
+      variant="outline"
+      className={`text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30${quoteHref ? " hover:bg-emerald-500/25 hover:border-emerald-500/50 cursor-pointer" : ""}`}
+      data-testid={`badge-from-won-quote-${oppId}`}
+    >
+      From won quote
+    </Badge>
+  );
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <Badge
-            variant="outline"
-            className="text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-            data-testid={`badge-from-won-quote-${oppId}`}
-          >
-            From won quote
-          </Badge>
+          {quoteHref ? (
+            <Link
+              href={quoteHref}
+              onClick={e => e.stopPropagation()}
+              data-testid={`link-from-won-quote-${oppId}`}
+            >
+              {badge}
+            </Link>
+          ) : (
+            badge
+          )}
         </TooltipTrigger>
         <TooltipContent side="top" data-testid={`tooltip-won-quote-${oppId}`}>
           <div className="text-xs space-y-0.5">
             <div className="font-medium">From won customer quote</div>
             <div>Sell: {sell ?? "—"}</div>
             <div>Buy: {buy ?? "—"}</div>
+            {quoteHref && <div className="text-muted-foreground">Click to open the originating quote</div>}
           </div>
         </TooltipContent>
       </Tooltip>
