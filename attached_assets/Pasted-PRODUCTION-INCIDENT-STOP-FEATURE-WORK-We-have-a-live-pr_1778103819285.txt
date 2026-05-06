@@ -1,0 +1,169 @@
+PRODUCTION INCIDENT — STOP FEATURE WORK
+
+We have a live production data integrity issue in Freight-DNA.
+
+Current symptoms:
+
+We lost a large amount of data visibility in the production app.
+
+Contacts that previously existed in customer profiles are no longer appearing.
+
+I rolled back to an earlier version from this morning when contacts existed, but the contacts still are not showing up.
+
+New “customers” are appearing that are not actually real customers.
+
+The production app is now in a messy / untrusted state.
+
+This is now an incident recovery task, not a feature task.
+
+Hard rules
+
+Do not publish anything new
+
+Do not run any destructive scripts
+
+Do not run backfills, deletes, merges, or cleanup writes in production
+
+Do not make assumptions
+
+Start with read-only diagnosis first
+
+What I need you to determine
+
+I need a clear answer to these questions:
+
+Is the missing contact data caused by:
+
+actual data loss in the production database,
+
+a bad rollback / publish mismatch,
+
+a schema drift issue,
+
+a read-path / query bug,
+
+a visibility / join / filter regression,
+
+or a bad ingest / mapping process that created incorrect customers?
+
+Did any recent change affect:
+
+customer profile contact rendering,
+
+contact/customer joins,
+
+contact identity linkage,
+
+customer creation / dedupe,
+
+email-derived customer creation,
+
+or any shared ingestion path?
+
+Is the currently visible production state coming from:
+
+the current production database contents,
+
+stale cached application behavior,
+
+or code that no longer matches the data shape after rollback?
+
+Investigation steps I want
+
+Work in this order:
+
+Phase 1 — Read-only incident diagnosis
+
+Inspect recent production-related commits, publishes, and rollback points.
+
+Identify all files changed in the recent window that touch:
+
+contacts
+
+companies/customers
+
+profile rendering
+
+ingestion / sync
+
+email-derived account/customer creation
+
+schema / migrations
+
+Compare the current production code expectation vs current production DB reality.
+
+Query production in read-only mode to answer:
+
+Are the contacts still physically present in the relevant tables?
+
+If yes, why are they not rendering?
+
+Are new bad customer rows actually present in the DB?
+
+If yes, when were they created and by what code path?
+
+Phase 2 — Root cause report
+
+Give me a plain-English report with:
+
+what is broken,
+
+whether the data is missing vs hidden,
+
+whether rollback should have fixed it but didn’t,
+
+and the most likely root cause.
+
+Phase 3 — Smallest safe recovery plan
+
+Only after the diagnosis, propose the smallest safe recovery plan.
+The plan must separate:
+
+code fix
+
+production data repair
+
+verification steps
+
+rollback/reversal plan if the recovery itself fails
+
+Specific things to check
+
+Please explicitly inspect whether this is related to any recent change that touched:
+
+customer/contact profile reads
+
+shared schema or migrations
+
+email/customer identity logic
+
+conversations/customer-quotes/customer creation paths
+
+dev → prod publish behavior
+
+any change similar to the one in the screenshots / recent tasks
+
+Deliverables I require
+
+Timeline of relevant deploys / rollbacks / commits
+
+Exact files and code paths most likely involved
+
+Read-only proof of whether the contact rows still exist in production
+
+Read-only proof of whether bad customer rows exist in production
+
+Root cause in plain English
+
+Recommended recovery plan with risk level
+
+Explicit statement: “safe to proceed” or “do not proceed yet”
+
+Important
+
+I do not want guesses or a broad refactor.
+I want a production incident response:
+diagnose first, prove the issue, then propose the smallest safe fix.
+
+Desired outcome:
+We restore production trust by determining whether the data is lost, hidden, or mis-modeled, and recover contacts/customers safely without making the incident worse.
