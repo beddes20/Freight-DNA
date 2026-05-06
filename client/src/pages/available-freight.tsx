@@ -199,6 +199,16 @@ interface CockpitItem {
     attemptedAt: string;
     retryCount: number;
   } | null;
+  /**
+   * Task #1078 — canonical order/load number resolved from the
+   * `freight_daily_upload_fact` row that matches this opportunity's
+   * lane + customer. Only populated when the upload row carried an
+   * explicit identifier column (Order, loadId, orderId, …); fingerprint
+   * fallback `loadKey`s are intentionally not surfaced. Null when the
+   * row hasn't been matched to an upload-side identifier yet (e.g. a
+   * newly minted "Won from Customer Quote" row).
+   */
+  orderNumber?: string | null;
 }
 
 interface BulkActionResult {
@@ -4542,14 +4552,21 @@ function WonQuoteBadge({ sourceRef, oppId }: { sourceRef: unknown; oppId: string
   const quoteHref = typeof ref.quoteId === "string" && ref.quoteId.length > 0
     ? `/quote-requests?quote=${encodeURIComponent(ref.quoteId)}`
     : null;
+  // Task #1078 — label reworded to "Won from Customer Quote" for clarity.
+  // The legacy `badge-from-won-quote-${oppId}` testid is preserved so
+  // existing tests/selectors continue to resolve; a wrapping span carries
+  // a second `badge-won-from-customer-quote-${oppId}` testid that mirrors
+  // the new wording for any new tests.
   const badge = (
-    <Badge
-      variant="outline"
-      className={`text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30${quoteHref ? " hover:bg-emerald-500/25 hover:border-emerald-500/50 cursor-pointer" : ""}`}
-      data-testid={`badge-from-won-quote-${oppId}`}
-    >
-      From won quote
-    </Badge>
+    <span data-testid={`badge-won-from-customer-quote-${oppId}`}>
+      <Badge
+        variant="outline"
+        className={`text-[10px] bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30${quoteHref ? " hover:bg-emerald-500/25 hover:border-emerald-500/50 cursor-pointer" : ""}`}
+        data-testid={`badge-from-won-quote-${oppId}`}
+      >
+        Won from Customer Quote
+      </Badge>
+    </span>
   );
   return (
     <TooltipProvider delayDuration={150}>
@@ -4984,6 +5001,20 @@ function CockpitRowView(props: {
         >
           {fmtLane(opp.origin, opp.originState, opp.destination, opp.destinationState)}
         </Link>
+        {/* Task #1078 — primary order/load identifier resolved from the
+            unified daily-upload fact table when the upload row carried an
+            explicit Order/loadId column. Renders adjacent to the lane link
+            as the canonical operational identifier. Fingerprint-fallback
+            loadKeys are intentionally not surfaced (they are an internal
+            dedupe hash, not a TMS order number). */}
+        {item.orderNumber && (
+          <span
+            className="text-xs font-mono text-muted-foreground"
+            data-testid={`text-order-number-${opp.id}`}
+          >
+            Order #{item.orderNumber}
+          </span>
+        )}
         {/* Task #950 — full thread popover (composer + threaded view) is the
             row-level entry point per ADR docs/context-notes.md. The badge
             inside the popover doubles as the unread-mention counter. */}

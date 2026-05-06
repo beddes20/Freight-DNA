@@ -148,6 +148,13 @@ export function normalizeRowToFact(
     originCity, originState, destCity, destState, equipment,
     shipDate.slice(0, 10), customer.toLowerCase(), carrierField.toLowerCase(),
   ]);
+  // Task #1078 — `orderNumber` is the deterministic explicit-id signal:
+  // populated only when the source row carried an actual identifier
+  // column. NULL when the loadKey is the fingerprint hash. Available
+  // Freight reads this column directly to surface the upload-derived
+  // Order # without needing to heuristically detect "is this loadKey
+  // explicit or hashed?".
+  const orderNumber = explicitId || null;
 
   const moved = ctx.forceMoved != null
     ? ctx.forceMoved
@@ -157,6 +164,7 @@ export function normalizeRowToFact(
     orgId: ctx.orgId,
     uploadId: ctx.uploadId,
     loadKey,
+    orderNumber,
     customer: customer ? cleanCustomerLabel(customer) : null,
     originCity: originCity || null,
     originState: originState || null,

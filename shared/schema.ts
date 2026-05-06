@@ -8067,6 +8067,12 @@ export const freightDailyUploadFact = pgTable("freight_daily_upload_fact", {
   // when present. Falls back to a fingerprint hash of the row when absent so
   // dedup across overlapping uploads still works.
   loadKey: text("load_key").notNull(),
+  // Task #1078 — explicit TMS Order/loadId from the source row, set ONLY
+  // when the upload row carried an actual identifier column (Order,
+  // loadId, loadNumber, …). NULL when the loadKey was derived via
+  // fingerprint hash. This is the deterministic signal Available Freight
+  // uses to surface "Order #…" without ever showing an internal hash.
+  orderNumber: text("order_number"),
   // Customer / company name as it appeared on the row (display-cleaned).
   customer: text("customer"),
   // Lane geography — lower-cased for stable joins.

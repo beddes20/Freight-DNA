@@ -712,6 +712,98 @@ export function registerFreightCockpitRoutes(app: Express) {
           console.error("[freight-cockpit] lwq context build error:", err);
         }
       }
+      // Task #1078 — batched lookup of upload-derived order numbers for
+      // the visible cockpit rows. Joins each opportunity to a
+      // `freight_daily_upload_fact` row using the canonical lane grain
+      // PLUS pickup-date (YYYY-MM-DD slice of `pickupWindowStart` vs
+      // `ship_date`) so multiple loads on the same lane/customer cannot
+      // collapse to a single key and silently swap order numbers.
+      //
+      // Determinism: only rows whose `order_number` column is non-NULL
+      // are considered (the column is populated by the normalizer ONLY
+      // when the source row carried an explicit Order/loadId column —
+      // see `server/services/freightDailyUploadFact.ts`). Fingerprint-
+      // hashed loadKeys are NULL in `order_number` and so are never
+      // surfaced as if they were a TMS order number.
+      //
+      // Customer match: keyed on lowercased company id when available,
+      // falling back to a normalized customer-name string. We exclude
+      // the customer dimension from the fact-side index to keep the
+      // index narrow; the in-memory join still constrains by it.
+      // One query per cockpit response (no N+1).
+      const orderNumberByOpp = new Map<string, string>();
+      try {
+        const factRowsRes = await db.execute<{
+          origin_city: string | null;
+          origin_state: string | null;
+          dest_city: string | null;
+          dest_state: string | null;
+          equipment: string | null;
+          customer: string | null;
+          order_number: string;
+          ship_date: string | null;
+        }>(sql`
+          SELECT origin_city, origin_state, dest_city, dest_state, equipment,
+                 customer, order_number, ship_date
+            FROM freight_daily_upload_fact
+           WHERE org_id = ${org}
+             AND order_number IS NOT NULL
+             AND ingested_at > now() - interval '120 days'
+           ORDER BY ship_date DESC NULLS LAST, ingested_at DESC
+        `);
+        const norm = (s: string | null | undefined) =>
+          (s ?? "").trim().toLowerCase();
+        const dateSlice = (s: string | null | undefined) => {
+          const v = (s ?? "").trim();
+          if (!v) return "";
+          // Accepts ISO date or ISO timestamp; takes the first 10 chars.
+          return v.slice(0, 10);
+        };
+        const factByKey = new Map<string, string>();
+        for (const r of factRowsRes.rows) {
+          const key = [
+            norm(r.origin_city),
+            norm(r.origin_state),
+            norm(r.dest_city),
+            norm(r.dest_state),
+            norm(r.equipment),
+            norm(r.customer),
+            dateSlice(r.ship_date),
+          ].join("|");
+          // First write wins (rows are pre-sorted by ship_date DESC,
+          // ingested_at DESC) so the most recent matching upload row
+          // provides the order number.
+          if (!factByKey.has(key)) factByKey.set(key, r.order_number);
+        }
+        for (const i of baseItems) {
+          const opp = i.opportunity;
+          const customerName = i.customer?.name ?? "";
+          const pickupIso =
+            opp.pickupWindowStart instanceof Date
+              ? opp.pickupWindowStart.toISOString()
+              : (opp.pickupWindowStart as string | null | undefined) ?? "";
+          const key = [
+            norm(opp.origin),
+            norm(opp.originState),
+            norm(opp.destination),
+            norm(opp.destinationState),
+            norm(opp.equipmentType),
+            norm(customerName),
+            dateSlice(pickupIso),
+          ].join("|");
+          // Pickup-date participation is required: rows without a pickup
+          // window (or facts without a ship date) cannot disambiguate
+          // multiple same-lane loads, so we deliberately do NOT fall
+          // back to a date-less match. No order number is preferable to
+          // a wrong one.
+          if (!dateSlice(pickupIso)) continue;
+          const found = factByKey.get(key);
+          if (found) orderNumberByOpp.set(opp.id, found);
+        }
+      } catch (err) {
+        console.error("[freight-cockpit] order-number lookup error:", err);
+      }
+
       const enriched = baseItems.map(i => {
         const sig = laneSig(
           i.opportunity.origin,
@@ -728,7 +820,11 @@ export function registerFreightCockpitRoutes(app: Express) {
         const pickupFreshness: PickupFreshness =
           freshnessByOppId.get(i.opportunity.id) ?? "no_pickup";
         const pickupDaysAgo = daysSincePickup(i.opportunity.pickupWindowStart, todayIso);
-        return { ...i, lwqContext, laneSignature: sig, pickupFreshness, pickupDaysAgo };
+        // Task #1078 — `orderNumber` is null when no matching upload-side
+        // explicit identifier was found (e.g. won-quote rows with no
+        // upload match yet, or rows whose only loadKey is a fingerprint).
+        const orderNumber = orderNumberByOpp.get(i.opportunity.id) ?? null;
+        return { ...i, lwqContext, laneSignature: sig, pickupFreshness, pickupDaysAgo, orderNumber };
       });
 
       // Optional `?lane=<sig>` deep-link filter — used by LWQ chip → AF.

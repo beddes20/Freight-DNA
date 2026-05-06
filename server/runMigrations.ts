@@ -6165,6 +6165,22 @@ export async function runTask1051UnifiedDailyUploadMigrations() {
         ON freight_daily_upload_fact (org_id, origin_city, dest_city, equipment);
       CREATE UNIQUE INDEX IF NOT EXISTS freight_daily_upload_fact_load_key_uq
         ON freight_daily_upload_fact (org_id, upload_id, load_key);
+      -- Task #1078 — explicit TMS Order/loadId, NULL when loadKey is a
+      -- fingerprint hash. Lookup-side index supports the cockpit join.
+      ALTER TABLE freight_daily_upload_fact
+        ADD COLUMN IF NOT EXISTS order_number text;
+      -- One-shot backfill for rows ingested before order_number existed:
+      -- if the existing load_key isn't a 16-char fingerprint hash, treat
+      -- it as the original explicit identifier. New writes from the
+      -- normalizer set order_number directly so this fixup is self-
+      -- limiting (NULL stays NULL once column is in place).
+      UPDATE freight_daily_upload_fact
+         SET order_number = load_key
+       WHERE order_number IS NULL
+         AND load_key !~ '^[a-f0-9]{16}$';
+      CREATE INDEX IF NOT EXISTS freight_daily_upload_fact_org_order_lookup_idx
+        ON freight_daily_upload_fact (org_id, origin_city, dest_city, equipment, ship_date)
+        WHERE order_number IS NOT NULL;
     `);
     console.log("[migrations] Task #1051 freight_daily_upload_fact table + indexes ensured");
 

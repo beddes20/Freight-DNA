@@ -5640,3 +5640,124 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     "non-Won (or no-handoff) responses must still show the generic 'Quote updated' toast",
   );
 })();
+
+// ── Section 1078: AF order number + Won-from-Customer-Quote marker ──────
+// Locks the cockpit-row identity contract from Task #1078:
+//   1. The cockpit row renders an upload-derived order number when the
+//      fact table carries an explicit Order/loadId (testid prefix
+//      `text-order-number-`).
+//   2. The won-quote badge label reads "Won from Customer Quote" and
+//      keeps a stable testid mirroring the new wording.
+//   3. The cockpit route looks up `freight_daily_upload_fact` and
+//      attaches `orderNumber` to each row (one batched query).
+//   4. The won-quote conversion site in customerQuotes.ts does NOT
+//      synthesize a loadKey/orderNumber — preserves the Section 1051 /
+//      1069 "upload is the source of truth" contract.
+(() => {
+  console.log("\n── Section 1078: AF order number + Won-from-Customer-Quote marker ──");
+
+  const afSrc = readFile("client/src/pages/available-freight.tsx");
+  assert(
+    "available-freight.tsx — CockpitItem carries an orderNumber field",
+    /orderNumber\?\s*:\s*string\s*\|\s*null/.test(afSrc),
+    "expected `orderNumber?: string | null` on the CockpitItem interface",
+  );
+  assert(
+    "available-freight.tsx — row reads item.orderNumber",
+    afSrc.includes("item.orderNumber"),
+    "expected the cockpit row to reference `item.orderNumber`",
+  );
+  assert(
+    "available-freight.tsx — renders text-order-number-${opp.id} testid",
+    /text-order-number-\$\{opp\.id\}/.test(afSrc),
+    "expected an element with data-testid prefix `text-order-number-` on the row",
+  );
+  assert(
+    "available-freight.tsx — WonQuoteBadge label reads 'Won from Customer Quote'",
+    afSrc.includes("Won from Customer Quote"),
+    "WonQuoteBadge label must contain the literal 'Won from Customer Quote'",
+  );
+  assert(
+    "available-freight.tsx — WonQuoteBadge keeps a stable badge-won-from-customer-quote-${oppId} testid",
+    /badge-won-from-customer-quote-\$\{oppId\}/.test(afSrc),
+    "expected a stable testid `badge-won-from-customer-quote-${oppId}` mirroring the new wording",
+  );
+  assert(
+    "available-freight.tsx — legacy 'From won quote' wording removed from the badge",
+    !/>\s*From won quote\s*</.test(afSrc),
+    "the visible badge text 'From won quote' should be replaced with 'Won from Customer Quote'",
+  );
+
+  const cockpitSrc = readFile("server/routes/freightOpportunityCockpit.ts");
+  assert(
+    "freightOpportunityCockpit.ts — references freight_daily_upload_fact",
+    cockpitSrc.includes("freight_daily_upload_fact"),
+    "cockpit route must query the freight_daily_upload_fact table to resolve order numbers",
+  );
+  assert(
+    "freightOpportunityCockpit.ts — exposes orderNumber on the row payload",
+    /orderNumber/.test(cockpitSrc),
+    "cockpit route must attach `orderNumber` to each row in the response",
+  );
+  // Determinism: the lookup must filter on the `order_number IS NOT NULL`
+  // column (the deterministic explicit-id signal written by the
+  // normalizer) rather than heuristically pattern-matching the loadKey
+  // shape. This is the contract that prevents an explicit ID that happens
+  // to look like a fingerprint hash from being silently suppressed.
+  assert(
+    "freightOpportunityCockpit.ts — filters on order_number IS NOT NULL (deterministic explicit-id signal)",
+    /order_number\s+IS\s+NOT\s+NULL/i.test(cockpitSrc),
+    "lookup must use the order_number column (NULL ⇔ fingerprint), not a regex against load_key",
+  );
+  assert(
+    "freightOpportunityCockpit.ts — does NOT use the fingerprint-shape regex anymore",
+    !/\^\[a-f0-9\]\{16\}\$/.test(cockpitSrc),
+    "the heuristic 16-hex regex on load_key must be removed; rely on order_number column instead",
+  );
+  // Pickup-date participation in the match grain — without it, multiple
+  // loads on the same lane/customer collapse to a single key and swap
+  // order numbers across rows.
+  assert(
+    "freightOpportunityCockpit.ts — pickup date participates in the order-number match grain",
+    /pickupWindowStart/.test(cockpitSrc) && /ship_date/.test(cockpitSrc),
+    "lookup must key on pickup date (opp.pickupWindowStart vs fact ship_date) so same-lane loads do not collapse",
+  );
+
+  // The fact table itself must carry the deterministic explicit-id
+  // column the cockpit relies on.
+  const schemaSrc = readFile("shared/schema.ts");
+  assert(
+    "shared/schema.ts — freight_daily_upload_fact carries an order_number column",
+    /order_number/.test(schemaSrc) && /orderNumber:\s*text\("order_number"\)/.test(schemaSrc),
+    "fact table must declare `orderNumber: text('order_number')` so the explicit-id signal is queryable",
+  );
+  const factWriterSrc = readFile("server/services/freightDailyUploadFact.ts");
+  assert(
+    "freightDailyUploadFact.ts — writer populates orderNumber from the explicit id",
+    /orderNumber\s*=\s*explicitId/.test(factWriterSrc),
+    "normalizer must set orderNumber = explicitId || null so NULL is the canonical fingerprint signal",
+  );
+  const migrationsSrcCockpit = readFile("server/runMigrations.ts");
+  assert(
+    "runMigrations.ts — adds order_number column (idempotent ADD COLUMN IF NOT EXISTS)",
+    /ADD COLUMN IF NOT EXISTS order_number/.test(migrationsSrcCockpit),
+    "migration must add the order_number column idempotently",
+  );
+
+  const cqSrc = readFile("server/services/customerQuotes.ts");
+  // The won-quote conversion site must NOT pretend to write a synthetic
+  // order number / loadKey on the freight opportunity it creates — the
+  // upload remains the source of truth (Section 1051 / 1069).
+  const heroFnIdx = cqSrc.indexOf("createFreightOpportunityFromWonQuote");
+  const heroFnSlice = heroFnIdx >= 0 ? cqSrc.slice(heroFnIdx, heroFnIdx + 12000) : "";
+  assert(
+    "customerQuotes.ts — createFreightOpportunityFromWonQuote does not synthesize a loadKey",
+    heroFnSlice.length > 0 && !/loadKey\s*[:=]/.test(heroFnSlice),
+    "won-quote conversion must not write a synthetic loadKey (upload-as-source-of-truth contract)",
+  );
+  assert(
+    "customerQuotes.ts — createFreightOpportunityFromWonQuote does not synthesize an orderNumber",
+    heroFnSlice.length > 0 && !/orderNumber\s*[:=]/.test(heroFnSlice),
+    "won-quote conversion must not write a synthetic orderNumber (upload-as-source-of-truth contract)",
+  );
+})();
