@@ -151,3 +151,101 @@ double-count quote wins as moved loads.
   - The LWQ row template renders the `chip-active-won-${laneId}` chip
     keyed off `liveOpps.wonQuoteCount`.
   - The doc itself exists.
+- Section 1076 of `tests/code-quality-guardrails.test.ts` enforces the
+  cross-tab navigation polish (see § 8 below).
+
+## 7. Walkthroughs
+
+These are the canonical narratives the rollout doc and onboarding refer
+to. They name the exact chips, badges, and links that ship today.
+
+### Rep view (account manager / sales)
+
+1. **Conversations.** A new email arrives from a hero customer. The
+   rep doesn't need to do anything in this tab — `processUserMailboxEmail`
+   has already persisted the message and downstream classifiers will hand
+   it to Customer Quotes.
+2. **Customer Quotes — Needs Routing.** The same email surfaces in the
+   `NeedsRoutingPanel`. The rep clicks **Customer** to confirm intent.
+   The quote moves into the rep's "Mine" queue.
+3. **Customer Quotes — Mine.** The rep replies with a price and clicks
+   **Won** (the `MarkWonDialog` captures price + valid-through if the
+   quote has no `quotedAmount` yet). A toast confirms `Quote updated`.
+4. **Customer Quotes — Activity timeline.** The rep sees a new
+   **`Auto-routed to Available Freight (opportunity <8-char id>…)`**
+   entry the instant the converter commits. This is the rep's signal
+   that the won quote landed somewhere actionable — no more "did
+   anything happen?" guessing. (Backed by Section 1076.)
+
+### LM view (logistics manager)
+
+1. **Available Freight.** A new row appears in the LM's default view
+   (no filter changes) with status **`ready to send`** and an emerald
+   **`From won quote`** badge. The badge is now a **link** —
+   `/quote-requests?quote=<quoteId>` — so the LM can confirm the
+   originating customer email in one click. The tooltip carries the
+   buy/sell priors from the quote.
+2. **Lane Work Queue.** The matching lane row shows the green
+   **`N active won`** chip. The chip is now a **link** —
+   `/available-freight?lane=<laneSig>` — that drops the LM into the
+   AF cockpit pre-filtered to that lane signature, exactly the same
+   navigation pattern the sibling `LiveOppsChip` uses. The count and
+   the rows it points at always agree because both come from the same
+   `buildOpenOppContextByLaneSig` aggregator.
+3. **Reverse direction.** From AF the LM can return to Quote Requests
+   via the `From won quote` badge; from Quote Requests the timeline's
+   `Auto-routed to Available Freight` line carries the opp id so an
+   AF cockpit search jumps straight back. The loop is now traversable
+   in both directions without breadcrumbs.
+
+## 8. Cross-tab navigation polish (locked)
+
+Section 1076 of `tests/code-quality-guardrails.test.ts` locks the three
+small affordances above. Touching any of these requires updating both
+the file and the guardrail in the same commit:
+
+| Affordance                                  | File                                       |
+|---------------------------------------------|--------------------------------------------|
+| `WonQuoteBadge` → `/quote-requests?quote=…` | `client/src/pages/available-freight.tsx`   |
+| Active-won chip → `/available-freight?lane=…` | `client/src/pages/lane-work-queue.tsx`     |
+| `describeEvent` `af_handoff` case           | `client/src/pages/quote-requests.tsx`      |
+
+Out of scope for this polish pass (deliberate; tracked elsewhere):
+
+- Conversations does **not** render a "linked quote" pill yet — the
+  email→quote routing UX lives in the Needs Routing panel of Customer
+  Quotes by design, and adding cross-pointers in Conversations would
+  duplicate that surface. Revisit only if reps consistently start in
+  Conversations rather than Quote Requests.
+- The post-Won toast in Customer Quotes stays generic (`Quote updated`).
+  The activity-timeline narrative is the canonical place to learn
+  "where did this go?", and adding a hero-specific toast would be
+  redundant with it (and would race the converter on the rare
+  pending-approval path).
+- No new entities, no schema changes, no email-plumbing changes.
+
+## 9. Rollout checklist
+
+Before flipping the four tabs from "guarded" to "general availability":
+
+- [ ] **Hero slices configured.** `/admin/hero-slice` lists at least
+      one slice; the global `auto_won_quote_af_handoff` toggle is on.
+      Each slice's `lmUserId` resolves to a real `logistics_manager`
+      (or `logistics_coordinator` / `admin`) in the org.
+- [ ] **Rep walk.** Run `npx tsx tests/hero-loop-email-to-load.test.ts`
+      against the dev DB. 26/26 assertions must pass.
+- [ ] **Guardrails green.** `npx tsx tests/code-quality-guardrails.test.ts`
+      reports `0 failed`. Sections 1052 + 1076 must both run.
+- [ ] **Manual sanity (AF).** As an LM, load `/available-freight`,
+      confirm the `From won quote` badge is clickable and lands on the
+      right `/quote-requests?quote=…`. Confirm the row carries
+      `ready to send` (not `pending approval`).
+- [ ] **Manual sanity (LWQ).** As an LM, load `/lane-work-queue`,
+      confirm the `N active won` chip on a hero lane is clickable and
+      lands on `/available-freight?lane=…` filtered to that lane.
+- [ ] **Manual sanity (Customer Quotes).** As a rep, open a recently
+      won hero-slice quote's drawer; the activity timeline shows
+      `Auto-routed to Available Freight (opportunity …)`.
+- [ ] **Known limitation comms.** Mention to LMs that the chip count
+      is "open won-quote AF rows since start of UTC day" — the same
+      window `buildOpenOppContextByLaneSig` already uses for live opps.

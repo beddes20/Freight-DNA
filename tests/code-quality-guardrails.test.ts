@@ -5406,7 +5406,7 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
 (() => {
   console.log("\n── Section 1076: Hero Loop UX polish ──────────────────────────────\n");
 
-  const afSrc = readFileSync("client/src/pages/available-freight.tsx", "utf8");
+  const afSrc = fs.readFileSync("client/src/pages/available-freight.tsx", "utf8");
   // Locate the WonQuoteBadge function body so we don't accidentally match
   // text in unrelated badges.
   const wonStart = afSrc.indexOf("function WonQuoteBadge");
@@ -5425,7 +5425,7 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     "expected WonQuoteBadge to render a wouter <Link> with a link-from-won-quote-… data-testid",
   );
 
-  const lwqSrc = readFileSync("client/src/pages/lane-work-queue.tsx", "utf8");
+  const lwqSrc = fs.readFileSync("client/src/pages/lane-work-queue.tsx", "utf8");
   // Locate the active-won chip block. It's keyed off `wonQuoteCount > 0`.
   const wonChipIdx = lwqSrc.indexOf("wonQuoteCount > 0");
   assert(
@@ -5436,9 +5436,10 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
   const wonChipWindow = lwqSrc.slice(wonChipIdx, wonChipIdx + 2000);
   assert(
     "lane-work-queue.tsx — active-won chip wraps in <Link> to /available-freight?lane=… when laneSignature is present",
-    /item\.laneSignature\s*\?\s*\(\s*<Link/.test(wonChipWindow) &&
-      /\/available-freight\?lane=\$\{encodeURIComponent\(item\.laneSignature\)\}/.test(wonChipWindow),
-    "expected the active-won chip to deep-link into Available Freight filtered by lane",
+    /laneSig\s*\?\s*\(\s*<Link/.test(wonChipWindow) &&
+      /\/available-freight\?lane=\$\{encodeURIComponent\(laneSig\)\}/.test(wonChipWindow) &&
+      /item\.liveOpps\?\.laneSignature/.test(wonChipWindow),
+    "expected the active-won chip to deep-link into Available Freight filtered by lane (laneSig from item.liveOpps.laneSignature)",
   );
   assert(
     "lane-work-queue.tsx — active-won link carries link-active-won-${item.laneId} testid",
@@ -5446,7 +5447,7 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     "missing link-active-won-… data-testid",
   );
 
-  const qrSrc = readFileSync("client/src/pages/quote-requests.tsx", "utf8");
+  const qrSrc = fs.readFileSync("client/src/pages/quote-requests.tsx", "utf8");
   const describeStart = qrSrc.indexOf("function describeEvent");
   const describeEnd = qrSrc.indexOf("\nfunction ", describeStart + 10);
   const describeBody = describeStart >= 0 ? qrSrc.slice(describeStart, describeEnd > 0 ? describeEnd : qrSrc.length) : "";
@@ -5463,7 +5464,7 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
 
   // The doc that explains the loop must keep referencing all three
   // surfaces so a future reader knows where to look.
-  const heroDoc = readFileSync("docs/hero-loop-email-to-load.md", "utf8");
+  const heroDoc = fs.readFileSync("docs/hero-loop-email-to-load.md", "utf8");
   assert(
     "docs/hero-loop-email-to-load.md — references the cross-tab navigation polish",
     /WonQuoteBadge|active won chip|Auto-routed to Available Freight/i.test(heroDoc),

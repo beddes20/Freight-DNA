@@ -1098,19 +1098,20 @@ function LaneRow({
                 same pattern the live-opps chip uses — so the LM goes from
                 "I see the count" to "I see the rows" in one click. */}
             {item.liveOpps && item.liveOpps.wonQuoteCount > 0 && (() => {
+              const laneSig = item.liveOpps?.laneSignature ?? null;
               const wonChip = (
                 <Badge
                   variant="outline"
-                  className={`text-[10px] py-0 px-1.5 border-emerald-500/50 text-emerald-400 bg-emerald-500/10 gap-0.5 font-semibold${item.laneSignature ? " hover:bg-emerald-500/20 hover:border-emerald-500 cursor-pointer transition-colors" : ""}`}
+                  className={`text-[10px] py-0 px-1.5 border-emerald-500/50 text-emerald-400 bg-emerald-500/10 gap-0.5 font-semibold${laneSig ? " hover:bg-emerald-500/20 hover:border-emerald-500 cursor-pointer transition-colors" : ""}`}
                   data-testid={`chip-active-won-${item.laneId}`}
-                  title={`${item.liveOpps.wonQuoteCount} active won load${item.liveOpps.wonQuoteCount > 1 ? "s" : ""} sourced from a customer-quote win — ${item.laneSignature ? "click to open in Available Freight" : "open in Available Freight"}`}
+                  title={`${item.liveOpps!.wonQuoteCount} active won load${item.liveOpps!.wonQuoteCount > 1 ? "s" : ""} sourced from a customer-quote win — ${laneSig ? "click to open in Available Freight" : "open in Available Freight"}`}
                 >
-                  {item.liveOpps.wonQuoteCount} active won
+                  {item.liveOpps!.wonQuoteCount} active won
                 </Badge>
               );
-              return item.laneSignature ? (
+              return laneSig ? (
                 <Link
-                  href={`/available-freight?lane=${encodeURIComponent(item.laneSignature)}`}
+                  href={`/available-freight?lane=${encodeURIComponent(laneSig)}`}
                   onClick={e => e.stopPropagation()}
                   data-testid={`link-active-won-${item.laneId}`}
                 >
