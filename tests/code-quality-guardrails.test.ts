@@ -4995,6 +4995,87 @@ console.log("\n── Section 1051: Unified ReplitDailyUpload contract ──\n"
   );
 }
 
+// ── Section 1092: Email-Derived Companies admin console — read-only ───
+// The /admin/email-derived-companies route is the incident-triage view
+// for stub companies. It MUST stay strictly read-only: no INSERT,
+// UPDATE, or DELETE may ever appear in the route file. The page must
+// continue to render the three triage buckets the admin uses to decide
+// "promote / merge-review / suppress later".
+(function section1092EmailDerivedCompaniesReadOnly() {
+  console.log("\n── Section 1092: Email-Derived Companies admin console (read-only contract) ──");
+  const routePath = "server/routes/adminEmailDerivedCompanies.ts";
+  const pagePath = "client/src/pages/admin-email-derived-companies.tsx";
+  const routeSrc = readFile(routePath);
+  const pageSrc = readFile(pagePath);
+
+  // Hard ban: the route file MUST NOT contain any write SQL keywords.
+  // We strip block comments and line comments first so the explanatory
+  // header doesn't trigger a false positive.
+  const stripped = routeSrc
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+  for (const kw of ["INSERT INTO", "UPDATE ", "DELETE FROM", "TRUNCATE"]) {
+    assert(
+      `${routePath} — must not contain "${kw.trim()}" (read-only contract)`,
+      !new RegExp(`\\b${kw.replace(/\s+/g, "\\s+")}\\b`, "i").test(stripped),
+      `Read-only admin route may not perform writes. Found "${kw}".`,
+    );
+  }
+  assert(
+    `${routePath} — gated by isAdmin`,
+    /isAdmin\s*\(/.test(routeSrc),
+    "route must call isAdmin(user) before serving data",
+  );
+  assert(
+    `${routePath} — scoped by req.user.organizationId`,
+    /user\.organizationId/.test(routeSrc),
+    "route must scope every query by the caller's organizationId",
+  );
+  assert(
+    `${routePath} — exposes the three triage buckets`,
+    /real_incomplete/.test(routeSrc) &&
+      /duplicate_candidate/.test(routeSrc) &&
+      /low_value_stub/.test(routeSrc),
+    "classification contract must surface all three buckets",
+  );
+  assert(
+    `${routePath} — computes similarity hints (Dice on bigrams)`,
+    /bigrams\s*\(/.test(routeSrc) && /dice\s*\(/.test(routeSrc),
+    "duplicate-detection helper functions must be present",
+  );
+
+  // Page must NOT have wired up any mutations or destructive buttons.
+  assert(
+    `${pagePath} — must not import useMutation (read-only page)`,
+    !/useMutation/.test(pageSrc),
+    "page must not use TanStack mutations — read-only by contract",
+  );
+  assert(
+    `${pagePath} — must not import apiRequest (no POST/PATCH/DELETE)`,
+    !/apiRequest/.test(pageSrc),
+    "page must not call apiRequest — read-only by contract",
+  );
+  for (const word of [">Archive<", ">Delete<", ">Merge<", ">Suppress<"]) {
+    assert(
+      `${pagePath} — must not render destructive button label ${word}`,
+      !pageSrc.includes(word),
+      `page must not render any destructive action button (${word})`,
+    );
+  }
+  assert(
+    `${pagePath} — renders the three bucket filters`,
+    /data-testid=\{`filter-bucket-\$\{b\}`\}/.test(pageSrc) &&
+      /\["real_incomplete",\s*"duplicate_candidate",\s*"low_value_stub"\]/.test(pageSrc),
+    "page must render filter chips iterating over all three buckets",
+  );
+  assert(
+    `${pagePath} — surfaces similarity hints with stable testid`,
+    /hints-\$\{r\.companyId\}/.test(pageSrc),
+    "similarity-hints column must be testable",
+  );
+})();
+
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 
 if (failures.length > 0) {

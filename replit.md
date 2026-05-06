@@ -1,54 +1,70 @@
-# FreightDNA - Transportation Brokerage Sales Tool
+# FreightDNA
+FreightDNA is a mini CRM application designed to empower transportation brokerage sales teams by managing customer accounts, contacts, and shipping data to boost sales efficiency and revenue.
 
-## Overview
-FreightDNA is a mini CRM application designed to empower transportation brokerage sales teams by managing customer accounts, contacts, and shipping data. The project's vision is to significantly boost sales efficiency, enhance strategic account penetration, and increase revenue through advanced features like robust role-based access control, AI-driven insights, automated workflows, real-time communication tools, and sophisticated RFP and Award management with advanced analytics.
+## Run & Operate
+- **Run:** `npm start`
+- **Build:** `npm run build`
+- **Typecheck:** `npm run typecheck`
+- **Codegen:** `npm run codegen`
+- **DB Push:** `drizzle-kit push:pg`
+- **Environment Variables:** `DATABASE_URL`, `OPENAI_API_KEY`, `MICROSOFT_GRAPH_CLIENT_ID`, `MICROSOFT_GRAPH_CLIENT_SECRET`, `RESEND_API_KEY`
 
-## User Preferences
+## Stack
+- **Frontend:** React, TypeScript, Tailwind CSS, `shadcn/ui`
+- **Backend:** Express.js
+- **Database:** PostgreSQL (Drizzle ORM)
+- **Runtime:** Node.js (specific version not specified, infer from `package.json`)
+- **Build Tool:** Vite (implied by React setup, confirm with `package.json`)
+
+## Where things live
+- `/client`: Frontend source code.
+- `/server`: Backend source code.
+- `/server/db/schema.ts`: Database schema definition (source of truth).
+- `/server/routes`: API endpoints.
+- `/server/services`: Business logic and data access.
+- `/server/agent`: AI agent runtime components.
+- `/server/agentic`: AI agent control and autonomy layers.
+- `/docs`: Project documentation and architectural contracts.
+- `/tests`: Code quality guardrails and test suite.
+
+## Architecture decisions
+- **"Zero-new-error" philosophy:** Express handlers are designed for robust request parameter normalization.
+- **Role-Based Access Control (RBAC):** Dynamic RBAC implemented for secure access to features.
+- **AI-first Integration:** AI functionalities (`/ai-hub`) deeply integrated for insights, automation, and communication.
+- **Unified Data Source:** `freight_daily_upload_fact` table serves as a single source of truth for financials, available freight, and lane work queue data.
+- **Stability Contracts:** Critical functionalities like Customer Quotes & Account Ownership are enforced by documented stability contracts and automated tests.
+- **Inbound Email Preservation:** Prevents silent dropping of inbound emails from unknown senders by persisting them with null account/carrier links, differentiating from noise.
+
+## Product
+- Comprehensive CRM for customer accounts, contacts, and shipping.
+- AI-assisted RFP and Award management via Excel uploads.
+- Advanced analytics for lane research, coverage gaps, and wallet share.
+- User and team management with role-based access.
+- Real-time communication and collaboration tools (notes, Webex Calling).
+- AI-powered features: talking points, health scores, touchpoint summaries, email drafting, Next Best Action (NBA) engine.
+- Lane Work Queue (LWQ) for managing assignable lane workflows.
+- Integration with external services for market intelligence (FreightWaves SONAR/TRAC, ZoomInfo).
+- Automated processes for email syncing, account reviews, and quote processing.
+- Admin consoles for monitoring system health and triaging data (e.g., Email-Derived Companies).
+
+## User preferences
 I prefer clear and concise information. I like iterative development with regular updates. Please ask for my approval before implementing any major architectural changes or significant feature modifications. I value clean code and well-documented solutions.
 
-## System Architecture
+## Gotchas
+- **Customer Quotes & Account Ownership:** Modifying `applyFilters`, `loadContext`, `enrich`, `attachResponseTimes`, or the `__none__` resolver in `server/services/customerQuotes.ts` requires updating `docs/customer-quotes-stability-contract.md` and `tests/code-quality-guardrails.test.ts` (Section 1100).
+- **Unified ReplitDailyUpload:** Changes to financials or available freight upload logic (Task #1051) must maintain consistency with `freight_daily_upload_fact` and pass Section 1051 guardrails.
+- **Email Ingestion:** The `processUserMailboxEmail` helper has specific logic for `PERSIST-UNKNOWN` and `TOMBSTONE-DROP` emails; do not reintroduce `DROP-GATE` behavior.
+- **Carrier Ranking:** The carrier ranking engine prioritizes lane fit; AI adjustments cannot violate the lane-first ordering.
 
-### UI/UX Decisions
-The application features a modern, responsive UI built with React, TypeScript, Tailwind CSS, and `shadcn/ui`. It supports dark/light mode, a consistent black sidebar/header with amber gold accents, and the Value Truck logo. Key UI elements include KPI stat cards, a responsive sidebar, and consistent UI primitives for managing loading, empty, and error states. AI functionalities are primarily accessible via `/ai-hub`.
-
-### Technical Implementations
-FreightDNA employs a React frontend, an Express.js backend, and a PostgreSQL database managed with Drizzle ORM. It utilizes session-based authentication with dynamic Role-Based Access Control (RBAC). Core functionalities span comprehensive CRM operations, AI-assisted RFP and Award management via Excel uploads, and advanced analytics for lane research, coverage gaps, and wallet share analysis. The system supports user and team management, data integration through global search and OneDrive sync, and various communication and collaboration tools.
-
-AI-powered features include generating talking points, health score narratives, touchpoint summaries, proactive nudges, AI action execution, and email drafting. A Next Best Action (NBA) engine provides daily task recommendations, while the Lane Work Queue (LWQ) manages assignable lane workflows with carrier outreach and email tracking. Advanced capabilities encompass external layering for spot quote searches, a visibility model for access control, a Carrier Hub for intelligence, and Rate Intelligence with AI coaching. Email Intelligence captures customer contacts, integrates two-way carrier emails, and extracts intent signals. An Org-scoped Conversations Inbox offers AI summaries and suggested actions using a hybrid sync approach. The Quote Lifecycle Autopilot automates quote processing, and Geographic Lane Patterns define corridor behaviors.
-
-Automated processes include email syncing, a Tactical Learning Engine, and auto-generated weekly account reviews. Webex Calling is integrated for telephony, and a Call Performance Hub provides manager oversight. An AI Center manages AI agents, and specialized cockpits handle available freight and won loads. Schema-Drift Guard ensures database consistency. The system also includes a Capture Leak Queue for managing missed emails and a Cross-Tab UX Layer for enhanced navigation and real-time updates. The Quote Request System has been improved for operator efficiency, featuring detailed task implementations with refined display, filtering, and deep-linking. Leakage diagnostics, freshness improvements for conversation threads, and a Manager Leak Console address operational inefficiencies. Self-healing mailbox ingestion ensures continuous email synchronization, and a daily snapshot scheduler populates manager KPIs.
-
-The Workflow OS defines canonical owner + pickup-scope filter contracts, URL serialization, and stale-suppression behavior across rep-facing work surfaces, including Available Freight, Lane Work Queue, and Available Loads. Shared trust and consistency layers ensure uniform behavior across rep-facing operations tabs (Available Freight, Lane Work Queue, Conversations, Customer Quotes) through components like `LiveSyncPill`, `rowVersionAt` with `applyRowVersionGuard`, and a canonical owner-scope grammar. The system also includes `HiddenCountsDisclosure` and `EmptyStateRecovery` for improved user experience. Quote Pipeline Observability is implemented through the `quote_pipeline_drops` table, capturing email-to-quote attempt statuses and enabling an admin operator console for health monitoring and issue resolution.
-
-Inbound email preservation contract (P0 incident fix): the `processUserMailboxEmail` helper in `server/routes/graphWebhook.ts` (single ingest path used by webhook, delta-sync poll, historical backfill, and reply self-heal) no longer silently drops inbound emails when the sender isn't a known contact, isn't a known carrier, and doesn't extend an existing thread. The legacy `DROP-GATE` early-return destroyed brand-new customer first-touch quote emails because they look identical to noise (no contact, no carrier, no thread). Replacement contract: rows are persisted with `linkedAccountId = NULL` and `linkedCarrierId = NULL`, an `email_conversation_thread` is created, and a distinct `[user-mailbox] PERSIST-UNKNOWN direction=inbound` log line is emitted so ops can count first-touch traffic. The single retained early-return is a `TOMBSTONE-DROP` for true Outlook `@removed` placeholders (no from + no subject + no body). The rep's "Customers" inbox tab continues to filter on `linkedAccountId IS NOT NULL` (`server/storage.ts:8736`) so unknown-sender rows do not pollute the existing rep view, while remaining visible to admin diagnostics and the inline classifier. A guardrail in `tests/code-quality-guardrails.test.ts` (Section 30) asserts the legacy log call is gone, the new log lines exist, and `processUserMailboxEmail` has at most 2 `created:false` early-returns (tombstone + duplicate).
-
-A stability contract for Customer Quotes & Account Ownership is locked in via `docs/customer-quotes-stability-contract.md` (CQ-1..CQ-6: honest "Mine Only" empty state, customer-only main queue chokepoint, canonical `companies.ownerRepId`, read-only response-time derivation, null-passthrough on the rep gate, intentional diagnostics bypass) and enforced by Section 1100 of `tests/code-quality-guardrails.test.ts`. Touching `applyFilters`, `loadContext`, `enrich`, `attachResponseTimes`, or the `__none__` resolver in `server/services/customerQuotes.ts` requires updating both files in the same commit.
-
-Task #1051 — Unified ReplitDailyUpload: Financials, Available Freight, and the Lane Work Queue now share a single source of truth. The financials upload handler (`POST /api/financials/upload`) normalizes every transaction-sheet and AVL "Available Freight" sheet row into the canonical `freight_daily_upload_fact` table via `server/services/freightDailyUploadFact.ts` (AVL rows are forced to `moved=false` so they cannot inflate move counts). The LWQ eligibility rule is now "≥6 moved loads in the rolling last 30 days" with a 7-day grace via `recurring_lanes.lastEligibleAt` (no more 8-week / per-week heuristic). Each LWQ row carries `movesLast30Days`, `lastMovedAt`, `qualificationReason`, top `supportingCustomers`, and recent `recentCarriers` directly from the fact table, surfaced as a qualification chip. A shared `UnifiedUploadFreshnessPill` (backed by `GET /api/unified-upload/latest`) renders the same "Synced Xm ago — N rows (M moved)" affordance on Financials, Available Freight, and LWQ. See `docs/unified-replit-daily-upload.md`; behavior is locked by Section 1051 of `tests/code-quality-guardrails.test.ts`.
-
-Task #1075 — UI Trust Micro-Batch: closed four "looks real but isn't" gaps from `docs/production-parity-audit.md` with minimal localized diffs. (1) `GET /api/1on1/prep-summary` openTopics now calls `storage.countOpenTopicsForAm(amId)` (counts pending topics across every 1:1 the AM is part of) instead of the legacy hardcoded `0` inside a no-op try/catch. (2) `POST /api/tasks/:id/forward` route added — the task-dialog Forward affordance had been silently 404'ing; copies title/company/contact/lane context from source, mirrors the POST /api/tasks assignableIds rules, drops a thread comment on the source, and notifies the new assignee. (3) `client/src/pages/team-performance-detail.tsx` now reads `?scope=all|mine` from the URL, threads it into the React Query queryKey, and forwards it to `/api/team/performance/detail` so card drill-downs in "All Teams" view no longer collapse to the caller's "Mine" tree (Task #1060 set the URL but the detail page dropped the param). (4) `PATCH /api/goals/:id` now also auto-reverts a `completed` goal back to `active` when a corrected `currentValue` drops below `target`, mirroring the existing forward auto-complete branch. Behavior locked by Section 1075 of `tests/code-quality-guardrails.test.ts` (11 assertions).
-
-Incident response (2026-05-06) — Read-only **Email-Derived Companies** admin console at `/admin/email-derived-companies` (route `server/routes/adminEmailDerivedCompanies.ts`, page `client/src/pages/admin-email-derived-companies.tsx`). Lists companies in the caller's org with no owner, no industry, not archived, and zero contacts; surfaces inbound email count, thread count, first/last inbound, and quote/freight opportunity counts as columns. **Strictly read-only** by contract — no INSERT/UPDATE/DELETE in the route. Found 207 stub companies in prod (incl. Armstrong, 6 freight opps). Note: `email_messages.linked_account_id` and `email_conversation_threads.linked_account_id` are sparsely populated, so the view does NOT require an inbound-email link to include a row — that signal is shown as a column instead. Step 2 (controlled "promote suggestions to contacts" tool) is documented as a design-only spec at `docs/contact-promotion-design.md` — not yet implemented; awaiting user sign-off on five questions in that doc. The `backfill-incident` workflow remains intentionally disabled.
-
-Task #1078 — Available Freight cockpit rows now surface the upload-derived order/load number (`Order #…`, primary identifier, testid `text-order-number-{oppId}`) when a matching `freight_daily_upload_fact` row carries an explicit Order/loadId column; fingerprint-fallback `loadKey`s are intentionally never surfaced. The legacy "From won quote" badge has been reworded to **"Won from Customer Quote"** (tooltip + deep-link to source quote preserved); when a row has both an order number and a won-quote source, both render together (order # primary, badge secondary). The lookup is one batched query per cockpit response in `server/routes/freightOpportunityCockpit.ts`. Behavior is locked by Section 1078 of `tests/code-quality-guardrails.test.ts`, which also asserts `createFreightOpportunityFromWonQuote` does NOT synthesize a loadKey/orderNumber (preserves the upload-as-source-of-truth contract from Section 1051 / 1069).
-
-Carrier ranking engines have been rebalanced to prioritize lane fit and carrier profile as primary factors, with customer history serving as a secondary booster. The lane-fit floor is org-tunable end-to-end via `ScoringThresholds.minLaneFitForTopRank` (default 50): both `rankCarriersForLane` and `recommendCarriersForLoad` read it via `getThresholds(orgId)`, the admin route `PUT /api/admin/carrier-intelligence/scoring` accepts it, and the admin scoring page renders an input for it. The customer-history boost was halved to `+5 base + 1/load (cap 10)`, the rec-engine blend is `0.65·fit + 0.35·perf` (loads≥3) / `0.80/0.20` (new carriers), carriers below the floor are split into a `customerOnlyFallback` bucket with a leading reason `"Customer history only on other lanes (weak lane fit)"`, and the AI top-5 re-sort re-applies the canonical bench → claimed → fallback → score comparator (instead of a naive score sort) so AI adjustments cannot violate the lane-first ordering. Bench-win carriers are excluded from the fallback flag because outreach success counts as lane evidence. Context notes provide anchored, in-platform collaboration features, allowing reps to attach notes to various items with action types, lifecycle management, and the ability to convert notes into tasks.
-
-### System Design Choices
-The codebase adheres to a "zero-new-error" philosophy, with Express handlers designed for request parameter normalization. AI chat conversations are user-scoped, and the database schema is optimized for caching, contact suggestions, lane patterns, and email conversations. Performance is enhanced through dashboard query optimization, server-side, and in-memory caching. Engineering patterns include visibility expansion, multi-layered caching, keyset pagination, rate-limited external calls, background workers, and webhook-driven reactivity. Customer sender domain learning and Carrier Ranker integration are integral. An admin page monitors external service health. LLM tooling is split into `server/agent/` for runtime and `server/agentic/` for control and autonomy layers.
-
-## External Dependencies
--   **PostgreSQL**: Primary data store.
--   **SheetJS (xlsx)**: For Excel and CSV parsing.
--   **multer**: Handles file uploads.
--   **Leaflet**: Provides interactive mapping functionalities.
--   **OneDrive API (Microsoft Graph API)**: Synchronizes financial data.
--   **node-cron**: Schedules recurring tasks.
--   **Resend / GoDaddy SMTP**: Manages email sending.
--   **OpenAI (GPT-4o, GPT-4o-mini, Whisper)**: Powers AI-assisted features.
--   **Microsoft Graph API (Outlook)**: Facilitates two-way carrier email integration and customer email auto-sync.
--   **FreightWaves SONAR**: Offers market rate benchmarking and lane capacity insights.
--   **Webex Calling API**: Integrates telephony features.
--   **FreightWaves TRAC**: Provides spot rates, forecasts, and market signals.
--   **ZoomInfo**: Supplies contact intelligence.
--   **Clerk**: Manages authentication in production environments.
+## Pointers
+- **Drizzle ORM:** [https://orm.drizzle.team/](https://orm.drizzle.team/)
+- **Tailwind CSS:** [https://tailwindcss.com/](https://tailwindcss.com/)
+- **shadcn/ui:** [https://ui.shadcn.com/](https://ui.shadcn.com/)
+- **Microsoft Graph API:** [https://learn.microsoft.com/en-us/graph/](https://learn.microsoft.com/en-us/graph/)
+- **OpenAI API:** [https://platform.openai.com/docs/api-reference](https://platform.openai.com/docs/api-reference)
+- **FreightWaves SONAR:** _Populate as you build_
+- **Webex Calling API:** _Populate as you build_
+- **Clerk Documentation:** _Populate as you build_
+- **Customer Quotes Stability Contract:** `docs/customer-quotes-stability-contract.md`
+- **Unified ReplitDailyUpload Documentation:** `docs/unified-replit-daily-upload.md`
+- **Contact Promotion Design:** `docs/contact-promotion-design.md`
