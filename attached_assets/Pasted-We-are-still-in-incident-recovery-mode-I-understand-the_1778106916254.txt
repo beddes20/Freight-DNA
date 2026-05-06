@@ -1,0 +1,88 @@
+We are still in incident-recovery mode.
+
+I understand the current diagnosis:
+
+prod was not mass-deleted,
+
+many of the “missing contacts” may actually have been suggested/email-derived contacts rather than saved contacts rows,
+
+and the stub-company triage is now in place.
+
+But I still believe we had more saved-looking contact information and attached account context visible before, and I need to understand whether that information is still recoverable.
+
+Highest-priority next step
+
+I want a read-only recovery analysis focused on our real customer accounts — not broad stub cleanup yet.
+
+Goal
+
+For our core real customer accounts, determine:
+
+how many true saved contacts exist now,
+
+how many suggested/email-derived contacts exist,
+
+what other account/contact-level information exists alongside those suggestions,
+
+and how much of the “missing” information could be restored operationally by promoting suggestions into real contacts.
+
+Scope
+
+Focus first on:
+
+the approximately 60 real customer accounts,
+
+and especially any high-value accounts where I remember multiple contacts / saved information.
+
+For each sampled customer account, show read-only:
+
+saved contacts count
+
+suggested contacts count
+
+names/emails of top suggested contacts
+
+whether suggested contacts have supporting evidence:
+
+inbound email history
+
+domain match
+
+signature extraction
+
+quote/freight linkage
+
+any associated information tied to those suggestions that users may perceive as “saved info”
+
+whether that information would be preserved if the suggestion were promoted to a real contact
+
+Important
+
+dev only
+
+read-only only
+
+no production writes
+
+no auto-promotion
+
+no backfills
+
+Deliverable
+
+I want:
+
+a clear distinction between:
+
+real saved contacts
+
+suggested contacts
+
+contact-like intelligence inferred from email/signatures
+
+an estimate of how many additional usable contacts we could recover for our real customer base if we promoted the best suggestions
+
+examples from a few known accounts where the old UI may have made suggestion data feel like saved contact data
+
+Desired outcome:
+I want to know whether the contact information and attached context I remember is still present in recoverable form, even if it is not currently stored as a real contacts row.
