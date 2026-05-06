@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -256,6 +257,27 @@ export function ThreadRow({
               <DollarSign className="w-3 h-3" />
               Quote request
             </Badge>
+          )}
+          {/* Pilot trust fix — when the quote pipeline already captured
+              this thread into a customer quote, surface the link on the
+              row so the rep can jump straight to it instead of guessing
+              from the subject. Read-only reflection of state already
+              written to quote_opportunities.source_reference; no new
+              capture/routing path. */}
+          {thread.linkedQuoteId && (
+            <Link
+              href={`/quote-requests?quote=${encodeURIComponent(thread.linkedQuoteId)}`}
+              onClick={(e) => e.stopPropagation()}
+              data-testid={`link-linked-quote-${thread.id}`}
+            >
+              <Badge
+                variant="outline"
+                className="text-xs gap-1 border-emerald-600 text-emerald-700 dark:border-emerald-400 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950 cursor-pointer"
+              >
+                <DollarSign className="w-3 h-3" />
+                Linked to Quote #{thread.linkedQuoteId.slice(0, 6)}
+              </Badge>
+            </Link>
           )}
         </div>
         <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">

@@ -32,6 +32,12 @@ export interface ConversationThread {
   signals?: string[];
   lastReadAt?: string | null;
   unread?: boolean;
+  // Pilot trust fix — when this thread was already captured into the
+  // customer quote pipeline, this is the quote_opportunities.id. Drives
+  // the "Linked to Quote #abc123" pill on the row, deep-linking to
+  // /quote-requests?quote=<id>. Pure read-only reflection of state the
+  // quote pipeline already wrote — no new routing path.
+  linkedQuoteId?: string | null;
   // ─── Free-mail attribution recovery (Task #1056 / Email→Exec 5) ──────────
   // Informational stamp recording HOW this thread came to be linked (or
   // suggested-linked) to its `linkedAccountId`. Drives the

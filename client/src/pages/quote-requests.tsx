@@ -5,6 +5,7 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useLiveSync } from "@/hooks/useLiveSync";
 import { useToast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
 import { isQuoteOpportunitiesRole } from "@shared/quoteOpportunitiesRoles";
 import { formatCustomerName } from "@shared/laneFormatters";
 import { computeQuoteSla, formatSlaBadge } from "@shared/quoteSla";
@@ -2653,8 +2654,38 @@ function DetailDrawer({
       const res = await apiRequest("PATCH", `/api/customer-quotes/quote/${opp.id}`, body);
       return res.json();
     },
-    onSuccess: () => {
-      toast({ title: "Quote updated" });
+    onSuccess: (resp: unknown) => {
+      // Pilot trust fix — hero-aware Won toast. The PATCH route returns
+      // `_handoff: { state: "auto"|"pending_approval"|"none", opportunityId }`
+      // alongside the quote detail. Branch the toast so reps see exactly
+      // what happened to the won quote (auto-routed to AF vs. waiting on
+      // NAM/AM approval) instead of the generic "Quote updated".
+      const handoff = (resp as { _handoff?: { state?: string; opportunityId?: string | null } } | null)?._handoff;
+      if (handoff?.state === "auto") {
+        const oppId = handoff.opportunityId ?? "";
+        toast({
+          title: "Quote won — auto-routed to Available Freight",
+          description: oppId ? `Opportunity ${oppId.slice(0, 8)}… is live for dispatch.` : undefined,
+          action: oppId ? (
+            <ToastAction
+              altText="View in Available Freight"
+              asChild
+              data-testid="toast-action-view-in-af"
+            >
+              <a href={`/available-freight?opportunity=${encodeURIComponent(oppId)}`}>
+                View in AF
+              </a>
+            </ToastAction>
+          ) : undefined,
+        });
+      } else if (handoff?.state === "pending_approval") {
+        toast({
+          title: "Quote won — waiting on NAM/AM approval",
+          description: "Off-hero pickup. The freight row is staged in Available Freight pending approval.",
+        });
+      } else {
+        toast({ title: "Quote updated" });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/quote", opp.id] });
       onRefresh();
     },
@@ -3329,7 +3360,7 @@ function ActivityTimeline({
   );
 }
 
-function describeEvent(ev: QuoteEvent): string {
+function describeEvent(ev: QuoteEvent): React.ReactNode {
   switch (ev.eventType) {
     case "opp_created": return "Opportunity created";
     case "auto_captured": return "Auto-captured from email";
@@ -3352,12 +3383,27 @@ function describeEvent(ev: QuoteEvent): string {
     case "tms_won": return "Auto-flipped to Won (TMS-confirmed)";
     case "tms_lost": return "Auto-flipped to Lost (TMS-confirmed)";
     case "af_handoff": {
-      // Hero loop polish — the timeline used to render this as the bare
-      // "af handoff" fallback. Surface the canonical narrative so the rep
-      // can see exactly where the won quote went without flipping tabs.
+      // Pilot trust fix — Quote → AF was text-only while AF → Quote was a
+      // working link (Section 1076). Mirror that affordance here so the
+      // rep can jump straight from the activity narrative to the
+      // auto-routed freight row. The link uses the same `?opportunity=`
+      // deep-link the AF cockpit honors.
       const oppId = (ev.payload?.opportunityId as string | undefined) ?? "";
-      const tail = oppId ? ` (opportunity ${oppId.slice(0, 8)}…)` : "";
-      return `Auto-routed to Available Freight${tail}`;
+      if (!oppId) return "Auto-routed to Available Freight";
+      return (
+        <span>
+          Auto-routed to Available Freight (opportunity{" "}
+          <Link
+            href={`/available-freight?opportunity=${encodeURIComponent(oppId)}`}
+            onClick={(e) => e.stopPropagation()}
+            className="font-mono underline decoration-dotted underline-offset-2 text-emerald-600 hover:text-emerald-500 dark:text-emerald-400"
+            data-testid={`link-af-handoff-${oppId}`}
+          >
+            {oppId.slice(0, 8)}…
+          </Link>
+          )
+        </span>
+      );
     }
     default: return ev.eventType.replace(/_/g, " ");
   }

@@ -3096,7 +3096,7 @@ export async function createFreightOpportunityFromWonQuote(
   orgId: string,
   opp: QuoteOpportunity,
   actorUserId: string | null,
-): Promise<{ id: string; created: boolean } | null> {
+): Promise<{ id: string; created: boolean; heroAssigned?: boolean } | null> {
   try {
     // 1. Org-level setting gate.
     const enabled = await getAutoWonQuoteAfHandoffEnabled(orgId);
@@ -3583,7 +3583,22 @@ export async function createQuote(orgId: string, actor: string, input: CreateQuo
   return opp;
 }
 
-export async function updateQuote(orgId: string, actor: string, id: string, patch: UpdateQuoteInput, actorUserId?: string | null): Promise<QuoteOpportunity> {
+// Pilot trust fix — return shape from updateQuote.
+// `handoff` lets the PATCH route surface a hero-aware Won toast on the
+// client without a second round-trip. `state` tracks whether the freight
+// opportunity that was created from the won quote was auto-routed via a
+// hero slice (`auto`), held for NAM/AM approval (`pending_approval`), or
+// no handoff happened at all on this save (`none`). Pure read of state
+// the existing handoff already wrote — no business-logic change.
+export type UpdateQuoteHandoffMeta = {
+  state: "auto" | "pending_approval" | "none";
+  opportunityId: string | null;
+};
+export type UpdateQuoteResult = {
+  opp: QuoteOpportunity;
+  handoff: UpdateQuoteHandoffMeta;
+};
+export async function updateQuote(orgId: string, actor: string, id: string, patch: UpdateQuoteInput, actorUserId?: string | null): Promise<UpdateQuoteResult> {
   const [existing] = await db.select().from(quoteOpportunities)
     .where(and(eq(quoteOpportunities.organizationId, orgId), eq(quoteOpportunities.id, id))).limit(1);
   if (!existing) throw new Error("Quote not found");
@@ -3698,6 +3713,7 @@ export async function updateQuote(orgId: string, actor: string, id: string, patc
   // and short-circuits on org setting / window / company resolution. The
   // af_handoff event + touchpoint are only emitted on the very first
   // creation so re-saves don't spam the audit trail.
+  let handoffMeta: UpdateQuoteHandoffMeta = { state: "none", opportunityId: null };
   if (isWon(updated.outcomeStatus)) {
     const handoff = await createFreightOpportunityFromWonQuote(orgId, updated, actorUserId ?? null);
     if (handoff?.created) {
@@ -3711,9 +3727,17 @@ export async function updateQuote(orgId: string, actor: string, id: string, patc
           occurredAt: handoffEvent.occurredAt, fallbackUserId: actorUserId ?? null,
         });
       }
+      // Pilot trust fix — surface the handoff classification to callers
+      // so the markWon toast can branch ("auto-routed to AF" vs
+      // "waiting on NAM/AM approval"). Mirrors the routing decision the
+      // helper already made — see createFreightOpportunityFromWonQuote.
+      handoffMeta = {
+        state: handoff.heroAssigned ? "auto" : "pending_approval",
+        opportunityId: handoff.id,
+      };
     }
   }
-  return updated;
+  return { opp: updated, handoff: handoffMeta };
 }
 
 // ---------- Lost-Streak Alerts (Task #478) ----------

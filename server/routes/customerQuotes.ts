@@ -812,7 +812,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
             : "Quote not found",
         });
       }
-      const opp = await updateQuote(user.organizationId, actorName(user), id, data, user.id);
+      const { opp, handoff } = await updateQuote(user.organizationId, actorName(user), id, data, user.id);
       const detail = await getQuoteDetail(user.organizationId, opp.id);
       // Cross-tab UX (option A) — quote outcome/status edits affect the
       // snapshot KPIs, the list view, and the action queue. One topic
@@ -829,7 +829,12 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // recomputes; the membership tracker inside the service will then
       // publish `customer_quote_followup` if the set actually changed.
       clearStaleFollowUpCache(user.organizationId);
-      res.json(detail);
+      // Pilot trust fix — hero-aware Won toast. The client uses `_handoff`
+      // to branch the markWon toast: `auto` → "auto-routed to AF" with a
+      // View-in-AF action, `pending_approval` → "waiting on NAM/AM
+      // approval", `none` → generic "Quote updated". Read-only reflection
+      // of the routing decision updateQuote already made.
+      res.json({ ...detail, _handoff: handoff });
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] update error:", err);

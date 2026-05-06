@@ -5471,3 +5471,172 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     "doc must mention the new cross-tab affordances",
   );
 })();
+
+// ─────────────────────────────────────────────────────────────────────────
+// Section 1077: Hero Loop pilot trust micro-batch
+// ─────────────────────────────────────────────────────────────────────────
+// Locks the three surgical UX touches that close "looks real but isn't"
+// gaps for the pilot rollout. Each fix is read-only state reflection of
+// behaviour the pipeline already produces; no business-logic change.
+//   (1) Customer Quotes timeline — `af_handoff` event renders a clickable
+//       <Link> to /available-freight?opportunity=<id> (mirrors the AF →
+//       Quote affordance from Section 1076).
+//   (2) Conversations rows — when the inbound email already has a quote
+//       row in quote_opportunities, surface a "Linked to Quote #abc123"
+//       pill that deep-links to /quote-requests?quote=<id>.
+//   (3) Customer Quotes Won toast — branch on the new `_handoff` field
+//       returned by PATCH /api/customer-quotes/quote/:id so reps see
+//       "auto-routed to AF" vs "waiting on NAM/AM approval" instead of
+//       the generic "Quote updated".
+(() => {
+  console.log("\n── Section 1077: Hero Loop pilot trust micro-batch ─────────────────\n");
+
+  // ── Fix 1: clickable af_handoff link in the quote timeline ──
+  const qrSrc = fs.readFileSync("client/src/pages/quote-requests.tsx", "utf8");
+  const describeStart = qrSrc.indexOf("function describeEvent");
+  const describeEnd = qrSrc.indexOf("\nfunction ", describeStart + 10);
+  const describeBody = describeStart >= 0 ? qrSrc.slice(describeStart, describeEnd > 0 ? describeEnd : qrSrc.length) : "";
+  assert(
+    "quote-requests.tsx — describeEvent return type is ReactNode (so af_handoff can render a <Link>)",
+    /function describeEvent\([^)]*\)\s*:\s*React\.ReactNode/.test(qrSrc),
+    "describeEvent must return React.ReactNode so the af_handoff branch can return JSX",
+  );
+  assert(
+    "quote-requests.tsx — af_handoff renders a wouter <Link> to /available-freight?opportunity=…",
+    /<Link[\s\S]*\/available-freight\?opportunity=\$\{encodeURIComponent\(oppId\)\}/.test(describeBody),
+    "expected the af_handoff case to wrap the opportunity id in a wouter <Link href=\"/available-freight?opportunity=…\">",
+  );
+  assert(
+    "quote-requests.tsx — af_handoff link carries a stable link-af-handoff-${oppId} testid",
+    /data-testid=\{`link-af-handoff-\$\{oppId\}`\}/.test(describeBody),
+    "missing data-testid={`link-af-handoff-${oppId}`} on the af_handoff link",
+  );
+  assert(
+    "quote-requests.tsx — af_handoff link stops click propagation (so the row drawer doesn't intercept)",
+    /onClick=\{[^}]*e\.stopPropagation\(\)/.test(describeBody),
+    "af_handoff link must call e.stopPropagation() so clicking the link doesn't bubble to the row's onClick",
+  );
+
+  // ── Fix 2: Conversations "Linked to Quote" pill ──
+  const convoTypes = fs.readFileSync("client/src/components/conversations/types.ts", "utf8");
+  assert(
+    "conversations/types.ts — ConversationThread carries linkedQuoteId field",
+    /linkedQuoteId\?:\s*string\s*\|\s*null/.test(convoTypes),
+    "ConversationThread must expose linkedQuoteId so the row can render the Linked-to-Quote pill",
+  );
+
+  const convoRoute = fs.readFileSync("server/routes/conversations.ts", "utf8");
+  assert(
+    "routes/conversations.ts — imports quoteOpportunities from @shared/schema",
+    /quoteOpportunities,?\n[\s\S]*?from\s+["']@shared\/schema["']/.test(convoRoute) ||
+      /from\s+["']@shared\/schema["'][\s\S]{0,800}quoteOpportunities/.test(convoRoute),
+    "conversations route must import quoteOpportunities to enrich linkedQuoteId",
+  );
+  assert(
+    "routes/conversations.ts — joins quote_opportunities by sourceReference for batch enrichment (no N+1)",
+    /inArray\(quoteOpportunities\.sourceReference,\s*allRefs\)/.test(convoRoute),
+    "expected one batched IN-clause lookup against quote_opportunities.source_reference",
+  );
+  assert(
+    "routes/conversations.ts — scopes the quote lookup to the caller's organizationId",
+    /eq\(quoteOpportunities\.organizationId,\s*orgId\)/.test(convoRoute),
+    "quote lookup must be org-scoped to prevent cross-tenant linkage",
+  );
+  assert(
+    "routes/conversations.ts — enrichment failure does NOT take down the inbox (try/catch around the lookup)",
+    /\[conversations\] linked-quote enrichment failed:/.test(convoRoute),
+    "expected a defensive console.error log on enrichment failure (matches the signal-enrichment fail-safe pattern)",
+  );
+  assert(
+    "routes/conversations.ts — populates linkedQuoteId on each enriched thread",
+    /linkedQuoteId:\s*t\.threadId\s*\?\s*\(?quoteIdByThread\.get\(t\.threadId\)/.test(convoRoute),
+    "expected the enriched thread to expose linkedQuoteId pulled from the per-page map",
+  );
+
+  const threadRow = fs.readFileSync("client/src/components/conversations/thread-row.tsx", "utf8");
+  assert(
+    "thread-row.tsx — imports Link from wouter",
+    /import\s*\{\s*Link\s*\}\s*from\s*["']wouter["']/.test(threadRow),
+    "thread-row must import wouter Link to render the linked-quote pill",
+  );
+  assert(
+    "thread-row.tsx — renders the Linked-to-Quote pill, deep-linking to /quote-requests?quote=…",
+    /thread\.linkedQuoteId[\s\S]{0,400}\/quote-requests\?quote=\$\{encodeURIComponent\(thread\.linkedQuoteId\)\}/.test(threadRow),
+    "expected the row to render a <Link href=\"/quote-requests?quote=…\"> when thread.linkedQuoteId is set",
+  );
+  assert(
+    "thread-row.tsx — Linked-to-Quote pill carries a stable link-linked-quote-${thread.id} testid",
+    /data-testid=\{`link-linked-quote-\$\{thread\.id\}`\}/.test(threadRow),
+    "missing data-testid={`link-linked-quote-${thread.id}`} on the linked-quote pill",
+  );
+  assert(
+    "thread-row.tsx — Linked-to-Quote pill stops click propagation (so the row's onSelect doesn't fire)",
+    /href=\{`\/quote-requests\?quote=\$\{encodeURIComponent\(thread\.linkedQuoteId\)\}`\}[\s\S]{0,200}stopPropagation\(\)/.test(threadRow),
+    "Linked-to-Quote pill must call e.stopPropagation() so clicking it doesn't also open the row",
+  );
+
+  // ── Fix 3: Hero-aware Won toast ──
+  const cqService = fs.readFileSync("server/services/customerQuotes.ts", "utf8");
+  assert(
+    "services/customerQuotes.ts — exports UpdateQuoteHandoffMeta type",
+    /export type UpdateQuoteHandoffMeta\s*=\s*\{/.test(cqService),
+    "updateQuote must surface a typed handoff meta so the route can pass it to the client",
+  );
+  assert(
+    "services/customerQuotes.ts — UpdateQuoteHandoffMeta includes auto / pending_approval / none states",
+    /state:\s*"auto"\s*\|\s*"pending_approval"\s*\|\s*"none"/.test(cqService),
+    "handoff meta must distinguish the three outcomes the toast branches on",
+  );
+  assert(
+    "services/customerQuotes.ts — updateQuote returns { opp, handoff }",
+    /Promise<UpdateQuoteResult>/.test(cqService) &&
+      /return\s*\{\s*opp:\s*updated,\s*handoff:\s*handoffMeta\s*\}/.test(cqService),
+    "updateQuote signature must return both the row AND the handoff classification",
+  );
+  assert(
+    "services/customerQuotes.ts — handoff state derived from the helper's heroAssigned flag",
+    /state:\s*handoff\.heroAssigned\s*\?\s*"auto"\s*:\s*"pending_approval"/.test(cqService),
+    "handoff classification must mirror createFreightOpportunityFromWonQuote's heroAssigned decision",
+  );
+
+  const cqRoute = fs.readFileSync("server/routes/customerQuotes.ts", "utf8");
+  assert(
+    "routes/customerQuotes.ts — PATCH route destructures { opp, handoff } from updateQuote",
+    /const\s*\{\s*opp,\s*handoff\s*\}\s*=\s*await updateQuote\(/.test(cqRoute),
+    "PATCH route must destructure the new updateQuote return shape",
+  );
+  assert(
+    "routes/customerQuotes.ts — PATCH response surfaces _handoff alongside the quote detail",
+    /res\.json\(\{\s*\.\.\.detail,\s*_handoff:\s*handoff\s*\}\)/.test(cqRoute),
+    "PATCH must attach _handoff to the JSON body so the client can branch the toast",
+  );
+
+  const qrSrc2 = qrSrc; // already loaded above
+  assert(
+    "quote-requests.tsx — markOutcomeMut.onSuccess reads _handoff from the PATCH response",
+    /\(resp[^)]*\)\s*=>\s*\{[\s\S]{0,800}_handoff\?:\s*\{[\s\S]{0,400}resp\s*as/.test(qrSrc2) ||
+      /onSuccess:\s*\(resp[\s\S]{0,300}_handoff/.test(qrSrc2),
+    "markOutcomeMut.onSuccess must read the _handoff field off the PATCH response",
+  );
+  assert(
+    "quote-requests.tsx — Won toast branches to 'auto-routed to Available Freight' on handoff.state==='auto'",
+    /handoff\?\.state\s*===\s*"auto"[\s\S]{0,400}Quote won — auto-routed to Available Freight/.test(qrSrc2),
+    "auto handoff must surface the 'Quote won — auto-routed to Available Freight' toast",
+  );
+  assert(
+    "quote-requests.tsx — auto-handoff toast carries a 'View in AF' action with a stable testid",
+    /toast-action-view-in-af/.test(qrSrc2) &&
+      /\/available-freight\?opportunity=\$\{encodeURIComponent\(oppId\)\}/.test(qrSrc2),
+    "auto handoff toast must include a ToastAction deep-linking to /available-freight?opportunity=…",
+  );
+  assert(
+    "quote-requests.tsx — Won toast branches to 'waiting on NAM/AM approval' on pending_approval",
+    /handoff\?\.state\s*===\s*"pending_approval"[\s\S]{0,400}waiting on NAM\/AM approval/.test(qrSrc2),
+    "pending_approval handoff must surface the 'waiting on NAM/AM approval' toast",
+  );
+  assert(
+    "quote-requests.tsx — generic 'Quote updated' toast preserved as the fallback",
+    /\}\s*else\s*\{\s*toast\(\{\s*title:\s*"Quote updated"\s*\}\);\s*\}/.test(qrSrc2),
+    "non-Won (or no-handoff) responses must still show the generic 'Quote updated' toast",
+  );
+})();

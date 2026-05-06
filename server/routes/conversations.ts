@@ -24,6 +24,7 @@ import {
   emailSignals,
   emailConversationThreads,
   monitoredMailboxes,
+  quoteOpportunities,
   users,
   InsertEmailConversationThread,
   type User,
@@ -641,6 +642,68 @@ export function registerConversationsRoutes(app: Express): void {
       // background workers and is routinely days off).
       const lastEmailAtMap = await computeLastEmailAtMap(orgId, threads);
 
+      // Pilot trust fix — surface a "Linked to Quote" pill on each row
+      // when an inbound message in the thread was already converted into
+      // a customer quote. Read-only reflection of the link the quote
+      // pipeline already wrote (`quote_opportunities.source_reference`
+      // ← `email_messages.provider_message_id` or `email_messages.id`);
+      // no new capture/routing path here. One batched query per page
+      // (no N+1) and we tolerate failure so the inbox still loads if
+      // the lookup ever blows up.
+      const linkedQuoteThreadKeys = threads.map(t => t.threadId).filter(Boolean) as string[];
+      const quoteIdByThread = new Map<string, string>();
+      if (linkedQuoteThreadKeys.length > 0) {
+        try {
+          const msgs = await db.select({
+            threadId: emailMessages.threadId,
+            id: emailMessages.id,
+            providerMessageId: emailMessages.providerMessageId,
+          }).from(emailMessages).where(and(
+            eq(emailMessages.orgId, orgId),
+            inArray(emailMessages.threadId, linkedQuoteThreadKeys),
+          ));
+          const refToThread = new Map<string, string>();
+          const allRefs: string[] = [];
+          for (const m of msgs) {
+            if (!m.threadId) continue;
+            if (m.providerMessageId) {
+              refToThread.set(m.providerMessageId, m.threadId);
+              allRefs.push(m.providerMessageId);
+            }
+            if (m.id) {
+              refToThread.set(m.id, m.threadId);
+              allRefs.push(m.id);
+            }
+          }
+          if (allRefs.length > 0) {
+            const quoteRows = await db.select({
+              id: quoteOpportunities.id,
+              sourceReference: quoteOpportunities.sourceReference,
+              createdAt: quoteOpportunities.createdAt,
+            }).from(quoteOpportunities).where(and(
+              eq(quoteOpportunities.organizationId, orgId),
+              inArray(quoteOpportunities.sourceReference, allRefs),
+            ));
+            // If multiple quotes match the same thread (rare — duplicate
+            // captures), prefer the earliest so the pill is stable across
+            // page loads.
+            const sorted = [...quoteRows].sort((a, b) => {
+              const ad = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+              const bd = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+              return ad - bd;
+            });
+            for (const q of sorted) {
+              const tid = q.sourceReference ? refToThread.get(q.sourceReference) : null;
+              if (tid && !quoteIdByThread.has(tid)) {
+                quoteIdByThread.set(tid, q.id);
+              }
+            }
+          }
+        } catch (err) {
+          console.error("[conversations] linked-quote enrichment failed:", err);
+        }
+      }
+
       const enriched = threads.map(t => {
         const lastReadAt = t.threadId ? readStates.get(t.threadId) ?? null : null;
         const lastIncoming = t.lastIncomingAt ? new Date(t.lastIncomingAt) : null;
@@ -656,6 +719,9 @@ export function registerConversationsRoutes(app: Express): void {
           lastReadAt: lastReadAt ? lastReadAt.toISOString() : null,
           // Source-of-truth freshness — see computeLastEmailAtMap above.
           lastEmailAt: t.threadId ? (lastEmailAtMap.get(t.threadId) ?? null) : null,
+          // Pilot trust fix — populated above from quote_opportunities.
+          // Drives the "Linked to Quote" pill on the row.
+          linkedQuoteId: t.threadId ? (quoteIdByThread.get(t.threadId) ?? null) : null,
           unread,
         };
       });
