@@ -9,7 +9,6 @@ import {
   contacts,
   touchpoints,
   rfps,
-  awards,
   tasks,
   taskComments,
   goals,
@@ -28,7 +27,6 @@ import {
   toolLinks,
   promotionCriteria,
   appSettings,
-  contactLaneAttributions,
   type User,
   type Company,
   type Contact,
@@ -38,18 +36,10 @@ const DEMO_SLUG = "demo";
 const DEMO_ORG_NAME = "Demo Org";
 const DEFAULT_PASSWORD = "Demo1234!";
 const DEMO_FILE_PREFIX = "Demo_Financials_";
-const NOV_START = "2025-11-01";
-const NOV_END = "2025-11-30";
-const DEC_START = "2025-12-01";
-const DEC_END = "2025-12-31";
 const JAN_START = "2026-01-01";
 const JAN_END = "2026-01-31";
 const FEB_START = "2026-02-01";
 const FEB_END = "2026-02-28";
-const MAR_START = "2026-03-01";
-const MAR_END = "2026-03-31";
-const APR_START = "2026-04-01";
-const APR_END = "2026-04-30";
 
 function ts(d: Date): string {
   return d.toISOString();
@@ -702,119 +692,6 @@ async function main() {
       contactsByCompanyId.set(co.id, created);
     }
 
-    // ─── STEP 3b: HOME RUN CONTACTS (April 2026 additions) ───────────────────
-    console.log("\nStep 3b: Adding Home Run contacts…");
-
-    const summitCoRef = companyByName.get("Summit Frozen Foods")!;
-    const greatPlainsCoRef = companyByName.get("Great Plains Distribution")!;
-
-    const [kenHolst] = await db.insert(contacts).values({
-      companyId: summitCoRef.id,
-      name: "Ken Holst",
-      title: "CEO",
-      relationshipBase: "hr",
-      email: "k.holst@summitfrozen.com",
-      phone: "312-555-0510",
-      reportsToId: null,
-      lanes: ["Chicago, IL", "Memphis, TN", "Atlanta, GA", "Minneapolis, MN"],
-      regions: ["National"],
-      freightSpend: "34000000",
-      spotBiddingProcess: "Direct approval on all spot over $5K — calls Tyler personally",
-      interests: "Enterprise-level partnerships, multi-year commitments, margin transparency",
-      notes: "C-suite champion — secured formal preferred broker status in Q1 2026. Long-term strategic relationship.",
-      createdAt: "2026-04-01T08:00:00.000Z",
-      createdBy: amMap["am1"].id,
-      baseAdvancedAt: "2026-04-01",
-    }).returning();
-    contactsByCompanyId.get(summitCoRef.id)!.push(kenHolst);
-    console.log(`  Created HR contact: Ken Holst (CEO) @ Summit Frozen Foods`);
-
-    const [dianeWeston] = await db.insert(contacts).values({
-      companyId: greatPlainsCoRef.id,
-      name: "Diane Weston",
-      title: "Chief Supply Chain Officer",
-      relationshipBase: "hr",
-      email: "d.weston@greatplainsdist.com",
-      phone: "402-555-0610",
-      reportsToId: null,
-      lanes: ["Omaha, NE", "Kansas City, MO", "Des Moines, IA", "Chicago, IL", "Memphis, TN"],
-      regions: ["National"],
-      freightSpend: "42000000",
-      spotBiddingProcess: "Strategic only — Jason has direct line for board-level capacity commitments",
-      interests: "Supply chain resilience, multi-modal strategy, preferred partner programs",
-      notes: "Board-level champion. Approved us as sole preferred broker for all Midwest core lanes in Q1 2026.",
-      createdAt: "2026-04-02T08:00:00.000Z",
-      createdBy: amMap["am3"].id,
-      baseAdvancedAt: "2026-04-02",
-    }).returning();
-    contactsByCompanyId.get(greatPlainsCoRef.id)!.push(dianeWeston);
-    console.log(`  Created HR contact: Diane Weston (CSCO) @ Great Plains Distribution`);
-
-    // ─── STEP 3c: CONTACT LANE ATTRIBUTIONS ──────────────────────────────────
-    console.log("\nStep 3c: Creating contact lane attributions…");
-
-    type LaneAttrDef = {
-      companyName: string;
-      contactName: string;
-      amKey: keyof AmMap;
-      lanes: Array<{ originCity: string; originState: string; destinationCity: string; destinationState: string }>;
-    };
-
-    const laneAttrDefs: LaneAttrDef[] = [
-      // 3rd base contacts — attribute 1 key lane each (matches their company's financial data)
-      { companyName: "Summit Frozen Foods", contactName: "Owen Hughes", amKey: "am1",
-        lanes: [{ originCity: "Chicago", originState: "IL", destinationCity: "Memphis", destinationState: "TN" }] },
-      { companyName: "Riverview Chemical", contactName: "Dr. Janet Liu", amKey: "am2",
-        lanes: [{ originCity: "Chicago", originState: "IL", destinationCity: "Houston", destinationState: "TX" }] },
-      { companyName: "Riverview Chemical", contactName: "Nadia Goldstein", amKey: "am2",
-        lanes: [{ originCity: "Houston", originState: "TX", destinationCity: "Beaumont", destinationState: "TX" }] },
-      { companyName: "Great Plains Distribution", contactName: "Howard Blaine", amKey: "am3",
-        lanes: [{ originCity: "Kansas City", originState: "MO", destinationCity: "Memphis", destinationState: "TN" }] },
-      { companyName: "MidAmerica Steel Works", contactName: "Patricia Shields", amKey: "am3",
-        lanes: [{ originCity: "St. Louis", originState: "MO", destinationCity: "Pittsburgh", destinationState: "PA" }] },
-      { companyName: "Keystone Pharma Logistics", contactName: "Dr. Patricia Walsh", amKey: "am5",
-        lanes: [{ originCity: "Philadelphia", originState: "PA", destinationCity: "Chicago", destinationState: "IL" }] },
-      { companyName: "Laredo Cross-Border Trading", contactName: "Carla Medina", amKey: "am6",
-        lanes: [{ originCity: "Houston", originState: "TX", destinationCity: "Dallas", destinationState: "TX" }] },
-      // HR contacts — all lanes (high-volume, high-margin attribution)
-      { companyName: "Summit Frozen Foods", contactName: "Ken Holst", amKey: "am1",
-        lanes: [
-          { originCity: "Chicago", originState: "IL", destinationCity: "Memphis", destinationState: "TN" },
-          { originCity: "Chicago", originState: "IL", destinationCity: "Atlanta", destinationState: "GA" },
-          { originCity: "Minneapolis", originState: "MN", destinationCity: "Chicago", destinationState: "IL" },
-        ] },
-      { companyName: "Great Plains Distribution", contactName: "Diane Weston", amKey: "am3",
-        lanes: [
-          { originCity: "Omaha", originState: "NE", destinationCity: "Chicago", destinationState: "IL" },
-          { originCity: "Kansas City", originState: "MO", destinationCity: "Memphis", destinationState: "TN" },
-          { originCity: "Des Moines", originState: "IA", destinationCity: "Chicago", destinationState: "IL" },
-        ] },
-    ];
-
-    let laneAttrCount = 0;
-    for (const def of laneAttrDefs) {
-      const co = companyByName.get(def.companyName);
-      if (!co) continue;
-      const compContacts = contactsByCompanyId.get(co.id) ?? [];
-      const contact = compContacts.find(c => c.name === def.contactName);
-      if (!contact) { console.warn(`  [lane attr] Contact not found: ${def.contactName} @ ${def.companyName}`); continue; }
-      for (const lane of def.lanes) {
-        await db.insert(contactLaneAttributions).values({
-          contactId: contact.id,
-          companyId: co.id,
-          originCity: lane.originCity,
-          originState: lane.originState,
-          destinationCity: lane.destinationCity,
-          destinationState: lane.destinationState,
-          source: "manual",
-          notes: null,
-          createdBy: amMap[def.amKey].id,
-        });
-        laneAttrCount++;
-      }
-    }
-    console.log(`  Created ${laneAttrCount} contact lane attributions`);
-
     // ─── STEP 4: TOUCHPOINTS ─────────────────────────────────────────────────
     console.log("\nStep 4: Creating touchpoints…");
 
@@ -999,23 +876,6 @@ async function main() {
       { companyName: "Keystone Pharma Logistics", amKey: "am5", contactIdx: 1, type: "call", date: "2026-03-25", notes: "Nathan called with great news — Keystone is renewing our contract and expanding scope by 40%. They're adding 4 more lanes including two high-value West Coast routes.", meaningful: true },
       { companyName: "Laredo Cross-Border Trading", amKey: "am6", contactIdx: 0, type: "call", date: "2026-03-24", notes: "Sofia confirmed preferred cross-border partner agreement — formalizing in writing next week. This locks in $2.2M in annual freight volume with us as primary.", meaningful: true },
       { companyName: "Laredo Cross-Border Trading", amKey: "am6", contactIdx: 2, type: "email", date: "2026-03-23", notes: "Ana confirmed 6 Houston→Dallas loads for this week — all covered same day.", meaningful: false },
-      // April 1, 2026 — week-opening cadence touches
-      { companyName: "Summit Frozen Foods", amKey: "am1", contactIdx: 1, type: "call", date: "2026-04-01", notes: "Called Rick to kick off April — confirmed 45 reefer loads locked for the month. He mentioned they may add a Nashville lane by mid-April.", meaningful: false },
-      { companyName: "Pacific Coast Produce", amKey: "am2", contactIdx: 1, type: "email", date: "2026-04-01", notes: "Emailed Lisa the April capacity confirmation — 80 reefer loads committed. She replied 'perfect timing, produce season starts this week.'", meaningful: false },
-      { companyName: "Great Plains Distribution", amKey: "am3", contactIdx: 1, type: "call", date: "2026-04-01", notes: "Rachel called first thing to confirm our preferred carrier rollout is live — all dispatch teams notified. First April loads already tendered.", meaningful: false },
-      { companyName: "Northstar Lumber Co.", amKey: "am5", contactIdx: 1, type: "email", date: "2026-04-01", notes: "Emailed Wendy confirming April 1 lane start — all 5 dedicated lanes active. She confirmed first loads dispatched successfully.", meaningful: false },
-      { companyName: "Keystone Pharma Logistics", amKey: "am5", contactIdx: 1, type: "call", date: "2026-04-01", notes: "Nathan called to say the contract expansion paperwork is signed — new West Coast lanes starting this week.", meaningful: false },
-      // April 2, 2026 — today's activity (meaningful conversations + check-ins)
-      { companyName: "Summit Frozen Foods", amKey: "am1", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Called Rick to discuss adding a Nashville lane — he's looping in the DC manager next week. Potential 12 loads/month incremental. Real next step defined.", meaningful: true },
-      { companyName: "Heartland Building Products", amKey: "am1", contactIdx: 1, type: "text", date: "2026-04-02", notes: "Texted Carmen confirming trailer staging is set for April 7 start. She replied 'all good, team is ready.' Smooth launch ahead.", meaningful: false },
-      { companyName: "Riverview Chemical", amKey: "am2", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Steve called to confirm Port Arthur expansion is green-lit — 6 loads/week starting April 14. He wants our HAZMAT carrier list by Friday. $90K/month opportunity unlocked.", meaningful: true },
-      { companyName: "Pacific Coast Produce", amKey: "am2", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Lisa called — first week of produce season is off to a strong start. 22 loads covered yesterday with zero issues. She's recommending us internally for the Portland expansion.", meaningful: true },
-      { companyName: "Great Plains Distribution", amKey: "am3", contactIdx: 1, type: "email", date: "2026-04-02", notes: "Emailed Rachel a Q1 performance summary ahead of today's QBR — 98.7% on-time, zero carrier compliance issues. Strong talking points ready.", meaningful: false },
-      { companyName: "MidAmerica Steel Works", amKey: "am3", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Dana called to officially add 2 new dedicated lanes — Cleveland and Indianapolis routes confirmed. She said Frank signed off this morning. Both lanes start April 14.", meaningful: true },
-      { companyName: "Bayshore Consumer Brands", amKey: "am4", contactIdx: 1, type: "call", date: "2026-04-02", notes: "Tom called to accelerate the New York DC launch — wants us to have capacity committed by April 10. 20 dry van loads/week, real urgency. Big opportunity.", meaningful: true },
-      { companyName: "Northstar Lumber Co.", amKey: "am5", contactIdx: 0, type: "call", date: "2026-04-02", notes: "Glen called — CFO wants to discuss adding 2 more lanes to the dedicated agreement. Scheduled a follow-up call for Friday. Significant expansion potential.", meaningful: true },
-      { companyName: "Laredo Cross-Border Trading", amKey: "am6", contactIdx: 0, type: "call", date: "2026-04-02", notes: "Sofia called to say the formal preferred partner agreement is ready to sign — she wants to meet Thursday to execute. $2.2M locked in writing.", meaningful: true },
-      { companyName: "Keystone Pharma Logistics", amKey: "am5", contactIdx: 1, type: "email", date: "2026-04-02", notes: "Emailed Nathan confirming first West Coast loads are covered — all GDP compliant. He forwarded to their compliance team as a success story.", meaningful: false },
     ];
 
     const touchpointTypes = ["call", "email", "visit", "call", "email", "call"];
@@ -1203,54 +1063,22 @@ async function main() {
       },
     ];
 
-    // Accounts that are trending down — lost some volume to competitors
-    const decliningTemplates: CompanyLoadTemplate[] = [
-      {
-        customer: "Consolidated Retail Group", opsUser: "Lexi Navarro",
-        lanes: [
-          { origCity: "Columbus", origState: "OH", destCity: "Pittsburgh", destState: "PA" },
-          { origCity: "Columbus", origState: "OH", destCity: "Baltimore", destState: "MD" },
-        ],
-        spotFraction: 0.40, baseMarginPerLoad: 318, baseRevenuePerLoad: 2180, baseLoadsPerMonth: 14,
-      },
-      {
-        customer: "Inland Freight Solutions", opsUser: "Marcus Dunn",
-        lanes: [
-          { origCity: "Indianapolis", origState: "IN", destCity: "Louisville", destState: "KY" },
-          { origCity: "Cincinnati", origState: "OH", destCity: "Nashville", destState: "TN" },
-        ],
-        spotFraction: 0.35, baseMarginPerLoad: 282, baseRevenuePerLoad: 1940, baseLoadsPerMonth: 11,
-      },
-      {
-        customer: "Tri-State Building Supply", opsUser: "Jason Kowalski",
-        lanes: [
-          { origCity: "Kansas City", origState: "MO", destCity: "Wichita", destState: "KS" },
-          { origCity: "St. Louis", origState: "MO", destCity: "Springfield", destState: "MO" },
-        ],
-        spotFraction: 0.20, baseMarginPerLoad: 192, baseRevenuePerLoad: 1440, baseLoadsPerMonth: 9,
-      },
-    ];
-
     // Deterministic pseudo-noise so Feb always > Jan per company (no Math.random)
     function deterministicNoise(seed: number, range: number): number {
       return ((seed * 2654435761) >>> 0) % (range * 2 + 1) - range;
     }
 
-    function makeTransactionRows(
-      month: "November" | "December" | "January" | "February" | "March" | "April",
-      templates: CompanyLoadTemplate[] = companyTemplates,
-      seqBase?: number,
-    ): TxRow[] {
-      const monthNum = month === "November" ? 11 : month === "December" ? 12 : month === "January" ? 1 : month === "February" ? 2 : month === "March" ? 3 : 4;
-      const daysInMonth = month === "November" ? 30 : month === "December" ? 31 : month === "January" ? 31 : month === "February" ? 28 : month === "March" ? 24 : 2;
-      const year = month === "November" || month === "December" ? 2025 : 2026;
+    function makeTransactionRows(month: "January" | "February" | "March"): TxRow[] {
+      const monthNum = month === "January" ? 1 : month === "February" ? 2 : 3;
+      const daysInMonth = month === "January" ? 31 : month === "February" ? 28 : 24; // March up to 24th
+      const year = 2026;
       const rows: TxRow[] = [];
-      let orderSeq = seqBase ?? (month === "November" ? 96000 : month === "December" ? 98000 : month === "January" ? 100000 : month === "February" ? 102000 : month === "March" ? 104000 : 106000);
-      // Growth multipliers: Nov = 0.82, Dec = 0.88 (holiday slowdown), Jan = base, Feb = +18%, March = +28%, April = ~9% (2-day partial month)
-      const baseMult = month === "November" ? 0.82 : month === "December" ? 0.88 : month === "January" ? 1.0 : month === "February" ? 1.18 : month === "March" ? 1.28 : 0.09;
+      let orderSeq = month === "January" ? 100000 : month === "February" ? 102000 : 104000;
+      // Growth multipliers: Jan = base, Feb = +18%, March = +28% (strong Q1 close)
+      const baseMult = month === "January" ? 1.0 : month === "February" ? 1.18 : 1.28;
 
-      for (let ci = 0; ci < templates.length; ci++) {
-        const tmpl = templates[ci];
+      for (let ci = 0; ci < companyTemplates.length; ci++) {
+        const tmpl = companyTemplates[ci];
         const loadsThisMonth = Math.ceil(tmpl.baseLoadsPerMonth * baseMult);
         for (let i = 0; i < loadsThisMonth; i++) {
           const lane = tmpl.lanes[i % tmpl.lanes.length];
@@ -1281,137 +1109,47 @@ async function main() {
       return rows;
     }
 
-    // For declining accounts in April: generate only 1 load each (well below 2/30 pace → shows as "down")
-    function makeDecliningAprilRows(): TxRow[] {
-      const rows: TxRow[] = [];
-      let seq = 107500;
-      for (const tmpl of decliningTemplates) {
-        const lane = tmpl.lanes[0];
-        seq++;
-        rows.push({
-          "Customer": tmpl.customer,
-          "Operations user": tmpl.opsUser,
-          "Order type": "Contract",
-          "Status": "delivered",
-          "Shipper city": lane.origCity,
-          "Shipper state": lane.origState,
-          "Consignee city": lane.destCity,
-          "Consignee state": lane.destState,
-          "Date ordered": "2026-04-01",
-          "Order number": `DEMO-${seq}`,
-          "Total revenue": tmpl.baseRevenuePerLoad,
-          "Margin $": Math.round(tmpl.baseMarginPerLoad * 0.6),
-        });
-      }
-      return rows;
-    }
-
-    const novRows = makeTransactionRows("November");
-    const decRows = makeTransactionRows("December");
     const janRows = makeTransactionRows("January");
     const febRows = makeTransactionRows("February");
     const marchRows = makeTransactionRows("March");
-    const aprRows = makeTransactionRows("April");
-
-    // Declining companies: add to Nov–March historical data (not April — they dropped off)
-    const declNovRows = makeTransactionRows("November", decliningTemplates, 96900);
-    const declDecRows = makeTransactionRows("December", decliningTemplates, 98900);
-    const declJanRows = makeTransactionRows("January", decliningTemplates, 100900);
-    const declFebRows = makeTransactionRows("February", decliningTemplates, 102900);
-    const declMarchRows = makeTransactionRows("March", decliningTemplates, 104900);
-    const declAprRows = makeDecliningAprilRows(); // only 1 load each → below-pace April = trending down
-
-    // November 2025 upload (historical baseline — includes declining accounts)
-    const novAllRows = [...novRows, ...declNovRows];
-    await db.insert(financialUploads).values({
-      fileName: `${DEMO_FILE_PREFIX}November_2025.xlsx`,
-      uploadedAt: "2025-12-03T09:00:00.000Z",
-      uploadedBy: admin.id,
-      rowCount: novAllRows.length,
-      rows: novAllRows,
-      summaryRows: [],
-      bestDealDaysSpot: [],
-      bestDealDaysAll: [],
-      trendAnalysis: [],
-      averagesData: [],
-      dailyAcquisition: [],
-    });
-    console.log(`  Created November 2025 financial upload: ${novAllRows.length} transaction rows`);
-
-    // December 2025 upload (historical — holiday period, lower volume)
-    const decAllRows = [...decRows, ...declDecRows];
-    await db.insert(financialUploads).values({
-      fileName: `${DEMO_FILE_PREFIX}December_2025.xlsx`,
-      uploadedAt: "2026-01-05T09:00:00.000Z",
-      uploadedBy: admin.id,
-      rowCount: decAllRows.length,
-      rows: decAllRows,
-      summaryRows: [],
-      bestDealDaysSpot: [],
-      bestDealDaysAll: [],
-      trendAnalysis: [],
-      averagesData: [],
-      dailyAcquisition: [],
-    });
-    console.log(`  Created December 2025 financial upload: ${decAllRows.length} transaction rows`);
 
     // Jan-only upload (historical)
-    const janAllRows = [...janRows, ...declJanRows];
-    await db.insert(financialUploads).values({
+    const [janUpload] = await db.insert(financialUploads).values({
       fileName: `${DEMO_FILE_PREFIX}January_2026.xlsx`,
       uploadedAt: "2026-02-03T09:00:00.000Z",
       uploadedBy: admin.id,
-      rowCount: janAllRows.length,
-      rows: janAllRows,
+      rowCount: janRows.length,
+      rows: janRows,
       summaryRows: [],
       bestDealDaysSpot: [],
       bestDealDaysAll: [],
       trendAnalysis: [],
       averagesData: [],
       dailyAcquisition: [],
-    });
-    console.log(`  Created January financial upload: ${janAllRows.length} transaction rows`);
+    }).returning();
+    console.log(`  Created January financial upload: ${janRows.length} transaction rows`);
 
-    const febAllRows = [...febRows, ...declFebRows];
-    await db.insert(financialUploads).values({
+    const [febUpload] = await db.insert(financialUploads).values({
       fileName: `${DEMO_FILE_PREFIX}February_2026.xlsx`,
       uploadedAt: "2026-03-03T09:00:00.000Z",
       uploadedBy: admin.id,
-      rowCount: febAllRows.length,
-      rows: febAllRows,
+      rowCount: febRows.length,
+      rows: febRows,
       summaryRows: [],
       bestDealDaysSpot: [],
       bestDealDaysAll: [],
       trendAnalysis: [],
       averagesData: [],
       dailyAcquisition: [],
-    });
-    console.log(`  Created February financial upload: ${febAllRows.length} transaction rows`);
+    }).returning();
+    console.log(`  Created February financial upload: ${febRows.length} transaction rows`);
 
-    // March upload = 5 months combined (historical)
-    const marchAllRows = [...novRows, ...decRows, ...janRows, ...febRows, ...marchRows, ...declNovRows, ...declDecRows, ...declJanRows, ...declFebRows, ...declMarchRows];
-    await db.insert(financialUploads).values({
+    // March upload = ALL 3 months combined — this is the "latest" upload the trending endpoint reads.
+    // By including Jan + Feb + March rows, trending can compare Feb vs March and show growth/decline.
+    const allRows = [...janRows, ...febRows, ...marchRows];
+    const [marchUpload] = await db.insert(financialUploads).values({
       fileName: `${DEMO_FILE_PREFIX}March_2026.xlsx`,
       uploadedAt: "2026-03-24T09:00:00.000Z",
-      uploadedBy: admin.id,
-      rowCount: marchAllRows.length,
-      rows: marchAllRows,
-      summaryRows: [],
-      bestDealDaysSpot: [],
-      bestDealDaysAll: [],
-      trendAnalysis: [],
-      averagesData: [],
-      dailyAcquisition: [],
-    });
-    console.log(`  Created March financial upload: ${marchAllRows.length} total rows (Nov 2025–March 2026)`);
-
-    // April upload = ALL 6 months combined — this is the LATEST upload.
-    // Includes declining accounts (with below-pace April data) so they show in "trending down".
-    const allRows = [...novRows, ...decRows, ...janRows, ...febRows, ...marchRows, ...aprRows,
-                     ...declNovRows, ...declDecRows, ...declJanRows, ...declFebRows, ...declMarchRows, ...declAprRows];
-    await db.insert(financialUploads).values({
-      fileName: `${DEMO_FILE_PREFIX}April_2026.xlsx`,
-      uploadedAt: "2026-04-02T09:00:00.000Z",
       uploadedBy: admin.id,
       rowCount: allRows.length,
       rows: allRows,
@@ -1421,8 +1159,8 @@ async function main() {
       trendAnalysis: [],
       averagesData: [],
       dailyAcquisition: [],
-    });
-    console.log(`  Created April financial upload: ${allRows.length} total rows (Nov 2025–Apr 2026, current month — used for trending/team performance)`);
+    }).returning();
+    console.log(`  Created March financial upload: ${allRows.length} total rows (Jan + Feb + March — used for trending)`);
 
     // ─── STEP 6: RFPs ────────────────────────────────────────────────────────
     console.log("\nStep 6: Creating RFPs…");
@@ -1521,48 +1259,6 @@ async function main() {
       },
     });
     console.log("  Created Great Plains Distribution RFP");
-
-    // ─── STEP 6b: AWARDS ─────────────────────────────────────────────────────
-    console.log("\nStep 6b: Creating awards…");
-
-    const summitAwardLanes = ["Chicago, IL → Memphis, TN (120 loads/yr, Reefer)", "Chicago, IL → Atlanta, GA (85 loads/yr, Reefer)", "Minneapolis, MN → Chicago, IL (60 loads/yr, Reefer)", "Chicago, IL → Kansas City, MO (55 loads/yr, Dry Van)"];
-    await db.insert(awards).values({
-      companyId: summitCo.id,
-      title: "Summit Frozen Foods 2026 Annual Contract Award",
-      value: "1820000",
-      awardDate: "2026-01-15",
-      lanes: summitAwardLanes,
-      notes: "4 lanes awarded from Summit's 2026 annual RFP. Reefer lanes (Chicago–Memphis, Chicago–Atlanta, Minneapolis–Chicago) are highest priority. Kansas City dry van lane awarded as well. Rates locked through December 2026.",
-      fileName: "Summit_Frozen_Foods_2026_Award.xlsx",
-      fileData: JSON.stringify({ awardedLanes: summitAwardLanes.length, totalVolume: 320, equipment: ["Reefer", "Dry Van"] }),
-    });
-    console.log("  Created Summit Frozen Foods award");
-
-    const pacificAwardLanes = ["Fresno, CA → Los Angeles, CA (200 loads/yr, Reefer)", "Fresno, CA → Phoenix, AZ (150 loads/yr, Reefer)", "Fresno, CA → Las Vegas, NV (90 loads/yr, Reefer)", "Los Angeles, CA → Phoenix, AZ (80 loads/yr, Reefer)"];
-    await db.insert(awards).values({
-      companyId: pacificCo.id,
-      title: "Pacific Coast Produce 2026 Core Lane Award",
-      value: "2430000",
-      awardDate: "2026-02-01",
-      lanes: pacificAwardLanes,
-      notes: "4 core reefer lanes awarded from Pacific's 2026 RFP. High-frequency produce lanes. Rates valid through Q3 2026 with a produce season rate addendum for May-June peak. Seattle and Portland lanes still open.",
-      fileName: "Pacific_Coast_Produce_2026_Award.xlsx",
-      fileData: JSON.stringify({ awardedLanes: pacificAwardLanes.length, totalVolume: 520, equipment: ["Reefer"] }),
-    });
-    console.log("  Created Pacific Coast Produce award");
-
-    const gpAwardLanes = ["Omaha, NE → Chicago, IL (110 loads/yr, Dry Van)", "Kansas City, MO → Memphis, TN (95 loads/yr, Dry Van)", "Des Moines, IA → Chicago, IL (75 loads/yr, Dry Van)"];
-    await db.insert(awards).values({
-      companyId: greatPlainsCo.id,
-      title: "Great Plains Distribution Q2 2026 Award",
-      value: "1190000",
-      awardDate: "2026-03-20",
-      lanes: gpAwardLanes,
-      notes: "3 core Midwest dry van lanes awarded. Dallas-Denver flatbed and Wichita-Sioux Falls lanes not awarded — coverage gap on flatbed specialists. Q3 rebid expected. Preferred carrier status granted.",
-      fileName: "Great_Plains_Q2_2026_Award.xlsx",
-      fileData: JSON.stringify({ awardedLanes: gpAwardLanes.length, totalVolume: 280, equipment: ["Dry Van"] }),
-    });
-    console.log("  Created Great Plains Distribution award");
 
     // ─── STEP 7: TASKS ───────────────────────────────────────────────────────
     console.log("\nStep 7: Creating tasks…");
@@ -1667,38 +1363,6 @@ async function main() {
       { amKey: "am6", namKey: "nam2", metric: "touchpoints", period: "monthly", target: "26", current: "28", title: "February Touchpoints", customLabel: "Feb touches", startDate: FEB_START, endDate: FEB_END },
       { amKey: "am6", namKey: "nam2", metric: "margin", period: "monthly", target: "9500", current: "10200", title: "January Margin", customLabel: "Jan margin", startDate: JAN_START, endDate: JAN_END },
       { amKey: "am6", namKey: "nam2", metric: "margin", period: "monthly", target: "11500", current: "12036", title: "February Margin", customLabel: "Feb margin", startDate: FEB_START, endDate: FEB_END },
-
-      // ── MARCH 2026 GOALS (in-progress — current month) ──
-      // Tyler Benson (am1) — March targets elevated for Q1 close push
-      { amKey: "am1", namKey: "nam1", metric: "loads_booked", period: "monthly", target: "50", current: "37", title: "March Loads", customLabel: "Mar loads", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am1", namKey: "nam1", metric: "touchpoints", period: "monthly", target: "40", current: "29", title: "March Touchpoints", customLabel: "Mar touches", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am1", namKey: "nam1", metric: "new_contacts", period: "monthly", target: "6", current: "4", title: "March New Contacts", customLabel: "Mar contacts", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am1", namKey: "nam1", metric: "margin", period: "monthly", target: "19000", current: "14820", title: "March Margin", customLabel: "Mar margin", startDate: MAR_START, endDate: MAR_END },
-      // Priya Patel (am2)
-      { amKey: "am2", namKey: "nam1", metric: "loads_booked", period: "monthly", target: "45", current: "33", title: "March Loads", customLabel: "Mar loads", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am2", namKey: "nam1", metric: "touchpoints", period: "monthly", target: "38", current: "27", title: "March Touchpoints", customLabel: "Mar touches", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am2", namKey: "nam1", metric: "new_contacts", period: "monthly", target: "6", current: "5", title: "March New Contacts", customLabel: "Mar contacts", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am2", namKey: "nam1", metric: "margin", period: "monthly", target: "17000", current: "13110", title: "March Margin", customLabel: "Mar margin", startDate: MAR_START, endDate: MAR_END },
-      // Jason Kowalski (am3)
-      { amKey: "am3", namKey: "nam1", metric: "loads_booked", period: "monthly", target: "55", current: "43", title: "March Loads", customLabel: "Mar loads", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am3", namKey: "nam1", metric: "touchpoints", period: "monthly", target: "45", current: "38", title: "March Touchpoints", customLabel: "Mar touches", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am3", namKey: "nam1", metric: "new_contacts", period: "monthly", target: "6", current: "5", title: "March New Contacts", customLabel: "Mar contacts", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am3", namKey: "nam1", metric: "margin", period: "monthly", target: "21000", current: "16800", title: "March Margin", customLabel: "Mar margin", startDate: MAR_START, endDate: MAR_END },
-      // Lexi Navarro (am4)
-      { amKey: "am4", namKey: "nam2", metric: "loads_booked", period: "monthly", target: "42", current: "30", title: "March Loads", customLabel: "Mar loads", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am4", namKey: "nam2", metric: "touchpoints", period: "monthly", target: "36", current: "25", title: "March Touchpoints", customLabel: "Mar touches", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am4", namKey: "nam2", metric: "new_contacts", period: "monthly", target: "5", current: "4", title: "March New Contacts", customLabel: "Mar contacts", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am4", namKey: "nam2", metric: "margin", period: "monthly", target: "16000", current: "11500", title: "March Margin", customLabel: "Mar margin", startDate: MAR_START, endDate: MAR_END },
-      // Marcus Dunn (am5)
-      { amKey: "am5", namKey: "nam2", metric: "loads_booked", period: "monthly", target: "48", current: "38", title: "March Loads", customLabel: "Mar loads", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am5", namKey: "nam2", metric: "touchpoints", period: "monthly", target: "40", current: "31", title: "March Touchpoints", customLabel: "Mar touches", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am5", namKey: "nam2", metric: "new_contacts", period: "monthly", target: "6", current: "5", title: "March New Contacts", customLabel: "Mar contacts", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am5", namKey: "nam2", metric: "margin", period: "monthly", target: "18000", current: "14200", title: "March Margin", customLabel: "Mar margin", startDate: MAR_START, endDate: MAR_END },
-      // Brianna Okafor (am6)
-      { amKey: "am6", namKey: "nam2", metric: "loads_booked", period: "monthly", target: "36", current: "27", title: "March Loads", customLabel: "Mar loads", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am6", namKey: "nam2", metric: "touchpoints", period: "monthly", target: "30", current: "22", title: "March Touchpoints", customLabel: "Mar touches", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am6", namKey: "nam2", metric: "new_contacts", period: "monthly", target: "6", current: "3", title: "March New Contacts (stretch)", customLabel: "Mar contacts", startDate: MAR_START, endDate: MAR_END },
-      { amKey: "am6", namKey: "nam2", metric: "margin", period: "monthly", target: "14000", current: "10080", title: "March Margin", customLabel: "Mar margin", startDate: MAR_START, endDate: MAR_END },
     ];
 
     for (const def of goalDefs) {
@@ -1768,7 +1432,7 @@ async function main() {
         { text: "Set March QBR with Bill Stratton at Heartland", tag: "action_item", status: "pending" },
         { text: "Tyler load goal Feb: 42 loads — on pace for 45+", tag: "goal", status: "pending", reply: "Feeling good. Summit volume is pulling me forward." },
       ]},
-      { namKey: "nam1", amKey: "am1", meetingDate: "2026-02-21", isLatest: false, notes: "Discussed career growth — Tyler is performing at Senior AM level.", topics: [
+      { namKey: "nam1", amKey: "am1", meetingDate: "2026-02-21", isLatest: true, notes: "Discussed career growth — Tyler is performing at Senior AM level.", topics: [
         { text: "Tyler's performance is tracking Senior AM criteria — discuss promotion path", tag: "development", status: "pending", reply: "Really appreciate the recognition. I want to start tracking those benchmarks officially." },
         { text: "Q2 strategy: deepen Summit relationship, grow Heartland flatbed volume", tag: "strategy", status: "pending" },
       ]},
@@ -1782,7 +1446,7 @@ async function main() {
         { text: "Priya's Feb load goal: 38 loads, on pace for 40", tag: "goal", status: "pending" },
         { text: "Celebrate: 7 new contacts in Feb so far, goal was 5", tag: "win", status: "completed", reply: "Carlos at Pacific introduced me to his whole team — that unlocked everything." },
       ]},
-      { namKey: "nam1", amKey: "am2", meetingDate: "2026-02-19", isLatest: false, notes: "Deep dive on Pacific Coast strategy and Riverview compliance docs.", topics: [
+      { namKey: "nam1", amKey: "am2", meetingDate: "2026-02-19", isLatest: true, notes: "Deep dive on Pacific Coast strategy and Riverview compliance docs.", topics: [
         { text: "Send Riverview updated HAZMAT certs before March 1 deadline", tag: "action_item", status: "pending" },
         { text: "Schedule QBR with Steve Paulson at Riverview for April 15", tag: "action_item", status: "pending" },
       ]},
@@ -1791,7 +1455,7 @@ async function main() {
         { text: "Great Plains AR issue — 45-day invoice problem", tag: "account", status: "completed", reply: "Escalated to Rachel Kim — she's working on it with finance." },
         { text: "Discuss MidAmerica Steel dedicated lane proposal", tag: "strategy", status: "completed" },
       ]},
-      { namKey: "nam1", amKey: "am3", meetingDate: "2026-02-03", isLatest: false, notes: "Jason landed 50 loads in Feb so far — tracking for a record month.", topics: [
+      { namKey: "nam1", amKey: "am3", meetingDate: "2026-02-03", isLatest: true, notes: "Jason landed 50 loads in Feb so far — tracking for a record month.", topics: [
         { text: "Jason Feb goal: 48 loads — currently at 50", tag: "goal", status: "pending" },
         { text: "Draft MidAmerica 5-lane flatbed proposal for Frank Russo", tag: "action_item", status: "pending", reply: "Working on it. Frank wants 3 flatbed + 2 step deck. Getting carrier quotes now." },
       ]},
@@ -1800,7 +1464,7 @@ async function main() {
         { text: "Bayshore carrier onboarding — need signed packet", tag: "action_item", status: "completed", reply: "Sent it 3 times — finally got it back. All cleared now." },
         { text: "Lexi load goal Jan: 28 loads — finished at 31", tag: "goal", status: "completed" },
       ]},
-      { namKey: "nam2", amKey: "am4", meetingDate: "2026-02-06", isLatest: false, notes: "Bayshore is fully operational — Lexi building great rapport with Tom.", topics: [
+      { namKey: "nam2", amKey: "am4", meetingDate: "2026-02-06", isLatest: true, notes: "Bayshore is fully operational — Lexi building great rapport with Tom.", topics: [
         { text: "Set up bi-weekly call with Tom Greenberg", tag: "action_item", status: "completed" },
         { text: "Discuss Dillon's NYC DC opening in Q2 — plan for new volume", tag: "strategy", status: "pending", reply: "Dillon confirmed April 1 opening. Going to pre-position 2 dry van carriers in the Northeast." },
       ]},
@@ -1809,7 +1473,7 @@ async function main() {
         { text: "Keystone GPS tracking compliance — confirm with Nathan", tag: "action_item", status: "completed", reply: "Confirmed. Nathan verified our tracking is CTSI-compliant." },
         { text: "Northstar dedicated lane opportunity — prep for Glen meeting", tag: "strategy", status: "pending" },
       ]},
-      { namKey: "nam2", amKey: "am5", meetingDate: "2026-02-04", isLatest: false, notes: "Marcus hit 43 loads in Feb — strong growth from January.", topics: [
+      { namKey: "nam2", amKey: "am5", meetingDate: "2026-02-04", isLatest: true, notes: "Marcus hit 43 loads in Feb — strong growth from January.", topics: [
         { text: "Add 3 reefer carriers to Keystone CTSI pre-approval list", tag: "action_item", status: "pending" },
         { text: "Schedule dedicated lane meeting with Glen Larson — Feb 20", tag: "action_item", status: "pending", reply: "On the calendar. Prepping a lane analysis for his top 5 routes." },
       ]},
@@ -1818,41 +1482,9 @@ async function main() {
         { text: "Brianna getting comfortable with cross-border process", tag: "development", status: "completed", reply: "Hector has been really helpful explaining the drayage side." },
         { text: "Identify drayage partner options at Laredo border", tag: "action_item", status: "completed" },
       ]},
-      { namKey: "nam2", amKey: "am6", meetingDate: "2026-02-10", isLatest: false, notes: "Hector added 3 more lanes in March — Brianna has a big Q2 ahead.", topics: [
-        { text: "Prep Q2 capacity plan for Sofia call — March 8", tag: "action_item", status: "completed", reply: "Sent the deck to Sofia. She responded the same day." },
-        { text: "Follow up on March lane additions with Hector", tag: "action_item", status: "completed", reply: "He wants dry van and reefer options — proposal sent." },
-      ]},
-
-      // ── MARCH 2026 SESSIONS (active — current month) ──
-      { namKey: "nam1", amKey: "am1", meetingDate: "2026-03-05", isLatest: true, notes: "Tyler at 37 loads mid-March — on track for 50. Heartland 6-month agreement signed this week.", topics: [
-        { text: "Lock in Q2 reefer capacity for Summit — 45 loads/month needs carrier commitments", tag: "action_item", status: "pending", reply: "Have 3 carriers committed. Need 2 more for Chicago–Dallas surge." },
-        { text: "Tyler Q1 close: push for top performer — he's at 120 loads YTD", tag: "goal", status: "pending" },
-        { text: "Discuss Heartland Nashville volume expansion for Q2", tag: "strategy", status: "pending" },
-      ]},
-      { namKey: "nam1", amKey: "am2", meetingDate: "2026-03-06", isLatest: true, notes: "Priya at 33 loads mid-March — produce season prep is the priority.", topics: [
-        { text: "Confirm 80 reefer loads/month for PCP April — carriers locked in?", tag: "action_item", status: "completed", reply: "Done — 5 dedicated reefer carriers confirmed through June." },
-        { text: "Port Arthur terminal launch — get Riverview first-load celebration planned", tag: "strategy", status: "pending" },
-        { text: "Development: Priya needs to get to VP of Logistics level at Riverview", tag: "development", status: "pending", reply: "Janet Liu is the target. Steve is the bridge. Plan for a formal introduction at the QBR." },
-      ]},
-      { namKey: "nam1", amKey: "am3", meetingDate: "2026-03-04", isLatest: true, notes: "Jason at 43 loads mid-March — MidAmerica dedicated lanes go live April 1.", topics: [
-        { text: "Prep MidAmerica dedicated lane launch — ops needs carrier assignments by March 28", tag: "action_item", status: "pending" },
-        { text: "Great Plains preferred carrier vote — Rachel said final decision April 8", tag: "strategy", status: "pending", reply: "I'll call Rachel the day before to make sure we're top of mind." },
-        { text: "Jason promotion review prep — pull 3-month goal attainment data", tag: "development", status: "pending" },
-      ]},
-      { namKey: "nam2", amKey: "am4", meetingDate: "2026-03-06", isLatest: true, notes: "Lexi at 30 loads mid-March — NYC DC launch is the big Q2 opportunity.", topics: [
-        { text: "Pre-position 3 Northeast dry van carriers for Bayshore NYC DC by May 15", tag: "action_item", status: "pending" },
-        { text: "Bayshore case study on compliance process — Angela wants to share with team", tag: "strategy", status: "completed", reply: "Sent the case study. Angela shared it in her leadership meeting." },
-        { text: "Lexi goal: push March loads to 42 — she's at 30 with 2 weeks left", tag: "goal", status: "pending" },
-      ]},
-      { namKey: "nam2", amKey: "am5", meetingDate: "2026-03-05", isLatest: true, notes: "Marcus at 38 loads mid-March — Northstar deal signed, Keystone expanding 40%.", topics: [
-        { text: "Northstar 5-lane launch ops plan — carriers assigned by March 28", tag: "action_item", status: "pending" },
-        { text: "Keystone contract renewal +40% scope — get Nathan to confirm final lane list", tag: "action_item", status: "pending", reply: "Nathan said he'll send the addendum this week." },
-        { text: "Development: Marcus handling complex pharma account — recognize at team call", tag: "development", status: "completed" },
-      ]},
-      { namKey: "nam2", amKey: "am6", meetingDate: "2026-03-07", isLatest: true, notes: "Sofia signed preferred cross-border partner agreement — huge win for Brianna.", topics: [
-        { text: "Formalize Laredo preferred partner agreement paperwork — send to legal", tag: "action_item", status: "pending" },
-        { text: "Brianna's development: she's ready to handle a second complex account — discuss options", tag: "development", status: "pending", reply: "Looking at adding Riverview as stretch account in Q2." },
-        { text: "Cross-border carrier expansion — need 2 more drayage partners at Laredo by April", tag: "action_item", status: "pending" },
+      { namKey: "nam2", amKey: "am6", meetingDate: "2026-02-10", isLatest: true, notes: "Hector added 3 more lanes in March — Brianna has a big Q2 ahead.", topics: [
+        { text: "Prep Q2 capacity plan for Sofia call — March 8", tag: "action_item", status: "pending" },
+        { text: "Follow up on March lane additions with Hector", tag: "action_item", status: "pending", reply: "He wants dry van and reefer options — will put together a proposal." },
       ]},
     ];
 
@@ -1882,17 +1514,6 @@ async function main() {
       { content: "Reminder: Keystone Pharma requires GPS tracking on every single load. Zero exceptions. If a carrier doesn't have it, do NOT book them on any Keystone lane. One missed temp excursion = automatic claim.", category: "reminder", authorKey: "nam2", createdAt: "2026-02-05T09:30:00.000Z", reactions: [{ userKey: "am5", emoji: "✅" }, { userKey: "am4", emoji: "✅" }] },
       { content: "February is shaping up to be our best month since Q3 last year. Team is up 18% on loads YoY. Great Plains, Summit, and Pacific Coast are all trending up. Keep the pedal down — Q1 close is our moment. 🚀", category: "update", authorKey: "director", createdAt: "2026-02-03T10:00:00.000Z", reactions: [{ userKey: "nam1", emoji: "🚀" }, { userKey: "nam2", emoji: "🚀" }, { userKey: "am1", emoji: "🔥" }, { userKey: "am3", emoji: "💪" }] },
       { content: "New lane win: we just got awarded 3 reefer lanes in Summit's 2026 RFP (Chicago→Memphis, Chicago→Atlanta, Minneapolis→Chicago). Total volume ~265 loads annually. Tyler and Sandra — great work on the RFP response.", category: "win", authorKey: "director", createdAt: "2026-01-28T14:00:00.000Z", reactions: [{ userKey: "am1", emoji: "🙌" }, { userKey: "nam1", emoji: "🎉" }, { userKey: "am2", emoji: "👏" }] },
-      // ── MARCH 2026 POSTS ──
-      { content: "Q1 FINAL PUSH — we're at 92% of our team load target with 6 days left in March. Every load counts. Jason is our leader at 43, Tyler at 37, Marcus at 38. Let's close this quarter STRONG. 💪", category: "update", authorKey: "director", createdAt: "2026-03-25T08:00:00.000Z", reactions: [{ userKey: "am3", emoji: "💪" }, { userKey: "am1", emoji: "🔥" }, { userKey: "am5", emoji: "🚀" }, { userKey: "nam1", emoji: "💪" }] },
-      { content: "HUGE WIN: Laredo Cross-Border Trading signed a preferred partner agreement with us. Brianna closed $2.2M in annual volume commitment. Cross-border is HARD and she's made it look easy. Find her and say congratulations. 🎉", category: "win", authorKey: "nam2", createdAt: "2026-03-24T09:30:00.000Z", reactions: [{ userKey: "am6", emoji: "🙏" }, { userKey: "director", emoji: "🔥" }, { userKey: "admin", emoji: "🎉" }, { userKey: "am4", emoji: "👏" }, { userKey: "am1", emoji: "👏" }] },
-      { content: "Capacity alert going into April: reefer rates are up 12% on Fresno→Phoenix vs. January. If you have spot reefer carriers available, get them positioned near Fresno NOW. April–May is peak produce season.", category: "alert", authorKey: "nam1", createdAt: "2026-03-22T14:00:00.000Z", reactions: [{ userKey: "am2", emoji: "⚠️" }, { userKey: "director", emoji: "👍" }] },
-      { content: "MidAmerica Steel 5-lane dedicated program signed! Frank Russo put pen to paper today — 3 flatbed + 2 step deck lanes live April 1. Jason, this is what strategic selling looks like. Total contract value ~$1.1M annually.", category: "win", authorKey: "nam1", createdAt: "2026-03-20T11:00:00.000Z", reactions: [{ userKey: "am3", emoji: "🔥" }, { userKey: "director", emoji: "💪" }, { userKey: "admin", emoji: "👏" }, { userKey: "am1", emoji: "🙌" }] },
-      { content: "Great Plains Update: Rachel Kim confirmed we've been approved for preferred carrier status. This opens up ~$300K in additional annual volume. The AR drama from Q4 is officially behind us — clean slate going into Q2.", category: "win", authorKey: "director", createdAt: "2026-03-18T16:00:00.000Z", reactions: [{ userKey: "am3", emoji: "🔥" }, { userKey: "nam1", emoji: "👏" }] },
-      { content: "Reminder: Q2 pricing conversations start April 1. If you haven't had a rate discussion with your key accounts, now is the time. Flat renewals are fine. Spot-heavy accounts should be pushed toward contract. DAT market is softening slightly — good time to lock in.", category: "reminder", authorKey: "director", createdAt: "2026-03-15T09:00:00.000Z", reactions: [{ userKey: "nam1", emoji: "✅" }, { userKey: "nam2", emoji: "✅" }] },
-      { content: "Northstar Lumber dedicated lane deal CLOSED. Glen signed the 5-lane agreement — starts April 1. Marcus pulled this off in just 6 weeks from first conversation to signed contract. Textbook 'down, not across' execution.", category: "win", authorKey: "nam2", createdAt: "2026-03-12T10:00:00.000Z", reactions: [{ userKey: "am5", emoji: "🙌" }, { userKey: "director", emoji: "🔥" }, { userKey: "am3", emoji: "👏" }, { userKey: "am1", emoji: "👏" }] },
-      // ── NOVEMBER / DECEMBER 2025 HISTORICAL POSTS ──
-      { content: "December planning: holiday capacity is always tight. Lock in carriers for any contracted lanes NOW. Don't wait until Dec 15 — the good carriers are already spoken for. Peak surcharges will be 12–15% above standard.", category: "alert", authorKey: "director", createdAt: "2025-11-20T10:00:00.000Z", reactions: [{ userKey: "nam1", emoji: "✅" }, { userKey: "nam2", emoji: "👍" }, { userKey: "am1", emoji: "⚠️" }] },
-      { content: "Q4 recap: team finished November at 88% of load target. December is historically 15–20% lighter due to holiday shutdowns — that's expected. Use the slower pace to build Q1 strategy and strengthen account relationships.", category: "update", authorKey: "director", createdAt: "2025-12-01T09:00:00.000Z", reactions: [{ userKey: "nam1", emoji: "👍" }, { userKey: "nam2", emoji: "👍" }] },
     ];
 
     for (const def of feedPostDefs) {
@@ -1920,25 +1541,12 @@ async function main() {
     console.log("\nStep 11: Creating market share entries…");
 
     const msEntries: MarketShareDef[] = [
-      // November 2025 (pre-Q4 holiday slowdown)
-      { companyName: "Summit Frozen Foods", label: "November 2025", start: NOV_START, end: NOV_END, total: 450, vt: 28, spot: 8 },
-      { companyName: "Pacific Coast Produce", label: "November 2025", start: NOV_START, end: NOV_END, total: 750, vt: 45, spot: 20 },
-      { companyName: "Great Plains Distribution", label: "November 2025", start: NOV_START, end: NOV_END, total: 1100, vt: 72, spot: 18 },
-      // December 2025 (holiday slowdown)
-      { companyName: "Summit Frozen Foods", label: "December 2025", start: DEC_START, end: DEC_END, total: 420, vt: 30, spot: 9 },
-      { companyName: "Pacific Coast Produce", label: "December 2025", start: DEC_START, end: DEC_END, total: 680, vt: 48, spot: 22 },
-      { companyName: "Great Plains Distribution", label: "December 2025", start: DEC_START, end: DEC_END, total: 1050, vt: 80, spot: 20 },
-      // January 2026
       { companyName: "Summit Frozen Foods", label: "January 2026", start: JAN_START, end: JAN_END, total: 480, vt: 38, spot: 12 },
       { companyName: "Summit Frozen Foods", label: "February 2026", start: FEB_START, end: FEB_END, total: 500, vt: 52, spot: 18 },
       { companyName: "Pacific Coast Produce", label: "January 2026", start: JAN_START, end: JAN_END, total: 820, vt: 65, spot: 30 },
       { companyName: "Pacific Coast Produce", label: "February 2026", start: FEB_START, end: FEB_END, total: 850, vt: 82, spot: 40 },
       { companyName: "Great Plains Distribution", label: "January 2026", start: JAN_START, end: JAN_END, total: 1200, vt: 95, spot: 25 },
       { companyName: "Great Plains Distribution", label: "February 2026", start: FEB_START, end: FEB_END, total: 1250, vt: 118, spot: 32 },
-      // March 2026 (partial month — Q1 close)
-      { companyName: "Summit Frozen Foods", label: "March 2026", start: MAR_START, end: MAR_END, total: 510, vt: 47, spot: 15 },
-      { companyName: "Pacific Coast Produce", label: "March 2026", start: MAR_START, end: MAR_END, total: 870, vt: 90, spot: 48 },
-      { companyName: "Great Plains Distribution", label: "March 2026", start: MAR_START, end: MAR_END, total: 1280, vt: 130, spot: 35 },
     ];
 
     for (const ms of msEntries) {
@@ -2056,15 +1664,14 @@ async function main() {
     console.log(`  Users:             10 (1 Admin, 1 Director, 2 NAMs, 6 AMs)`);
     console.log(`  Companies:         ${companyDefs.length} fictional freight shippers`);
     console.log(`  Contacts:          ${totalContacts} contacts with full org chart hierarchy`);
-    console.log(`  Touchpoints:       ${totalTouchpoints} historical + 32 current-week (Mar–Apr 2026, incl. today's)`);
-    console.log(`  Financial uploads: 6 (Nov 2025–Apr 2026; Apr is latest with 2-day partial month data)`);
+    console.log(`  Touchpoints:       ${totalTouchpoints} across Jan–Feb 2026`);
+    console.log(`  Financial uploads: 2 (January + February with 18% growth)`);
     console.log(`  RFPs:              3 (Summit Frozen Foods, Pacific Coast Produce, Great Plains)`);
-    console.log(`  Awards:            3 (Summit, Pacific Coast, Great Plains — with lane data)`);
     console.log(`  Tasks:             ${taskDefs.length} (mix of open and completed, with comments)`);
-    console.log(`  Goals:             ${goalDefs.length} across all AMs (Jan + Feb + Mar — loads, touches, contacts, margin)`);
-    console.log(`  1:1 Sessions:      ${sessionDefs.length} with topics and action items (through March 2026)`);
-    console.log(`  Feed posts:        ${feedPostDefs.length} with emoji reactions (Nov 2025 – Mar 2026)`);
-    console.log(`  Market share:      ${msEntries.length} entries for 3 companies (Nov 2025 – Mar 2026)`);
+    console.log(`  Goals:             ${goalDefs.length} across all AMs (loads, touchpoints, new_contacts, margin)`);
+    console.log(`  1:1 Sessions:      ${sessionDefs.length} with topics and action items`);
+    console.log(`  Feed posts:        ${feedPostDefs.length} with emoji reactions`);
+    console.log(`  Market share:      ${msEntries.length} entries for 3 companies`);
     console.log(`  PTO passoff:       1 with 2 account items`);
     console.log(`  Promo nominations: 2 career milestone entries`);
     console.log("\nAll demo data is fully isolated in the 'demo' organization.");

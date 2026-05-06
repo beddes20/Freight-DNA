@@ -12,11 +12,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save, CreditCard, CalendarDays, Download, FileText, ExternalLink, Building2, Contact, RefreshCw, Database } from "lucide-react";
+import { Loader2, Plus, Pencil, Trash2, Users, Shield, ShieldCheck, UserCircle, Crown, Clock, LogIn, Upload, CheckCircle2, SkipForward, List, Network, Mail, XCircle, AlertTriangle, Wifi, TrendingUp, Save } from "lucide-react";
 import type { User } from "@shared/schema";
-import { WebexConnectionStatus } from "@/components/webex-connection-status";
-import { WebexHealthPanel } from "@/components/webex-health-panel";
-import { WebexUserMappingPanel } from "@/components/webex-user-mapping-panel";
 
 interface PromotionCriteria {
   id: string;
@@ -69,7 +66,7 @@ function CriteriaForm({ fromRole, toRole, label, existing }: { fromRole: string;
   return (
     <div className="rounded-xl border bg-card p-4 space-y-3">
       <div className="flex items-center gap-2 mb-1">
-        <TrendingUp className="w-4 h-4 text-amber-600" />
+        <TrendingUp className="w-4 h-4 text-blue-600" />
         <h3 className="font-semibold text-sm">{label}</h3>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -156,7 +153,7 @@ function CareerProgressionSection() {
   return (
     <div className="border rounded-xl p-5 space-y-4 bg-muted/30" data-testid="section-career-progression">
       <div className="flex items-center gap-2">
-        <TrendingUp className="w-4 h-4 text-amber-600" />
+        <TrendingUp className="w-4 h-4 text-blue-600" />
         <h2 className="font-semibold text-sm">Career Progression Criteria</h2>
       </div>
       <p className="text-xs text-muted-foreground">
@@ -402,7 +399,6 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
   const [role, setRole] = useState(user?.role || "account_manager");
   const [managerId, setManagerId] = useState(user?.managerId || "none");
   const [financialRepId, setFinancialRepId] = useState((user as any)?.financialRepId || "");
-  const [emailSignature, setEmailSignature] = useState(user?.emailSignature || "");
   const { toast } = useToast();
 
   const mutation = useMutation({
@@ -416,12 +412,6 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/users"] });
       queryClient.invalidateQueries({ queryKey: ["/api/team-members"] });
-      // Role-promotion contract: a role change must invalidate the
-      // promoted user's session profile so nav/route gates re-derive
-      // from the new role on the next focus instead of holding the old
-      // role for up to the staleTime of /api/auth/me. Cheap no-op for
-      // pure profile edits (name/email/etc).
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       toast({ title: user ? "User updated" : "User created" });
       onClose();
     },
@@ -432,7 +422,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const data: any = { name, username, email: email.trim() || null, role, managerId: managerId === "none" ? null : managerId, financialRepId: financialRepId.trim() || null, emailSignature: emailSignature.trim() || null };
+    const data: any = { name, username, email: email.trim() || null, role, managerId: managerId === "none" ? null : managerId, financialRepId: financialRepId.trim() || null };
     if (password) data.password = password;
     if (!user && !password) {
       toast({ title: "Error", description: "Password is required", variant: "destructive" });
@@ -504,17 +494,6 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
           </div>
         </>
       )}
-      <div className="space-y-2">
-        <Label>Email Signature <span className="text-muted-foreground font-normal text-xs">(appended to outgoing emails)</span></Label>
-        <Textarea
-          data-testid="textarea-user-email-signature"
-          value={emailSignature}
-          onChange={(e) => setEmailSignature(e.target.value)}
-          placeholder="e.g. John Smith&#10;Account Manager | Value Truck&#10;john.smith@valuetruck.com"
-          rows={4}
-          className="text-sm resize-none"
-        />
-      </div>
       <Button type="submit" className="w-full" disabled={mutation.isPending} data-testid="button-save-user">
         {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
         {user ? "Update User" : "Create User"}
@@ -607,19 +586,9 @@ function BulkImportDialog() {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-sm text-muted-foreground">
-                Upload an Excel file with columns: <strong>display_name</strong>, <strong>Email</strong>, <strong>title</strong>. Roles are mapped automatically from the title column.
-              </p>
-              <a
-                href="/api/import-templates/users"
-                download
-                className="shrink-0 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                data-testid="link-download-users-template"
-              >
-                <Download className="h-3.5 w-3.5" /> Template
-              </a>
-            </div>
+            <p className="text-sm text-muted-foreground">
+              Upload an Excel file with columns: <strong>display_name</strong>, <strong>Email</strong>, <strong>title</strong>. Roles are mapped automatically from the title column.
+            </p>
             <div className="space-y-2">
               <Label>Excel File (.xlsx)</Label>
               <input
@@ -651,7 +620,7 @@ function BulkImportDialog() {
               <p>Admin → Admin &nbsp;|&nbsp; Director → Director</p>
             </div>
             <Button
-              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
+              className="w-full bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700"
               disabled={!file || !defaultPassword || loading}
               onClick={handleImport}
               data-testid="button-confirm-bulk-import"
@@ -663,578 +632,6 @@ function BulkImportDialog() {
         )}
       </DialogContent>
     </Dialog>
-  );
-}
-
-// ─── Bulk Import Companies ─────────────────────────────────────────────────────
-
-function BulkImportCompaniesDialog() {
-  const [open, setOpen] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [result, setResult] = useState<{ created: string[]; skipped: string[]; errors: string[]; total: number } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const { toast } = useToast();
-
-  const handleImport = async () => {
-    if (!file) return;
-    setLoading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/companies/bulk-import", { method: "POST", body: fd, credentials: "include" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Import failed");
-      setResult(data);
-      queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
-    } catch (err: any) {
-      toast({ title: "Import failed", description: err.message, variant: "destructive" });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleClose = () => {
-    setOpen(false);
-    setFile(null);
-    setResult(null);
-    if (fileRef.current) fileRef.current.value = "";
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); else setOpen(true); }}>
-      <DialogTrigger asChild>
-        <Button variant="outline" data-testid="button-bulk-import-companies">
-          <Building2 className="w-4 h-4 mr-2" /> Import Companies
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Bulk Import Companies</DialogTitle>
-        </DialogHeader>
-        {result ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-3 text-center">
-              <div className="rounded-lg bg-green-50 dark:bg-green-950 p-3">
-                <p className="text-2xl font-bold text-green-600">{result.created.length}</p>
-                <p className="text-xs text-muted-foreground mt-1">Created</p>
-              </div>
-              <div className="rounded-lg bg-amber-50 dark:bg-amber-950 p-3">
-                <p className="text-2xl font-bold text-amber-600">{result.skipped.length}</p>
-                <p className="text-xs text-muted-foreground mt-1">Already Exist</p>
-              </div>
-              <div className="rounded-lg bg-red-50 dark:bg-red-950 p-3">
-                <p className="text-2xl font-bold text-red-600">{result.errors.length}</p>
-                <p className="text-xs text-muted-foreground mt-1">Errors</p>
-              </div>
-            </div>
-            {result.created.length > 0 && (
-              <div>
-                <p className="text-sm font-medium mb-2 flex items-center gap-1"><CheckCircle2 className="w-4 h-4 text-green-500" /> Created</p>
-                <div className="max-h-40 overflow-y-auto text-sm space-y-1">
-                  {result.created.map(n => <p key={n} className="text-muted-foreground">{n}</p>)}
-                </div>
-              </div>
-            )}
-            {result.skipped.length > 0 && (
-              <div>
-                <p className="text-sm font-medium mb-2 flex items-center gap-1"><SkipForward className="w-4 h-4 text-amber-500" /> Skipped (already exist)</p>
-                <div className="max-h-32 overflow-y-auto text-sm space-y-1">
-                  {result.skipped.map(n => <p key={n} className="text-muted-foreground">{n}</p>)}
-                </div>
-              </div>
-            )}
-            {result.errors.length > 0 && (
-              <div>
-                <p className="text-sm font-medium mb-2 flex items-center gap-1"><XCircle className="w-4 h-4 text-red-500" /> Errors</p>
-                <div className="max-h-32 overflow-y-auto text-sm space-y-1">
-                  {result.errors.map((e, i) => <p key={i} className="text-muted-foreground">{e}</p>)}
-                </div>
-              </div>
-            )}
-            <Button className="w-full" onClick={handleClose}>Done</Button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-sm text-muted-foreground">
-                Upload an Excel file to create customer accounts in bulk. Duplicate company names are skipped automatically.
-              </p>
-              <a
-                href="/api/import-templates/companies"
-                download
-                className="shrink-0 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                data-testid="link-download-companies-template"
-              >
-                <Download className="h-3.5 w-3.5" /> Template
-              </a>
-            </div>
-            <div className="bg-muted/40 rounded-lg p-3 text-xs text-muted-foreground space-y-1">
-              <p className="font-medium text-foreground mb-1">Required &amp; optional columns:</p>
-              <p><strong>company_name</strong> (required), industry, website</p>
-              <p>shipping_modes (comma-separated: FTL,LTL,Drayage,IMDL)</p>
-              <p>estimated_freight_spend, assigned_rep_email, account_summary, financial_alias</p>
-            </div>
-            <div className="space-y-2">
-              <Label>Excel File (.xlsx)</Label>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                data-testid="input-bulk-import-companies-file"
-                className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-950 dark:file:text-blue-300"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-              />
-            </div>
-            <Button
-              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
-              disabled={!file || loading}
-              onClick={handleImport}
-              data-testid="button-confirm-bulk-import-companies"
-            >
-              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {loading ? "Importing..." : "Import Companies"}
-            </Button>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ─── Bulk Import Contacts ──────────────────────────────────────────────────────
-
-function BulkImportContactsDialog() {
-  const [open, setOpen] = useState(false);
-  const [file, setFile] = useState<File | null>(null);
-  const [result, setResult] = useState<{ created: string[]; errors: string[]; total: number } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const { toast } = useToast();
-
-  const handleImport = async () => {
-    if (!file) return;
-    setLoading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await fetch("/api/contacts/bulk-import", { method: "POST", body: fd, credentials: "include" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Import failed");
-      setResult(data);
-      queryClient.invalidateQueries({ queryKey: ["/api/contacts"] });
-    } catch (err: any) {
-      toast({ title: "Import failed", description: err.message, variant: "destructive" });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleClose = () => {
-    setOpen(false);
-    setFile(null);
-    setResult(null);
-    if (fileRef.current) fileRef.current.value = "";
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(o) => { if (!o) handleClose(); else setOpen(true); }}>
-      <DialogTrigger asChild>
-        <Button variant="outline" data-testid="button-bulk-import-contacts">
-          <Contact className="w-4 h-4 mr-2" /> Import Contacts
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Bulk Import Contacts</DialogTitle>
-        </DialogHeader>
-        {result ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-3 text-center">
-              <div className="rounded-lg bg-green-50 dark:bg-green-950 p-3">
-                <p className="text-2xl font-bold text-green-600">{result.created.length}</p>
-                <p className="text-xs text-muted-foreground mt-1">Created</p>
-              </div>
-              <div className="rounded-lg bg-red-50 dark:bg-red-950 p-3">
-                <p className="text-2xl font-bold text-red-600">{result.errors.length}</p>
-                <p className="text-xs text-muted-foreground mt-1">Errors</p>
-              </div>
-            </div>
-            {result.created.length > 0 && (
-              <div>
-                <p className="text-sm font-medium mb-2 flex items-center gap-1"><CheckCircle2 className="w-4 h-4 text-green-500" /> Created</p>
-                <div className="max-h-48 overflow-y-auto text-sm space-y-1">
-                  {result.created.map((n, i) => <p key={i} className="text-muted-foreground">{n}</p>)}
-                </div>
-              </div>
-            )}
-            {result.errors.length > 0 && (
-              <div>
-                <p className="text-sm font-medium mb-2 flex items-center gap-1"><XCircle className="w-4 h-4 text-red-500" /> Errors</p>
-                <div className="max-h-32 overflow-y-auto text-sm space-y-1">
-                  {result.errors.map((e, i) => <p key={i} className="text-muted-foreground">{e}</p>)}
-                </div>
-              </div>
-            )}
-            <Button className="w-full" onClick={handleClose}>Done</Button>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="flex items-start justify-between gap-2">
-              <p className="text-sm text-muted-foreground">
-                Upload an Excel file to create contacts across all companies. Contacts are matched to companies by name — import companies first.
-              </p>
-              <a
-                href="/api/import-templates/contacts"
-                download
-                className="shrink-0 inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                data-testid="link-download-contacts-template"
-              >
-                <Download className="h-3.5 w-3.5" /> Template
-              </a>
-            </div>
-            <div className="bg-muted/40 rounded-lg p-3 text-xs text-muted-foreground space-y-1">
-              <p className="font-medium text-foreground mb-1">Required &amp; optional columns:</p>
-              <p><strong>contact_name</strong>, <strong>company_name</strong> (required — must match exactly)</p>
-              <p>title, email, phone, relationship_base</p>
-              <p className="text-amber-600 dark:text-amber-400">Tip: relationship_base values — 1st Base, 2nd Base, 3rd Base, Home Run</p>
-            </div>
-            <div className="space-y-2">
-              <Label>Excel File (.xlsx)</Label>
-              <input
-                ref={fileRef}
-                type="file"
-                accept=".xlsx,.xls,.csv"
-                data-testid="input-bulk-import-contacts-file"
-                className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-950 dark:file:text-blue-300"
-                onChange={(e) => setFile(e.target.files?.[0] || null)}
-              />
-            </div>
-            <Button
-              className="w-full bg-primary hover:bg-primary/90 text-primary-foreground"
-              disabled={!file || loading}
-              onClick={handleImport}
-              data-testid="button-confirm-bulk-import-contacts"
-            >
-              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {loading ? "Importing..." : "Import Contacts"}
-            </Button>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ─── ZoomInfo Mapping Panel ───────────────────────────────────────────────────
-
-const ZOOMINFO_CRM_FIELDS = [
-  { key: "name",                   label: "Company Name *" },
-  { key: "industry",               label: "Industry" },
-  { key: "estimatedAnnualRevenue", label: "Est. Annual Revenue" },
-  { key: "employeeCount",          label: "Employee Count" },
-  { key: "website",                label: "Website" },
-  { key: "primaryContactName",     label: "Contact 1 Name" },
-  { key: "primaryContactTitle",    label: "Contact 1 Title" },
-  { key: "primaryContactEmail",    label: "Contact 1 Email" },
-  { key: "primaryContactPhone",    label: "Contact 1 Phone" },
-  { key: "contact2Name",           label: "Contact 2 Name" },
-  { key: "contact2Email",          label: "Contact 2 Email" },
-  { key: "contact3Name",           label: "Contact 3 Name" },
-  { key: "contact3Email",          label: "Contact 3 Email" },
-  { key: "currentCarrier",         label: "Current Carrier" },
-  { key: "notes",                  label: "Notes" },
-];
-
-function ZoomInfoMappingPanel() {
-  const { toast } = useToast();
-  const [mapping, setMapping] = useState<Record<string, string>>({});
-  const [saved, setSaved] = useState(false);
-
-  const { data, isLoading } = useQuery<{ mapping: Record<string, string> }>({
-    queryKey: ["/api/settings/zoominfo-mapping"],
-  });
-
-  useEffect(() => {
-    if (data?.mapping) setMapping(data.mapping);
-  }, [data]);
-
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("PUT", "/api/settings/zoominfo-mapping", { mapping });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/settings/zoominfo-mapping"] });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-      toast({ title: "ZoomInfo field mapping saved" });
-    },
-    onError: () => toast({ title: "Failed to save mapping", variant: "destructive" }),
-  });
-
-  return (
-    <div className="rounded-xl border border-border p-5 space-y-4" data-testid="section-zoominfo-mapping">
-      <div>
-        <p className="font-semibold text-sm flex items-center gap-1.5 mb-1">
-          <Database className="w-4 h-4 text-blue-600" /> ZoomInfo Column Mapping
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Configure which ZoomInfo export column names map to CRM fields. These defaults are used when auto-detecting columns during import. Leave blank to use built-in auto-detection.
-        </p>
-      </div>
-
-      {isLoading ? (
-        <div className="text-xs text-muted-foreground">Loading…</div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {ZOOMINFO_CRM_FIELDS.map(f => (
-            <div key={f.key} className="flex items-center gap-2">
-              <label className="text-xs w-36 shrink-0 text-muted-foreground">{f.label}</label>
-              <Input
-                value={mapping[f.key] || ""}
-                onChange={e => setMapping(prev => ({ ...prev, [f.key]: e.target.value }))}
-                placeholder="ZoomInfo column name…"
-                className="h-7 text-xs flex-1"
-                data-testid={`zoominfo-mapping-${f.key}`}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-
-      <Button
-        size="sm"
-        className="gap-1.5 h-8 text-xs"
-        onClick={() => saveMutation.mutate()}
-        disabled={saveMutation.isPending}
-        data-testid="button-save-zoominfo-mapping"
-      >
-        {saveMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" /> : <Save className="h-3.5 w-3.5" />}
-        {saved ? "Saved!" : "Save Mapping"}
-      </Button>
-    </div>
-  );
-}
-
-// ─── Demo Org Tools ───────────────────────────────────────────────────────────
-
-function DemoOrgTools() {
-  const { toast } = useToast();
-  const [log, setLog] = useState<string | null>(null);
-
-  const seedMutation = useMutation({
-    mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/admin/seed-demo");
-      return res.json();
-    },
-    onSuccess: (data) => {
-      setLog(data.message || "Seed complete");
-      toast({ title: "Demo org refreshed", description: "All demo data has been reseeded successfully." });
-    },
-    onError: (err: any) => {
-      toast({ title: "Seed failed", description: err?.message || "An error occurred", variant: "destructive" });
-    },
-  });
-
-  return (
-    <div className="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-5 space-y-4" data-testid="section-demo-org-tools">
-      <div>
-        <p className="font-semibold text-sm flex items-center gap-1.5 text-amber-800 dark:text-amber-300 mb-1">
-          <Database className="w-4 h-4" /> Demo Org Tools
-        </p>
-        <p className="text-xs text-amber-700 dark:text-amber-400">
-          Use this to reseed the demo org with fresh dummy data. Login: <strong>admin@freightdna-demo.com</strong> / <strong>Demo1234!</strong>
-        </p>
-      </div>
-      <div className="flex items-center gap-3">
-        <Button
-          variant="outline"
-          size="sm"
-          className="border-amber-400 text-amber-800 dark:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 gap-1.5"
-          onClick={() => { setLog(null); seedMutation.mutate(); }}
-          disabled={seedMutation.isPending}
-          data-testid="button-reseed-demo-org"
-        >
-          {seedMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          {seedMutation.isPending ? "Seeding… (30–60s)" : "Reseed Demo Org"}
-        </Button>
-      </div>
-      {log && (
-        <p className="text-xs text-green-700 dark:text-green-400 flex items-center gap-1.5">
-          <CheckCircle2 className="h-3.5 w-3.5" /> {log}
-        </p>
-      )}
-    </div>
-  );
-}
-
-// ─── Billing Panel ────────────────────────────────────────────────────────────
-
-const BILLING_STATUS_COLORS: Record<string, string> = {
-  active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
-  pending: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
-  past_due: "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
-  cancelled: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
-};
-
-interface Invoice {
-  id: string;
-  number: string | null;
-  amountPaid: number;
-  currency: string;
-  status: string | null;
-  created: number;
-  periodStart: number;
-  periodEnd: number;
-  invoicePdf: string | null;
-  hostedInvoiceUrl: string | null;
-}
-
-function formatCurrency(cents: number, currency: string) {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: currency.toUpperCase(),
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(cents / 100);
-}
-
-function BillingPanel() {
-  const { data, isLoading } = useQuery<{
-    organization: {
-      id: string;
-      name: string;
-      billingStatus: string | null;
-      planName: string | null;
-      stripeCustomerId: string | null;
-      currentPeriodEnd: string | null;
-    } | null;
-  }>({
-    queryKey: ["/api/admin/billing"],
-  });
-
-  const { data: invoiceData, isLoading: invoicesLoading } = useQuery<{ invoices: Invoice[] }>({
-    queryKey: ["/api/admin/billing/invoices"],
-  });
-
-  const org = data?.organization ?? null;
-  const invoices = invoiceData?.invoices ?? [];
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-6">
-        <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
-  if (!org) {
-    return (
-      <p className="text-sm text-muted-foreground" data-testid="section-billing-panel">
-        No billing information found for your organization.
-      </p>
-    );
-  }
-
-  const status = org.billingStatus || "pending";
-
-  return (
-    <div className="space-y-4" data-testid="section-billing-panel">
-      {/* Subscription status card */}
-      <div className="flex flex-col sm:flex-row sm:items-center gap-3 p-4 rounded-lg border border-border bg-background">
-        <div className="flex-1 min-w-0">
-          <p className="font-semibold truncate" data-testid={`text-org-name-${org.id}`}>{org.name || "—"}</p>
-          {org.planName && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-              <CreditCard className="w-3 h-3" />
-              {org.planName}
-            </p>
-          )}
-          {org.currentPeriodEnd && (
-            <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-              <CalendarDays className="w-3 h-3" />
-              Renews {new Date(org.currentPeriodEnd).toLocaleDateString()}
-            </p>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {org.stripeCustomerId && (
-            <Badge variant="outline" className="text-[10px] font-mono">{org.stripeCustomerId.slice(0, 14)}…</Badge>
-          )}
-          <Badge className={`text-xs capitalize ${BILLING_STATUS_COLORS[status] ?? BILLING_STATUS_COLORS.pending}`} data-testid={`badge-billing-status-${org.id}`}>
-            {status}
-          </Badge>
-        </div>
-      </div>
-
-      {/* Invoice history */}
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
-          <FileText className="w-3.5 h-3.5" /> Invoice History
-        </p>
-
-        {invoicesLoading ? (
-          <div className="flex items-center gap-2 py-3 text-muted-foreground text-sm">
-            <Loader2 className="w-4 h-4 animate-spin" /> Loading invoices…
-          </div>
-        ) : invoices.length === 0 ? (
-          <p className="text-sm text-muted-foreground py-2" data-testid="text-no-invoices">
-            No invoices yet — they'll appear here once your first billing cycle completes.
-          </p>
-        ) : (
-          <div className="divide-y divide-border rounded-lg border border-border overflow-hidden" data-testid="list-invoices">
-            {invoices.map((inv) => {
-              const periodLabel = `${new Date(inv.periodStart * 1000).toLocaleDateString("en-US", { month: "short", year: "numeric" })} – ${new Date(inv.periodEnd * 1000).toLocaleDateString("en-US", { month: "short", year: "numeric" })}`;
-              return (
-                <div
-                  key={inv.id}
-                  className="flex items-center justify-between gap-3 px-4 py-3 bg-background hover:bg-muted/40 transition-colors"
-                  data-testid={`row-invoice-${inv.id}`}
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium">{inv.number || inv.id}</p>
-                    <p className="text-xs text-muted-foreground">{periodLabel}</p>
-                  </div>
-                  <div className="flex items-center gap-3 shrink-0">
-                    <span className="text-sm font-semibold">
-                      {formatCurrency(inv.amountPaid, inv.currency)}
-                    </span>
-                    <div className="flex items-center gap-1.5">
-                      {inv.invoicePdf && (
-                        <a
-                          href={inv.invoicePdf}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Download PDF"
-                          data-testid={`button-invoice-pdf-${inv.id}`}
-                        >
-                          <Button size="sm" variant="outline" className="h-7 px-2 gap-1 text-xs">
-                            <Download className="w-3.5 h-3.5" /> PDF
-                          </Button>
-                        </a>
-                      )}
-                      {inv.hostedInvoiceUrl && (
-                        <a
-                          href={inv.hostedInvoiceUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="View invoice"
-                          data-testid={`button-invoice-view-${inv.id}`}
-                        >
-                          <Button size="sm" variant="ghost" className="h-7 px-2">
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </Button>
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -1318,7 +715,7 @@ export default function AdminUsers() {
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2" data-testid="text-admin-title">
-            <Users className="w-6 h-6 text-amber-600" />
+            <Users className="w-6 h-6 text-blue-600" />
             User Management
           </h1>
           <p className="text-muted-foreground mt-1">
@@ -1368,16 +765,10 @@ export default function AdminUsers() {
             </Button>
           </div>
 
-          {currentUser?.role === "admin" && (
-            <>
-              <BulkImportDialog />
-              <BulkImportCompaniesDialog />
-              <BulkImportContactsDialog />
-            </>
-          )}
+          {currentUser?.role === "admin" && <BulkImportDialog />}
           <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditUser(undefined); }}>
             <DialogTrigger asChild>
-              <Button className="bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="button-add-user">
+              <Button className="bg-gradient-to-r from-blue-600 to-green-600 hover:from-blue-700 hover:to-green-700" data-testid="button-add-user">
                 <Plus className="w-4 h-4 mr-2" /> {isNAM ? "Add Account Manager" : "Add User"}
               </Button>
             </DialogTrigger>
@@ -1416,8 +807,8 @@ export default function AdminUsers() {
               <Card key={u.id} data-testid={`card-user-${u.id}`}>
                 <CardContent className="flex items-center justify-between p-4">
                   <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-100 to-amber-50 dark:from-amber-900 dark:to-amber-950 flex items-center justify-center">
-                      <RoleIcon className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-100 to-green-100 dark:from-blue-900 dark:to-green-900 flex items-center justify-center">
+                      <RoleIcon className="w-5 h-5 text-blue-600 dark:text-blue-400" />
                     </div>
                     <div>
                       <p className="font-medium" data-testid={`text-user-name-${u.id}`}>{u.name}</p>
@@ -1482,14 +873,6 @@ export default function AdminUsers() {
         </div>
       )}
 
-      {currentUser?.role === "admin" && (
-        <>
-          <WebexConnectionStatus />
-          <WebexHealthPanel />
-        </>
-      )}
-      {currentUser?.role === "admin" && <WebexUserMappingPanel />}
-
       {currentUser?.role === "admin" && <CareerProgressionSection />}
 
       {currentUser?.role === "admin" && (
@@ -1545,26 +928,6 @@ export default function AdminUsers() {
             )}
           </div>
         </div>
-      )}
-
-      {(currentUser?.role === "admin" || currentUser?.role === "director") && (
-        <ZoomInfoMappingPanel />
-      )}
-
-      {currentUser?.role === "admin" && (
-        <div className="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 p-5 space-y-4" data-testid="section-billing-wrapper">
-          <div>
-            <p className="font-semibold text-sm flex items-center gap-1.5 text-blue-800 dark:text-blue-300 mb-1">
-              <CreditCard className="w-4 h-4" /> Billing &amp; Subscriptions
-            </p>
-            <p className="text-xs text-blue-700 dark:text-blue-400">Organization subscription status managed through Stripe.</p>
-          </div>
-          <BillingPanel />
-        </div>
-      )}
-
-      {currentUser?.role === "admin" && (
-        <DemoOrgTools />
       )}
 
       <AlertDialog open={!!userToDelete} onOpenChange={(open) => { if (!open) setUserToDelete(null); }}>

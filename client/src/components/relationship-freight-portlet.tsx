@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Link } from "wouter";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ChevronDown, ChevronUp, TrendingUp, Users, Package, DollarSign, Truck, Plus, Info, Loader2, ArrowUpCircle, Building2, AlertTriangle, Share2 } from "lucide-react";
+import { ChevronDown, ChevronUp, TrendingUp, Users, Package, DollarSign, Truck, Plus, Info, Loader2, ArrowUpCircle, Building2 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -42,23 +41,10 @@ interface SummaryRow {
   spotPct: number | null;
 }
 
-interface DashboardSummaryData {
-  summary: SummaryRow[];
-  totalContacts: number;
-  totalLoads: number;
-  totalMargin: number;
-  unattributedLoads?: number;
-  unattributedMargin?: number;
-  unworkedAccounts?: number;
-  unworkedLoads?: number;
-  unworkedMargin?: number;
-  unassignedContacts?: number;
-}
-
 // ── Dashboard-level portlet ───────────────────────────────────────────────────
-export function RelationshipFreightDashboardPortlet({ externalData }: { externalData?: DashboardSummaryData }) {
+export function RelationshipFreightDashboardPortlet({ externalData }: { externalData?: { summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number } }) {
   const [collapsed, setCollapsed] = useState(false);
-  const { data: fetchedData, isLoading } = useQuery<DashboardSummaryData>({
+  const { data: fetchedData, isLoading } = useQuery<{ summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number }>({
     queryKey: ["/api/relationship-freight-summary"],
     enabled: !externalData,
   });
@@ -79,7 +65,7 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
                   <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Freight claimed by your contacts at each relationship tier. Loads are attributed using specific lane assignments (Explicit) or estimated from coverage regions (Estimate). When two contacts share a lane, the higher-tier contact claims it — Home Run wins over 3rd, 3rd over 2nd, and so on.
+                  Contacts grouped by relationship level (1st/2nd/3rd/HR). Each level shows the total freight for the companies where you have relationships at that tier.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -103,35 +89,12 @@ export function RelationshipFreightDashboardPortlet({ externalData }: { external
           ) : (
             <div className="space-y-2">
               {!hasAnyLoads && (
-                <div className="text-xs text-foreground bg-muted border border-muted-foreground/20 rounded px-3 py-2 mb-3">
+                <div className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2 mb-3">
                   Contacts have base levels set but no matching financial data found. Make sure a financial upload is on file and company names match.
                 </div>
               )}
-              <SummaryTable rows={data.summary} unworkedAccounts={data.unworkedAccounts} unworkedLoads={data.unworkedLoads} unworkedMargin={data.unworkedMargin} />
+              <SummaryTable rows={data.summary} />
               <ProgressionCallout summary={data.summary} />
-              {(data.unattributedLoads ?? 0) > 0 && (
-                <Link
-                  href="/freight-triage"
-                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-muted border border-dashed border-muted-foreground/50 text-xs text-foreground mt-2 hover:bg-muted/80 transition-colors"
-                  data-testid="callout-dashboard-unattributed"
-                >
-                  <div className="flex items-center gap-2">
-                    <Package className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground" />
-                    <span><strong>Unattributed Lanes:</strong> {(data.unattributedLoads ?? 0).toLocaleString()} load{(data.unattributedLoads ?? 0) !== 1 ? "s" : ""} on worked accounts not yet claimed by any contact lane</span>
-                  </div>
-                  <span className="text-[10px] font-medium text-amber-700 dark:text-amber-300 whitespace-nowrap">Open triage worklist →</span>
-                </Link>
-              )}
-              {(data.unassignedContacts ?? 0) > 0 && (
-                <Link
-                  href="/freight-triage"
-                  className="flex items-center gap-2 px-3 py-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-700 dark:text-amber-400 mt-1 hover:bg-amber-100 dark:hover:bg-amber-950/50 transition-colors"
-                  data-testid="callout-dashboard-unassigned"
-                >
-                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                  <span><strong>Unassigned Contacts:</strong> {data.unassignedContacts} contact{(data.unassignedContacts ?? 0) !== 1 ? "s" : ""} have lanes but no relationship base set — freight is tracked under "Unassigned"</span>
-                </Link>
-              )}
             </div>
           )}
         </CardContent>
@@ -157,38 +120,30 @@ interface CompanyContact {
   spotPct: number | null;
   attributions: any[];
   coverageLaneCount: number;
-  hasNoAttribution?: boolean;
-  /** "explicit" = contact has explicit lane attributions; "estimate" = falling back to coverage strings; "none" = no attribution data */
-  attributionSource?: "explicit" | "estimate" | "none";
-  hasBroadLaneWarning?: boolean;
-  sharedLane?: boolean;
 }
 
 interface CompanyPortletProps {
   companyId: string;
   companyName?: string;
-  onOpenContact?: (contactId: string) => void;
 }
 
-export function RelationshipFreightCompanyPortlet({ companyId, companyName, onOpenContact }: CompanyPortletProps) {
+export function RelationshipFreightCompanyPortlet({ companyId, companyName }: CompanyPortletProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [addOpen, setAddOpen] = useState<string | null>(null); // contactId being edited
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const { data, isLoading } = useQuery<{ contacts: CompanyContact[]; companyId: string; unattributedLoads: number; unattributedMargin: number; totalLoads: number; totalMargin: number }>({
+  const { data, isLoading } = useQuery<{ contacts: CompanyContact[]; companyId: string }>({
     queryKey: ["/api/companies", companyId, "relationship-freight-summary"],
     queryFn: () => fetch(`/api/companies/${companyId}/relationship-freight-summary`, { credentials: "include" }).then(r => r.json()),
   });
 
-  // Use server-side deduplicated totals (prevents double-counting shared loads between contacts)
+  // Each contact shows their own lane-specific freight
   const contacts = data?.contacts ?? [];
   const hasContacts = contacts.length > 0;
-  const totalLoads = data?.totalLoads ?? 0;
-  const totalMargin = data?.totalMargin ?? 0;
+  const totalLoads = contacts.reduce((s, c) => s + c.loads, 0);
+  const totalMargin = contacts.reduce((s, c) => s + c.margin, 0);
   const hasAnyAttributions = hasContacts && totalLoads > 0;
-  const unattributedLoads = data?.unattributedLoads ?? 0;
-  const unattributedMargin = data?.unattributedMargin ?? 0;
 
   // Group contacts by base
   const baseOrder = ["hr", "home", "3rd", "2nd", "1st", "unknown"];
@@ -212,7 +167,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName, onOp
                   <Info className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent side="top" className="max-w-xs text-xs">
-                  Shows claimed loads per contact in relationship priority order (Home Run → 3rd → 2nd → 1st). When lanes overlap, the highest-level contact claims the load — so per-contact loads sum exactly to the company total. "Explicit" contacts have specific origin/destination lanes assigned. "Estimate" contacts fall back to broader coverage regions.
+                  Shows freight attributed to each contact based on their assigned lanes and coverage assignments. Contacts appear if they have a relationship base set and either explicit lane attributions or facility coverage assignments (from the RFP Coverage tab). Add explicit lanes with the + button for more precise attribution.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -232,7 +187,7 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName, onOp
               <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading...
             </div>
           ) : !hasContacts ? (
-            <EmptyState message="No contacts with a relationship base found. Open a contact on this account, set their base level (1st/2nd/3rd/HR), then click the + button to assign their lanes." />
+            <EmptyState message="No contacts with a relationship base and lane or coverage assignments found. Set a contact's base level (1st/2nd/3rd/HR) in their contact sheet, then assign lanes there or via the RFP Coverage tab." />
           ) : (
             <div className="space-y-4">
               {baseOrder.filter(b => grouped[b]?.length).map(base => {
@@ -258,74 +213,6 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName, onOp
                   </div>
                 );
               })}
-              {unattributedLoads > 0 && (() => {
-                // Prefer a contact that already has attributions; fall back to any contact so reps
-                // can always start attributing — even if no contact has lanes yet.
-                const firstEligible = contacts.find(c => !c.hasNoAttribution) ?? contacts[0] ?? null;
-                return (
-                  <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-md bg-muted border border-dashed border-muted-foreground/50 text-xs text-foreground" data-testid="callout-unattributed-loads">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Package className="w-3.5 h-3.5 flex-shrink-0 text-muted-foreground" />
-                      <span><strong>Unattributed Lanes:</strong> {unattributedLoads.toLocaleString()} load{unattributedLoads !== 1 ? "s" : ""} not claimed by any contact{unattributedMargin > 0 ? ` · ${fmt$(unattributedMargin)} margin` : ""}</span>
-                    </div>
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 px-2 text-[10px] font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200 whitespace-nowrap shrink-0 disabled:opacity-40"
-                              disabled={!firstEligible}
-                              onClick={() => { if (firstEligible) setAddOpen(firstEligible.contactId); }}
-                              data-testid="button-add-lane-attribution"
-                            >
-                              <Plus className="w-3 h-3 mr-1" /> Add Lane Attribution
-                            </Button>
-                          </span>
-                        </TooltipTrigger>
-                        {!firstEligible && (
-                          <TooltipContent side="top" className="text-xs max-w-xs">
-                            No contacts found on this account. Add a contact first, then assign lane attributions.
-                          </TooltipContent>
-                        )}
-                      </Tooltip>
-                    </TooltipProvider>
-                  </div>
-                );
-              })()}
-              {(() => {
-                const unassigned = contacts.filter(c => c.relationshipBase === "unknown" && !c.hasNoAttribution);
-                if (unassigned.length === 0) return null;
-                return (
-                  <div className="rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 text-xs text-amber-700 dark:text-amber-400" data-testid="callout-unassigned-contacts">
-                    <div className="flex items-center gap-2 px-3 py-2">
-                      <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
-                      <strong>Unassigned Contacts:</strong>
-                      <span>{unassigned.length} contact{unassigned.length !== 1 ? "s" : ""} have lanes but no relationship base set</span>
-                    </div>
-                    <div className="border-t border-amber-200 dark:border-amber-800/40 divide-y divide-amber-200/60 dark:divide-amber-800/30">
-                      {unassigned.map(c => (
-                        <div key={c.contactId} className="flex items-center justify-between px-3 py-1.5" data-testid={`row-unassigned-contact-${c.contactId}`}>
-                          <div className="min-w-0">
-                            <p className="font-medium text-amber-800 dark:text-amber-300 truncate">{c.contactName}</p>
-                            {c.contactTitle && <p className="text-[10px] text-amber-600/70 dark:text-amber-400/70 truncate">{c.contactTitle}</p>}
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 px-2 text-[10px] text-amber-600 dark:text-amber-400 hover:text-amber-700 dark:hover:text-amber-300 hover:bg-amber-100 dark:hover:bg-amber-900/40 shrink-0 ml-2"
-                            onClick={() => onOpenContact?.(c.contactId)}
-                            data-testid={`button-set-base-${c.contactId}`}
-                          >
-                            Set Base
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })()}
             </div>
           )}
 
@@ -336,7 +223,6 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName, onOp
               onSaved={() => {
                 queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "relationship-freight-summary"] });
                 queryClient.invalidateQueries({ queryKey: ["/api/contacts", addOpen, "lane-attributions"] });
-                queryClient.invalidateQueries({ queryKey: ["/api/relationship-freight-summary"] });
                 setAddOpen(null);
               }}
             />
@@ -349,88 +235,46 @@ export function RelationshipFreightCompanyPortlet({ companyId, companyName, onOp
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-const ATTRIB_SOURCE_CONFIG = {
-  explicit: { label: "Explicit", className: "bg-blue-50 dark:bg-blue-950/30 text-blue-700 dark:text-blue-400 border-blue-200 dark:border-blue-800/40", title: "Freight matched to specific origin/destination lanes assigned to this contact." },
-  estimate: { label: "Estimate", className: "bg-yellow-50 dark:bg-yellow-950/30 text-yellow-700 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800/40", title: "Freight matched using broad coverage region strings (e.g. state abbreviations). Add specific lanes for more precise attribution." },
-  none: { label: "", className: "", title: "" },
-};
-
 function ContactFreightRow({ contact, onAddLane }: { contact: CompanyContact; onAddLane: () => void }) {
   const cfg = BASE_CONFIG[contact.relationshipBase] ?? BASE_CONFIG["unknown"];
   const hasLoads = contact.loads > 0;
-  const noAttribution = contact.hasNoAttribution === true;
-  const srcKey = (contact.attributionSource ?? "none") as keyof typeof ATTRIB_SOURCE_CONFIG;
-  const srcCfg = ATTRIB_SOURCE_CONFIG[srcKey];
 
   return (
-    <div className="flex flex-col gap-1 py-1.5 px-2 rounded hover:bg-muted/50 group" data-testid={`row-contact-freight-${contact.contactId}`}>
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2 min-w-0">
-          <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: cfg.color.includes("emerald") ? "#34d399" : cfg.color.includes("blue") ? "#60a5fa" : cfg.color.includes("yellow") ? "#facc15" : cfg.color.includes("orange") ? "#fb923c" : "#a1a1aa" }} />
-          <div className="min-w-0">
-            <p className="text-xs font-medium text-foreground truncate">{contact.contactName}</p>
-            {contact.contactTitle && <p className="text-[10px] text-muted-foreground truncate">{contact.contactTitle}</p>}
-          </div>
-        </div>
-        <div className="flex items-center gap-3 flex-shrink-0 ml-2">
-          {noAttribution && contact.relationshipBase !== "unknown" ? (
-            <span className="text-[10px] text-amber-600 dark:text-amber-400 italic bg-amber-50 dark:bg-amber-950/30 px-1.5 py-0.5 rounded border border-amber-200 dark:border-amber-800/40" data-testid={`badge-no-lanes-${contact.contactId}`}>No lanes set — freight not tracked</span>
-          ) : hasLoads ? (
-            <>
-              <span className="text-xs text-foreground font-mono">{contact.loads.toLocaleString()} loads</span>
-              <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono">{fmt$(contact.margin)}</span>
-              {contact.marginPerLoad != null && (
-                <span className="text-[10px] text-muted-foreground font-mono">{fmt$(contact.marginPerLoad)}/ld</span>
-              )}
-              {contact.contractedPct != null && (
-                <span className="text-[10px] text-muted-foreground">{contact.contractedPct.toFixed(0)}% ct</span>
-              )}
-            </>
-          ) : (
-            <span className="text-[10px] text-muted-foreground italic">no matching data</span>
-          )}
-          <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-500 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`} title="Add lane attribution">
-            <Plus className="w-3 h-3" />
-          </Button>
+    <div className="flex items-center justify-between py-1.5 px-2 rounded hover:bg-muted/50 group" data-testid={`row-contact-freight-${contact.contactId}`}>
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: cfg.color.includes("emerald") ? "#34d399" : cfg.color.includes("blue") ? "#60a5fa" : cfg.color.includes("yellow") ? "#facc15" : cfg.color.includes("orange") ? "#fb923c" : "#a1a1aa" }} />
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-foreground truncate">{contact.contactName}</p>
+          {contact.contactTitle && <p className="text-[10px] text-muted-foreground truncate">{contact.contactTitle}</p>}
         </div>
       </div>
-      {srcCfg.label && (
-        <div className="pl-3.5">
-          <span
-            className={`text-[9px] font-medium px-1 py-0.5 rounded border ${srcCfg.className}`}
-            title={srcCfg.title}
-            data-testid={`badge-attrib-source-${contact.contactId}`}
-          >
-            {srcCfg.label}
-          </span>
-        </div>
-      )}
-      {contact.sharedLane && (
-        <div className="flex items-center gap-1 text-[10px] text-muted-foreground pl-3.5" data-testid={`badge-shared-lane-${contact.contactId}`}>
-          <Share2 className="w-2.5 h-2.5" />
-          <span>Shared lane — a higher-base contact owns some of these loads</span>
-        </div>
-      )}
-      {contact.hasBroadLaneWarning && !contact.hasNoAttribution && (
-        <div className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 pl-3.5" data-testid={`badge-broad-lane-${contact.contactId}`}>
-          <AlertTriangle className="w-2.5 h-2.5" />
-          <span>Broad lane string — consider adding a destination for more precise attribution</span>
-        </div>
-      )}
+      <div className="flex items-center gap-3 flex-shrink-0 ml-2">
+        {hasLoads ? (
+          <>
+            <span className="text-xs text-foreground font-mono">{contact.loads.toLocaleString()} loads</span>
+            <span className="text-xs text-emerald-600 dark:text-emerald-400 font-mono">{fmt$(contact.margin)}</span>
+            {contact.marginPerLoad != null && (
+              <span className="text-[10px] text-muted-foreground font-mono">{fmt$(contact.marginPerLoad)}/ld</span>
+            )}
+            {contact.contractedPct != null && (
+              <span className="text-[10px] text-muted-foreground">{contact.contractedPct.toFixed(0)}% ct</span>
+            )}
+          </>
+        ) : (
+          <span className="text-[10px] text-muted-foreground italic">no matching data</span>
+        )}
+        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 text-muted-foreground hover:text-amber-500 opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); onAddLane(); }} data-testid={`button-add-lane-${contact.contactId}`} title="Add lane attribution">
+          <Plus className="w-3 h-3" />
+        </Button>
+      </div>
     </div>
   );
 }
 
-function SummaryTable({ rows, unworkedAccounts, unworkedLoads, unworkedMargin }: {
-  rows: SummaryRow[];
-  unworkedAccounts?: number;
-  unworkedLoads?: number;
-  unworkedMargin?: number;
-}) {
+function SummaryTable({ rows }: { rows: SummaryRow[] }) {
   // Only show rows that have at least one contact with lanes assigned
   const activeRows = rows.filter(r => r.contacts > 0);
-  const hasUnworked = (unworkedAccounts ?? 0) > 0;
-  if (activeRows.length === 0 && !hasUnworked) return null;
+  if (activeRows.length === 0) return null;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
@@ -470,24 +314,6 @@ function SummaryTable({ rows, unworkedAccounts, unworkedLoads, unworkedMargin }:
               </tr>
             );
           })}
-          {hasUnworked && (
-            <tr className="border-t-2 border-dashed border-muted-foreground/40 hover:bg-muted/40" data-testid="row-relationship-unworked">
-              <td className="py-2">
-                <span className="font-semibold text-foreground">⬜ Unworked Accounts</span>
-                <span className="text-[10px] text-muted-foreground ml-1">({unworkedAccounts} {unworkedAccounts === 1 ? "account" : "accounts"} — no base set)</span>
-              </td>
-              <td className="text-right py-2 px-2 text-muted-foreground">—</td>
-              <td className="text-right py-2 px-2 text-foreground font-mono">
-                {(unworkedLoads ?? 0) > 0 ? (unworkedLoads ?? 0).toLocaleString() : <span className="text-muted-foreground">—</span>}
-              </td>
-              <td className="text-right py-2 px-2 font-mono">
-                {(unworkedMargin ?? 0) > 0 ? <span className="text-foreground">{fmt$(unworkedMargin ?? 0)}</span> : <span className="text-muted-foreground">—</span>}
-              </td>
-              <td className="text-right py-2 px-2 text-muted-foreground">—</td>
-              <td className="text-right py-2 px-2 text-muted-foreground">—</td>
-              <td className="text-right py-2 px-2 text-muted-foreground">—</td>
-            </tr>
-          )}
         </tbody>
       </table>
     </div>
@@ -534,15 +360,7 @@ export function AddLaneDialog({ contactId, onClose, onSaved }: AddLaneDialogProp
   const [destCity, setDestCity] = useState("");
   const [destState, setDestState] = useState("");
   const [notes, setNotes] = useState("");
-  const [broadConfirmPending, setBroadConfirmPending] = useState(false);
   const { toast } = useToast();
-
-  // Phase 4: detect broad state-only lane (origin state set, no origin city, no destination)
-  const isBroadLane = !!(originState && !originCity && !destState && !destCity);
-
-  const doSave = () => {
-    mutation.mutate();
-  };
 
   const mutation = useMutation({
     mutationFn: () => apiRequest("POST", `/api/contacts/${contactId}/lane-attributions`, {
@@ -561,44 +379,6 @@ export function AddLaneDialog({ contactId, onClose, onSaved }: AddLaneDialogProp
   });
 
   const isValid = originState || originCity || destState || destCity;
-
-  const handleAssignClick = () => {
-    if (isBroadLane) {
-      setBroadConfirmPending(true);
-    } else {
-      doSave();
-    }
-  };
-
-  if (broadConfirmPending) {
-    return (
-      <Dialog open onOpenChange={onClose}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="text-sm flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-amber-500" />
-              Broad Lane Warning
-            </DialogTitle>
-          </DialogHeader>
-          <div className="py-2 space-y-3">
-            <p className="text-xs text-muted-foreground">
-              You're assigning <strong>all {originState} origins</strong> to this contact with no destination filter. This will match every load from {originState} for this company — potentially hundreds of loads.
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Consider adding a destination state or city to make the attribution more precise.
-            </p>
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="ghost" size="sm" onClick={() => setBroadConfirmPending(false)} data-testid="button-broad-refine">Refine Lane</Button>
-            <Button size="sm" onClick={doSave} disabled={mutation.isPending} className="bg-amber-500 hover:bg-amber-400 text-black" data-testid="button-broad-confirm">
-              {mutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
-              Save Anyway
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    );
-  }
 
   return (
     <Dialog open onOpenChange={onClose}>
@@ -629,15 +409,9 @@ export function AddLaneDialog({ contactId, onClose, onSaved }: AddLaneDialogProp
           </div>
         </div>
         <p className="text-[10px] text-muted-foreground">Leave a field blank to match any value. E.g. Origin: PA with no city matches all Pennsylvania origins.</p>
-        {isBroadLane && (
-          <div className="flex items-center gap-1.5 text-[10px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 rounded px-2 py-1.5" data-testid="warning-broad-lane">
-            <AlertTriangle className="w-3 h-3 flex-shrink-0" />
-            <span>State-only lane — no destination filter. This will claim all {originState} loads for this company.</span>
-          </div>
-        )}
         <DialogFooter className="gap-2">
           <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={handleAssignClick} disabled={!isValid || mutation.isPending} className="bg-amber-500 hover:bg-amber-400 text-black" data-testid="button-save-lane">
+          <Button size="sm" onClick={() => mutation.mutate()} disabled={!isValid || mutation.isPending} className="bg-amber-500 hover:bg-amber-400 text-black" data-testid="button-save-lane">
             {mutation.isPending ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
             Assign Lane
           </Button>
@@ -675,7 +449,7 @@ export function ContactLaneManager({ contactId }: ContactLaneManagerProps) {
     <div className="space-y-2" data-testid="section-lane-manager">
       <div className="flex items-center justify-between">
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Lane Attributions</p>
-        <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)} className="h-6 px-2 text-[10px] font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200" data-testid="button-add-lane-attrib">
+        <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)} className="h-6 px-2 text-[10px] text-amber-500 hover:text-amber-600" data-testid="button-add-lane-attrib">
           <Plus className="w-3 h-3 mr-1" /> Add Lane
         </Button>
       </div>
@@ -823,11 +597,11 @@ export function RelationshipBaseDistributionPortlet({ externalData }: { external
             <>
               {/* Greenfield — accounts with zero relationship contacts mapped */}
               {(data.greenfieldCount ?? 0) > 0 && (
-                <div className="flex items-center justify-between text-xs px-2 py-1.5 rounded-md bg-muted border border-dashed border-muted-foreground/50 text-foreground mb-1">
+                <div className="flex items-center justify-between text-xs px-2 py-1.5 rounded-md bg-muted/40 border border-dashed border-muted-foreground/30 text-muted-foreground mb-1">
                   <span className="flex items-center gap-1.5 font-medium">
                     <span className="text-base leading-none">🌱</span> Unworked Accounts
                   </span>
-                  <span className="font-mono text-muted-foreground">{data.greenfieldCount} customer{(data.greenfieldCount ?? 0) !== 1 ? "s" : ""} — no contacts mapped yet</span>
+                  <span className="font-mono">{data.greenfieldCount} customer{(data.greenfieldCount ?? 0) !== 1 ? "s" : ""} — no contacts mapped yet</span>
                 </div>
               )}
 
@@ -946,7 +720,7 @@ export function RelationshipBaseDistributionPortlet({ externalData }: { external
 // ── T006: Consolidated dashboard section — single API call for both portlets ──
 type ConsolidatedData = {
   distribution: DistributionData;
-  summary: DashboardSummaryData;
+  summary: { summary: SummaryRow[]; totalContacts: number; totalLoads: number; totalMargin: number };
 };
 
 export function RelationshipDashboardSection() {

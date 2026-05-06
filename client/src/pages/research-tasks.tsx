@@ -120,15 +120,9 @@ export default function ResearchTasks() {
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6">
-      {/* Lane Intelligence tab switcher */}
-      <div className="flex items-center gap-1 border-b pb-0 -mb-2">
-        <a href="/research-tasks" className="px-4 py-2 text-sm font-medium border-b-2 border-amber-500 text-amber-600 dark:text-amber-400 -mb-px" data-testid="tab-lane-research">Lane Research</a>
-        <a href="/rfp-lane-search" className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" data-testid="tab-rfp-lane-search">RFP Lane Search</a>
-        <a href="/carrier-lane-search" className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors" data-testid="tab-carrier-lane-search">Carrier Lane Search</a>
-      </div>
       <div>
         <h1 className="text-2xl font-semibold" data-testid="text-research-tasks-title">
-          Lane Research
+          My Research Tasks
         </h1>
         <p className="text-muted-foreground">
           Track and complete lane research assignments across all RFPs

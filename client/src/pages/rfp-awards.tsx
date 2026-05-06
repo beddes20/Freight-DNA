@@ -50,10 +50,6 @@ import {
   ChevronDown,
   Sparkles,
   XCircle,
-  Truck,
-  ClipboardList,
-  FolderOpen,
-  CheckCircle2,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -65,12 +61,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import {
   Dialog,
   DialogContent,
@@ -84,10 +74,8 @@ import { ConvertToAwardDialog } from "@/components/convert-to-award-dialog";
 import { ResearchLaneDialog } from "@/components/research-lane-dialog";
 import { DataAnalystPortlet } from "@/components/data-analyst-portlet";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Rfp, Award, Company, Contact, LaneCarrier } from "@shared/schema";
-import { ProcurementTaskLauncherDialog, type ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
+import type { Rfp, Award, Company, Contact } from "@shared/schema";
 
 const rfpStatusConfig = {
   pending:           { label: "Pending",            icon: Clock,      color: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400" },
@@ -233,37 +221,6 @@ function RfpCard({ rfp, company, onEdit, onDelete, onViewData, onConvert }: RfpC
   );
 }
 
-function parseLaneString(laneStr: string, awardId: string): ProcurementLaneInfo | null {
-  // Handles: "→", "->", " to " separators; volume formats "(N loads)", "(N shipments)", "(N shpts/yr)", etc.
-  const match = laneStr.match(/^(.+?)\s*(?:→|->|\bto\b)\s*(.+?)(?:\s*\((\d[\d,]*)\s*(?:loads?|shipments?|shpts?)[^)]*\))?$/i);
-  if (!match) return null;
-  const origin = match[1].trim();
-  const destination = match[2].trim();
-  const volume = match[3] ? parseInt(match[3].replace(/,/g, "")) : 0;
-  return {
-    type: "carrier_procurement",
-    lane: laneStr,
-    origin,
-    destination,
-    volume,
-    awardId,
-  };
-}
-
-function getHighVolumeLanes(award: Award, customerName?: string): ProcurementLaneInfo[] {
-  if (!award.lanes || award.lanes.length === 0) return [];
-  // Annotate each mapped element so the type-predicate filter can prove
-  // ProcurementLaneInfo membership; the spread of `parsed` plus the extra
-  // metadata fields is otherwise inferred too widely.
-  return award.lanes
-    .map((l): ProcurementLaneInfo | null => {
-      const parsed = parseLaneString(l, award.id);
-      if (!parsed) return null;
-      return { ...parsed, awardTitle: award.title, customerName };
-    })
-    .filter((l): l is ProcurementLaneInfo => l !== null);
-}
-
 interface AwardCardProps {
   award: Award;
   company?: Company;
@@ -272,224 +229,83 @@ interface AwardCardProps {
 }
 
 function AwardCard({ award, company, onEdit, onDelete }: AwardCardProps) {
-  const { toast } = useToast();
-  const { user } = useAuth();
-  const [procurementDialogOpen, setProcurementDialogOpen] = useState(false);
-  const [activeProcLanes, setActiveProcLanes] = useState<ProcurementLaneInfo[]>([]);
-  const [generatingTasks, setGeneratingTasks] = useState(false);
-  const highVolumeLanes = getHighVolumeLanes(award, company?.name);
-
-  const { data: awardCarriers = [] } = useQuery<LaneCarrier[]>({
-    queryKey: ["/api/awards", award.id, "lane-carriers"],
-  });
-
-  const { data: procTaskStatus } = useQuery<{ taskCount: number }>({
-    queryKey: ["/api/awards", award.id, "procurement-tasks"],
-  });
-  const hasExistingTasks = (procTaskStatus?.taskCount ?? 0) > 0;
-
-  const coveredLanes = highVolumeLanes.filter(
-    l => awardCarriers.filter(c => c.lane === l.lane && c.status !== "declined").length >= 5
-  ).length;
-  const totalLanes = highVolumeLanes.length;
-
-  const getCoverageBadgeStyle = () => {
-    if (totalLanes === 0) return null;
-    if (coveredLanes === 0) return "bg-red-500/10 text-red-700 dark:text-red-400";
-    if (coveredLanes < totalLanes) return "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
-    return "bg-green-500/10 text-green-700 dark:text-green-400";
-  };
-
-  async function handleGenerateProcurementTasks() {
-    if (!user) return;
-    setGeneratingTasks(true);
-    try {
-      const res = await apiRequest("POST", `/api/awards/${award.id}/procurement-tasks`, {});
-      const { results } = await res.json() as { results: Array<{ lane: string; taskId: string; created: boolean; failed?: boolean }> };
-      const successResults = results.filter(r => !r.failed);
-      const failedCount = results.filter(r => r.failed).length;
-      const taskByLane = Object.fromEntries(successResults.map(r => [r.lane, r.taskId]));
-      const createdLanes: ProcurementLaneInfo[] = highVolumeLanes
-        .map((lane): ProcurementLaneInfo | null => {
-          const normalizedLane = lane.lane.trim().replace(/\s+/g, " ").toLowerCase();
-          const taskId = taskByLane[normalizedLane] ?? taskByLane[lane.lane];
-          return taskId ? { ...lane, taskId } : null;
-        })
-        .filter((l): l is ProcurementLaneInfo => l !== null);
-      const createdCount = successResults.filter(r => r.created).length;
-      const reusedCount = successResults.filter(r => !r.created).length;
-      if (createdCount > 0) {
-        queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      }
-      if (successResults.length > 0) {
-        queryClient.invalidateQueries({ queryKey: ["/api/awards", award.id, "procurement-tasks"] });
-      }
-      setActiveProcLanes(createdLanes);
-      setProcurementDialogOpen(true);
-      if (failedCount > 0 && successResults.length > 0) {
-        toast({
-          title: `${successResults.length} task${successResults.length !== 1 ? "s" : ""} ready, ${failedCount} lane${failedCount !== 1 ? "s" : ""} failed`,
-          description: "Workspace opened for successful lanes. Some lanes could not be set up — try again.",
-        });
-      } else {
-        toast({
-          title: createdCount > 0
-            ? `${createdCount} procurement task${createdCount !== 1 ? "s" : ""} created`
-            : "Opening existing procurement workspace",
-          description: reusedCount > 0 && createdCount > 0
-            ? `${reusedCount} existing task${reusedCount !== 1 ? "s" : ""} reused, ${createdCount} new.`
-            : reusedCount > 0
-            ? `Using ${reusedCount} existing task${reusedCount !== 1 ? "s" : ""} for this award.`
-            : `One task per qualifying lane. Target 5–10 carrier contacts each.`,
-        });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      let detail: string | undefined;
-      try {
-        const jsonPart = msg.replace(/^\d+:\s*/, "");
-        detail = JSON.parse(jsonPart).error;
-      } catch { /* ignore */ }
-      toast({
-        title: "Failed to generate procurement tasks",
-        description: detail ?? "Please check the award has lanes in Origin → Destination format.",
-        variant: "destructive",
-      });
-    } finally {
-      setGeneratingTasks(false);
-    }
-  }
-
-  const coverageStyle = getCoverageBadgeStyle();
-
   return (
-    <>
-      <Card className="hover-elevate" data-testid={`card-award-${award.id}`}>
-        <CardContent className="p-4">
-          <div className="flex items-start justify-between gap-2 mb-3">
-            <div className="min-w-0 flex-1">
-              <h3 className="font-medium truncate">{award.title}</h3>
-              {company && (
-                <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
-                  <Building2 className="h-3 w-3" />
-                  <span className="truncate">{company.name}</span>
-                </div>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              {coverageStyle && (
-                <Badge className={`text-xs ${coverageStyle}`} data-testid={`badge-procurement-coverage-${award.id}`}>
-                  <Truck className="h-3 w-3 mr-1" />
-                  {coveredLanes}/{totalLanes} covered
-                </Badge>
-              )}
-              <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
-                <Trophy className="h-3 w-3 mr-1" />
-                Won
-              </Badge>
-            </div>
-          </div>
-
-          <div className="space-y-2 text-sm">
-            {award.value && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <DollarSign className="h-3.5 w-3.5" />
-                <span>${Number(award.value).toLocaleString()}</span>
-              </div>
-            )}
-            {award.awardDate && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Calendar className="h-3.5 w-3.5" />
-                <span>Awarded: {new Date(award.awardDate).toLocaleDateString()}</span>
-              </div>
-            )}
-            {award.lanes && award.lanes.length > 0 && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <TruckIcon className="h-3.5 w-3.5 flex-shrink-0" />
-                <span className="truncate">{award.lanes.join(", ")}</span>
-              </div>
-            )}
-            {award.notes && (
-              <p className="text-muted-foreground line-clamp-2">{award.notes}</p>
-            )}
-            {award.fileName && award.fileData && (
-              <div className="flex items-center gap-2 text-muted-foreground">
-                <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                <a
-                  href={award.fileData}
-                  download={award.fileName}
-                  className="text-blue-600 dark:text-blue-400 hover:underline truncate text-sm"
-                  onClick={(e) => e.stopPropagation()}
-                  data-testid={`link-award-file-${award.id}`}
-                >
-                  {award.fileName}
-                </a>
+    <Card className="hover-elevate" data-testid={`card-award-${award.id}`}>
+      <CardContent className="p-4">
+        <div className="flex items-start justify-between gap-2 mb-3">
+          <div className="min-w-0 flex-1">
+            <h3 className="font-medium truncate">{award.title}</h3>
+            {company && (
+              <div className="flex items-center gap-1 text-sm text-muted-foreground mt-1">
+                <Building2 className="h-3 w-3" />
+                <span className="truncate">{company.name}</span>
               </div>
             )}
           </div>
+          <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
+            <Trophy className="h-3 w-3 mr-1" />
+            Won
+          </Badge>
+        </div>
 
-          <div className="flex items-center justify-between mt-3 pt-3 border-t gap-2">
-            <div className="flex items-center gap-1.5">
-              <span
-                className={highVolumeLanes.length === 0 ? "cursor-not-allowed" : undefined}
-                title={highVolumeLanes.length === 0 ? "No lanes in recognized format — use Origin → Destination" : undefined}
-              >
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleGenerateProcurementTasks}
-                  disabled={generatingTasks || highVolumeLanes.length === 0}
-                  className="text-xs h-8"
-                  data-testid={`button-generate-procurement-${award.id}`}
-                >
-                  {generatingTasks ? (
-                    <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-                  ) : hasExistingTasks ? (
-                    <FolderOpen className="h-3 w-3 mr-1.5" />
-                  ) : (
-                    <ClipboardList className="h-3 w-3 mr-1.5" />
-                  )}
-                  {hasExistingTasks ? "Open Procurement Workspace" : "Generate Procurement Tasks"}
-                </Button>
-              </span>
-              {hasExistingTasks && (
-                <Badge className="bg-green-500/10 text-green-700 dark:text-green-400 text-xs gap-1" data-testid={`badge-tasks-setup-${award.id}`}>
-                  <CheckCircle2 className="h-3 w-3" />
-                  Tasks set up
-                </Badge>
-              )}
+        <div className="space-y-2 text-sm">
+          {award.value && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <DollarSign className="h-3.5 w-3.5" />
+              <span>${Number(award.value).toLocaleString()}</span>
             </div>
-            <div className="flex items-center gap-1">
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={() => onEdit(award)}
-                data-testid={`button-edit-award-${award.id}`}
-              >
-                <Pencil className="h-4 w-4" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={() => onDelete(award)}
-                data-testid={`button-delete-award-${award.id}`}
-              >
-                <Trash2 className="h-4 w-4" />
-              </Button>
+          )}
+          {award.awardDate && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Calendar className="h-3.5 w-3.5" />
+              <span>Awarded: {new Date(award.awardDate).toLocaleDateString()}</span>
             </div>
-          </div>
-        </CardContent>
-      </Card>
+          )}
+          {award.lanes && award.lanes.length > 0 && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <TruckIcon className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="truncate">{award.lanes.join(", ")}</span>
+            </div>
+          )}
+          {award.notes && (
+            <p className="text-muted-foreground line-clamp-2">{award.notes}</p>
+          )}
+          {award.fileName && award.fileData && (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Paperclip className="h-3.5 w-3.5 shrink-0" />
+              <a
+                href={award.fileData}
+                download={award.fileName}
+                className="text-blue-600 dark:text-blue-400 hover:underline truncate text-sm"
+                onClick={(e) => e.stopPropagation()}
+                data-testid={`link-award-file-${award.id}`}
+              >
+                {award.fileName}
+              </a>
+            </div>
+          )}
+        </div>
 
-      {activeProcLanes.length > 0 && (
-        <ProcurementTaskLauncherDialog
-          open={procurementDialogOpen}
-          onOpenChange={setProcurementDialogOpen}
-          title={`Carrier Procurement — ${award.title}`}
-          lanes={activeProcLanes}
-        />
-      )}
-    </>
+        <div className="flex items-center justify-end gap-1 mt-3 pt-3 border-t">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => onEdit(award)}
+            data-testid={`button-edit-award-${award.id}`}
+          >
+            <Pencil className="h-4 w-4" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => onDelete(award)}
+            data-testid={`button-delete-award-${award.id}`}
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -504,9 +320,6 @@ interface HighVolumeLane {
   equipment?: string;
   status?: string;
   contactId?: string;
-  /** Optional driving distance for the lane; surfaced in the sortable
-   *  high-volume-lanes table when present. */
-  miles?: number | null;
 }
 
 interface Facility {
@@ -519,7 +332,7 @@ interface Facility {
   rfpTitles: string[];
   fullName: string;
   covered: boolean;
-  coveredBy: { id: string; name: string }[];
+  coveredBy: string | null;
 }
 
 interface FacilityCoverage {
@@ -582,6 +395,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
   const [dataViewerCollapsed, setDataViewerCollapsed] = useState(false);
   const [rfpFacilityCoverageCollapsed, setRfpFacilityCoverageCollapsed] = useState(false);
   const [rfpLanePatternsCollapsed, setRfpLanePatternsCollapsed] = useState(false);
+  const [findPlannerFacility, setFindPlannerFacility] = useState<Facility | null>(null);
   const [assignExistingContactId, setAssignExistingContactId] = useState("");
 
   const { data: facilityCoverage } = useQuery<FacilityCoverage>({
@@ -593,15 +407,6 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
     },
     enabled: !!companyId,
   });
-
-  const [findPlannerFacilityKey, setFindPlannerFacilityKey] = useState<string | null>(null);
-  const findPlannerFacility = findPlannerFacilityKey
-    ? (facilityCoverage?.facilities.find(
-        (f) => `${f.fullName}|${f.type}` === findPlannerFacilityKey
-      ) ?? null)
-    : null;
-  const setFindPlannerFacility = (f: Facility | null) =>
-    setFindPlannerFacilityKey(f ? `${f.fullName}|${f.type}` : null);
 
   const { data: lanePatterns } = useQuery<LanePatterns>({
     queryKey: ["/api/companies", companyId, "lane-patterns"],
@@ -630,7 +435,6 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
       const existingLanes: string[] = contact.lanes || [];
       if (!existingLanes.includes(laneToAdd)) {
         await apiRequest("PATCH", `/api/contacts/${contactId}`, {
-          ...contact,
           lanes: [...existingLanes, laneToAdd],
         });
       }
@@ -638,6 +442,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
+      setFindPlannerFacility(null);
       setAssignExistingContactId("");
       toast({
         title: "Contact assigned to facility",
@@ -646,31 +451,6 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
     },
     onError: (error: Error) => {
       toast({ title: "Error assigning contact", description: error.message, variant: "destructive" });
-    },
-  });
-
-  const removeContactFromFacilityMutation = useMutation({
-    mutationFn: async ({ contactId, laneToRemove }: { contactId: string; laneToRemove: string }) => {
-      const contact = contacts?.find((c) => c.id === contactId);
-      if (!contact) throw new Error("Contact not found");
-      const updatedLanes = (contact.lanes || []).filter(
-        (l) => l.toLowerCase().trim() !== laneToRemove.toLowerCase().trim()
-      );
-      await apiRequest("PATCH", `/api/contacts/${contactId}`, {
-        ...contact,
-        lanes: updatedLanes,
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "facility-coverage"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/companies", companyId, "contacts"] });
-      toast({
-        title: "Contact removed from facility",
-        className: "bg-green-50 border-green-200 dark:bg-green-950 dark:border-green-800",
-      });
-    },
-    onError: (error: Error) => {
-      toast({ title: "Error removing contact", description: error.message, variant: "destructive" });
     },
   });
 
@@ -897,37 +677,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                     </span>
                   )}
                 </div>
-                {/* Mobile card view */}
-                <div className="md:hidden space-y-2" data-testid="cards-high-volume-lanes">
-                  {displayedLanes.map(({ lane, origIdx }) => (
-                    <div key={origIdx} className={`rounded-lg border p-3 space-y-2 ${lane.status && lane.status !== "open" ? "bg-green-50/50 dark:bg-green-950/10" : ""}`} data-testid={`card-high-volume-lane-${origIdx}`}>
-                      <div className="flex items-center justify-between">
-                        <div className="font-medium text-sm">{fmtLoc(lane.origin, lane.originState)} → {fmtLoc(lane.destination, lane.destinationState)}</div>
-                        {getLaneStatusBadge(lane)}
-                      </div>
-                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        <span>{Math.round(lane.volume).toLocaleString()} / yr</span>
-                        {hasMiles && lane.miles != null && <span>{Math.round(lane.miles).toLocaleString()} mi</span>}
-                        {lane.equipment && <span>{lane.equipment}</span>}
-                      </div>
-                      <div>
-                        {(!lane.status || lane.status === "open") ? (
-                          <Button size="sm" variant="outline" className="w-full border-amber-300 text-amber-700 dark:border-amber-700 dark:text-amber-400" onClick={() => handleAssign(lane, origIdx)} data-testid={`button-assign-lane-m-${origIdx}`}>
-                            <UserPlus className="h-4 w-4 mr-1" /> Assign Lane
-                          </Button>
-                        ) : lane.status === "contact_added" ? (
-                          <Button size="sm" variant="outline" className="w-full border-green-300 text-green-700 dark:border-green-700 dark:text-green-400" onClick={() => markResearchedMutation.mutate({ laneIdx: origIdx })} disabled={markResearchedMutation.isPending} data-testid={`button-mark-researched-m-${origIdx}`}>
-                            Mark Complete
-                          </Button>
-                        ) : (
-                          <span className="text-xs text-green-600 dark:text-green-400">Done</span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                {/* Desktop table view */}
-                <div className="hidden md:block overflow-x-auto rounded-md border">
+                <div className="overflow-x-auto rounded-md border">
                   <table className="w-full text-sm" data-testid="table-high-volume-lanes">
                     <thead>
                       <tr className="border-b bg-muted/50">
@@ -1094,29 +844,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
         </CardHeader>
         {!dataViewerCollapsed && rows.length > 0 && (
           <CardContent className="pt-0">
-            {/* Mobile card view */}
-            <div className="md:hidden space-y-2" data-testid="cards-rfp-data">
-              {rows.slice(0, 50).map((row, i) => (
-                <div key={i} className="rounded-lg border p-3 space-y-1">
-                  {headers.slice(0, 4).map(h => (
-                    <div key={h} className="flex justify-between text-sm">
-                      <span className="text-muted-foreground text-xs">{h}</span>
-                      <span className="font-medium text-xs truncate max-w-[60%] text-right">{String(row[h] ?? "—")}</span>
-                    </div>
-                  ))}
-                  {headers.length > 4 && (
-                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground pt-1 border-t">
-                      {headers.slice(4).map(h => (
-                        <span key={h}>{h}: {String(row[h] ?? "—")}</span>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-              {rows.length > 50 && <p className="text-sm text-muted-foreground text-center py-2">Showing 50 of {rows.length} rows</p>}
-            </div>
-            {/* Desktop table view */}
-            <div className="hidden md:block overflow-x-auto rounded-md border">
+            <div className="overflow-x-auto rounded-md border">
               <table className="w-full text-sm" data-testid="table-rfp-data">
                 <thead>
                   <tr className="border-b bg-muted/50">
@@ -1211,40 +939,21 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                           {f.totalVolume.toLocaleString()} loads/yr
                         </span>
                         <span>{f.laneCount} lane{f.laneCount !== 1 ? "s" : ""}</span>
-                        {f.covered && f.coveredBy && f.coveredBy.length > 0 && (
+                        {f.covered && f.coveredBy && (
                           <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
                             <Users className="h-3 w-3" />
-                            {f.coveredBy.map(c => c.name).join(", ")}
+                            {f.coveredBy}
                           </span>
                         )}
                       </div>
                     </div>
                   </div>
-                  <div className="flex-shrink-0 flex items-center gap-1.5">
+                  <div className="flex-shrink-0">
                     {f.covered ? (
-                      <>
-                        <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
-                          <CheckCircle className="h-3 w-3 mr-1" />
-                          Covered
-                        </Badge>
-                        {f.coveredBy && f.coveredBy.length > 0 && (
-                          <Badge variant="secondary" className="text-xs">
-                            {f.coveredBy.length} {f.coveredBy.length === 1 ? "planner" : "planners"}
-                          </Badge>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="default"
-                          className="h-7 px-2.5 text-xs bg-blue-600 hover:bg-blue-700 text-white"
-                          onClick={() => {
-                            setAssignExistingContactId("");
-                            setFindPlannerFacility(f);
-                          }}
-                          data-testid={`button-manage-planners-viewer-${i}`}
-                        >
-                          Add/Remove Planners
-                        </Button>
-                      </>
+                      <Badge className="bg-green-500/10 text-green-600 dark:text-green-400">
+                        <CheckCircle className="h-3 w-3 mr-1" />
+                        Covered
+                      </Badge>
                     ) : (
                       <Button
                         size="sm"
@@ -1400,29 +1109,7 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
 
               <TabsContent value="states" className="mt-3">
                 {lanePatterns.stateCorridors.length > 0 ? (
-                  <>
-                  {/* Mobile card view */}
-                  <div className="md:hidden space-y-2">
-                    {(() => {
-                      const maxVol = Math.max(...lanePatterns.stateCorridors.map(s => s.totalVolume));
-                      return lanePatterns.stateCorridors.map((s, i) => (
-                        <div key={i} className="rounded-lg border p-3 space-y-1.5">
-                          <div className="flex items-center justify-between">
-                            <span className="font-medium text-sm">{s.corridor}</span>
-                            <span className="text-xs text-muted-foreground">{s.laneCount} lanes</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-                              <div className="h-full bg-gradient-to-r from-blue-500 to-green-500 rounded-full transition-all" style={{ width: `${(s.totalVolume / maxVol) * 100}%` }} />
-                            </div>
-                            <span className="text-xs font-medium shrink-0">{s.totalVolume.toLocaleString()}</span>
-                          </div>
-                        </div>
-                      ));
-                    })()}
-                  </div>
-                  {/* Desktop table view */}
-                  <div className="hidden md:block overflow-x-auto rounded-md border">
+                  <div className="overflow-x-auto rounded-md border">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="bg-muted/50 border-b">
@@ -1458,7 +1145,6 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                       </tbody>
                     </table>
                   </div>
-                  </>
                 ) : (
                   <p className="text-sm text-muted-foreground text-center py-6">No state corridor data available</p>
                 )}
@@ -1518,51 +1204,22 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
               {findPlannerFacility?.fullName}
             </DialogTitle>
             <p className="text-sm text-muted-foreground pt-1">
-              Manage contacts assigned to this facility.
+              Assign an existing contact or create a new one for this facility.
             </p>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {findPlannerFacility && findPlannerFacility.coveredBy && findPlannerFacility.coveredBy.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-sm font-medium">Currently assigned</p>
-                <div className="space-y-1.5">
-                  {findPlannerFacility.coveredBy.map((c) => (
-                    <div key={c.id} className="flex items-center justify-between px-3 py-2 rounded-md border bg-muted/40">
-                      <span className="text-sm">{c.name}</span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
-                        disabled={removeContactFromFacilityMutation.isPending}
-                        onClick={() => {
-                          removeContactFromFacilityMutation.mutate({
-                            contactId: c.id,
-                            laneToRemove: findPlannerFacility.fullName,
-                          });
-                        }}
-                        data-testid={`button-remove-planner-${c.id}`}
-                      >
-                        ×
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
             <div className="space-y-2">
-              <p className="text-sm font-medium">Add a contact</p>
+              <p className="text-sm font-medium">Select existing contact</p>
               <Select value={assignExistingContactId} onValueChange={setAssignExistingContactId}>
-                <SelectTrigger data-testid="select-assign-contact">
+                <SelectTrigger>
                   <SelectValue placeholder="Choose a contact…" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(contacts || [])
-                    .filter((c) => !findPlannerFacility?.coveredBy?.some((cb) => cb.id === c.id))
-                    .map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name}{c.title ? ` — ${c.title}` : ""}
-                      </SelectItem>
-                    ))}
+                  {(contacts || []).map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}{c.title ? ` — ${c.title}` : ""}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Button
@@ -1576,10 +1233,17 @@ function RfpDataViewer({ rfp, companyId, onClose, onRfpUpdated }: RfpDataViewerP
                     });
                   }
                 }}
-                data-testid="button-assign-contact"
               >
-                {assignContactToFacilityMutation.isPending ? "Assigning…" : "Add to This Facility"}
+                {assignContactToFacilityMutation.isPending ? "Assigning…" : "Assign to This Facility"}
               </Button>
+            </div>
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-background px-2 text-muted-foreground">or</span>
+              </div>
             </div>
             <p className="text-xs text-muted-foreground text-center">
               To create a new contact, visit the account page from the Customers tab.
@@ -1598,12 +1262,6 @@ export default function RfpAwards() {
   const [awardDialogOpen, setAwardDialogOpen] = useState(false);
   const [editingRfp, setEditingRfp] = useState<Rfp | undefined>();
   const [editingAward, setEditingAward] = useState<Award | undefined>();
-  const [procurementPromptAward, setProcurementPromptAward] = useState<Award | null>(null);
-  const [procurementPromptLanes, setProcurementPromptLanes] = useState<ProcurementLaneInfo[]>([]);
-  const [promptProcDialogOpen, setPromptProcDialogOpen] = useState(false);
-  const [promptProcLanes, setPromptProcLanes] = useState<ProcurementLaneInfo[]>([]);
-  const [promptProcTitle, setPromptProcTitle] = useState("");
-  const [promptGeneratingTasks, setPromptGeneratingTasks] = useState(false);
   const [deleteRfpTarget, setDeleteRfpTarget] = useState<Rfp | null>(null);
   const [deleteAwardTarget, setDeleteAwardTarget] = useState<Award | null>(null);
   const [viewingRfp, setViewingRfp] = useState<Rfp | null>(null);
@@ -1623,7 +1281,6 @@ export default function RfpAwards() {
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false);
   const [pdfExtractedLanes, setPdfExtractedLanes] = useState<any[]>([]);
   const [pdfRfpType, setPdfRfpType] = useState<"mini_bid" | "full_rfp" | "">("");
-  const [drilldownFilter, setDrilldownFilter] = useState<"rfps" | "awards" | "pipeline" | "awarded" | null>(null);
   const [convertingRfp, setConvertingRfp] = useState<Rfp | null>(null);
 
   const { data: rfps, isLoading: rfpsLoading } = useQuery<Rfp[]>({
@@ -1847,73 +1504,6 @@ export default function RfpAwards() {
     setAwardDialogOpen(true);
   };
 
-  const handleNewAwardCreated = (award: Award) => {
-    const lanes = getHighVolumeLanes(award);
-    if (lanes.length > 0) {
-      setProcurementPromptAward(award);
-      setProcurementPromptLanes(lanes);
-    }
-  };
-
-  const handlePromptCreateTasks = async () => {
-    if (!procurementPromptAward) return;
-    setPromptGeneratingTasks(true);
-    try {
-      const res = await apiRequest("POST", `/api/awards/${procurementPromptAward.id}/procurement-tasks`, {});
-      type LaneResult = { lane: string; taskId: string; created: boolean; failed?: boolean };
-      const { results } = await res.json() as { results: LaneResult[] };
-      const successResults = results.filter(r => !r.failed);
-      const failedCount = results.filter(r => r.failed).length;
-      const taskByLane = Object.fromEntries(successResults.map(r => [r.lane, r.taskId]));
-      const createdLanes: ProcurementLaneInfo[] = procurementPromptLanes
-        .map((lane): ProcurementLaneInfo | null => {
-          const normalizedLane = lane.lane.trim().replace(/\s+/g, " ").toLowerCase();
-          const taskId = taskByLane[normalizedLane] ?? taskByLane[lane.lane];
-          return taskId ? { ...lane, taskId } : null;
-        })
-        .filter((l): l is ProcurementLaneInfo => l !== null);
-      const createdCount = successResults.filter(r => r.created).length;
-      if (createdCount > 0) {
-        queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      }
-      if (successResults.length > 0) {
-        queryClient.invalidateQueries({ queryKey: ["/api/awards", procurementPromptAward.id, "procurement-tasks"] });
-      }
-      setPromptProcTitle(`Carrier Procurement — ${procurementPromptAward.title}`);
-      setPromptProcLanes(createdLanes);
-      setProcurementPromptAward(null);
-      setProcurementPromptLanes([]);
-      setPromptProcDialogOpen(true);
-      if (failedCount > 0 && successResults.length > 0) {
-        toast({
-          title: `${successResults.length} task${successResults.length !== 1 ? "s" : ""} ready, ${failedCount} lane${failedCount !== 1 ? "s" : ""} failed`,
-          description: "Workspace opened for successful lanes. Some lanes could not be set up — try again.",
-        });
-      } else {
-        toast({
-          title: createdCount > 0
-            ? `${createdCount} procurement task${createdCount !== 1 ? "s" : ""} created`
-            : "Opening procurement workspace",
-          description: "Target 5–10 carrier contacts per lane.",
-        });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      let detail: string | undefined;
-      try {
-        const jsonPart = msg.replace(/^\d+:\s*/, "");
-        detail = JSON.parse(jsonPart).error;
-      } catch { /* ignore */ }
-      toast({
-        title: "Failed to generate procurement tasks",
-        description: detail ?? "Please check the award has lanes in Origin → Destination format.",
-        variant: "destructive",
-      });
-    } finally {
-      setPromptGeneratingTasks(false);
-    }
-  };
-
   const isLoading = rfpsLoading || awardsLoading;
 
   const stats = {
@@ -1952,11 +1542,7 @@ export default function RfpAwards() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
-        <Card
-          className="cursor-pointer hover:bg-accent/50 transition-colors"
-          onClick={() => setDrilldownFilter("rfps")}
-          data-testid="card-stat-active-rfps"
-        >
+        <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1967,11 +1553,7 @@ export default function RfpAwards() {
             </div>
           </CardContent>
         </Card>
-        <Card
-          className="cursor-pointer hover:bg-accent/50 transition-colors"
-          onClick={() => setDrilldownFilter("awards")}
-          data-testid="card-stat-awards-won"
-        >
+        <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1982,11 +1564,7 @@ export default function RfpAwards() {
             </div>
           </CardContent>
         </Card>
-        <Card
-          className="cursor-pointer hover:bg-accent/50 transition-colors"
-          onClick={() => setDrilldownFilter("pipeline")}
-          data-testid="card-stat-rfp-pipeline"
-        >
+        <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -1997,11 +1575,7 @@ export default function RfpAwards() {
             </div>
           </CardContent>
         </Card>
-        <Card
-          className="cursor-pointer hover:bg-accent/50 transition-colors"
-          onClick={() => setDrilldownFilter("awarded")}
-          data-testid="card-stat-awarded-value"
-        >
+        <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <div>
@@ -2015,260 +1589,6 @@ export default function RfpAwards() {
           </CardContent>
         </Card>
       </div>
-
-      {/* Drill-Down Sheet */}
-      <Sheet open={drilldownFilter !== null} onOpenChange={(open) => { if (!open) setDrilldownFilter(null); }}>
-        <SheetContent side="right" className="w-full sm:max-w-xl flex flex-col p-0" data-testid="sheet-drilldown">
-          {(() => {
-            const isRfpView = drilldownFilter === "rfps" || drilldownFilter === "pipeline";
-            const isAwardView = drilldownFilter === "awards" || drilldownFilter === "awarded";
-            const sortByValue = drilldownFilter === "pipeline" || drilldownFilter === "awarded";
-
-            const titleMap = {
-              rfps: "Active RFPs",
-              pipeline: "RFP Pipeline",
-              awards: "Awards Won",
-              awarded: "Awarded Value",
-            };
-            const title = drilldownFilter ? titleMap[drilldownFilter] : "";
-
-            const companyMap = new Map((companies || []).map((c) => [c.id, c]));
-
-            let rfpRows = isRfpView ? [...(rfps || [])] : [];
-            if (sortByValue && isRfpView) {
-              rfpRows = rfpRows.sort((a, b) => (parseFloat(b.value || "0") - parseFloat(a.value || "0")));
-            }
-            const rfpTotal = rfpRows.reduce((acc, r) => acc + (r.value ? parseFloat(r.value) : 0), 0);
-
-            let awardRows = isAwardView ? [...(allAwards || [])] : [];
-            if (sortByValue && isAwardView) {
-              awardRows = awardRows.sort((a, b) => (parseFloat(b.value || "0") - parseFloat(a.value || "0")));
-            }
-            const awardTotal = awardRows.reduce((acc, a) => acc + (a.value ? parseFloat(a.value) : 0), 0);
-
-            const count = isRfpView ? rfpRows.length : awardRows.length;
-            const totalValue = isRfpView ? rfpTotal : awardTotal;
-
-            return (
-              <>
-                <div className="p-6 border-b">
-                  <SheetHeader>
-                    <SheetTitle className="text-xl" data-testid="text-drilldown-title">{title}</SheetTitle>
-                  </SheetHeader>
-                  <div className="flex items-center gap-6 mt-3">
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Count</p>
-                      <p className="text-2xl font-bold" data-testid="text-drilldown-count">{count}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-foreground uppercase tracking-wide">Total Value</p>
-                      <p className="text-2xl font-bold" data-testid="text-drilldown-value">
-                        ${totalValue >= 1_000_000 ? `${(totalValue / 1_000_000).toFixed(1)}M` : totalValue.toLocaleString()}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {isRfpView && (() => {
-                    if (rfpsLoading) {
-                      return (
-                        <div className="space-y-3" data-testid="skeleton-drilldown-loading">
-                          {[1, 2, 3].map((i) => (
-                            <div key={i} className="space-y-1.5">
-                              <div className="flex items-center gap-2">
-                                <Skeleton className="h-8 w-8 rounded-full" />
-                                <div className="space-y-1 flex-1">
-                                  <Skeleton className="h-4 w-32" />
-                                  <Skeleton className="h-3 w-20" />
-                                </div>
-                              </div>
-                              <div className="pl-10 space-y-1.5">
-                                <Skeleton className="h-16 w-full rounded-lg" />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    }
-                    if (rfpRows.length === 0) {
-                      return (
-                        <div className="text-center py-12 text-muted-foreground" data-testid="text-drilldown-empty">
-                          <FileText className="h-10 w-10 mx-auto mb-2 opacity-30" />
-                          <p>No RFPs found</p>
-                        </div>
-                      );
-                    }
-                    const grouped: Map<string, typeof rfpRows> = new Map();
-                    for (const rfp of rfpRows) {
-                      const key = rfp.companyId || "__none__";
-                      if (!grouped.has(key)) grouped.set(key, []);
-                      grouped.get(key)!.push(rfp);
-                    }
-                    const groupEntries = Array.from(grouped.entries()).map(([companyId, rows]) => {
-                      const company = companyId !== "__none__" ? companyMap.get(companyId) : undefined;
-                      const groupTotal = rows.reduce((acc, r) => acc + (r.value ? parseFloat(r.value) : 0), 0);
-                      return { companyId, company, rows, groupTotal };
-                    });
-                    if (sortByValue) {
-                      groupEntries.sort((a, b) => b.groupTotal - a.groupTotal);
-                    } else {
-                      groupEntries.sort((a, b) => (a.company?.name || "").localeCompare(b.company?.name || ""));
-                    }
-                    return groupEntries.map(({ companyId, company, rows, groupTotal }) => {
-                      const initials = company ? company.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase() : "?";
-                      return (
-                        <div key={companyId} data-testid={`group-drilldown-company-${companyId}`}>
-                          <div className="flex items-center gap-2 mb-2">
-                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
-                              {initials}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-sm truncate">{company?.name || "Unknown Customer"}</p>
-                              <p className="text-xs text-muted-foreground">{rows.length} {rows.length === 1 ? "RFP" : "RFPs"}{groupTotal > 0 ? ` · $${Number(groupTotal).toLocaleString()}` : ""}</p>
-                            </div>
-                          </div>
-                          <div className="space-y-1.5 pl-10">
-                            {rows.map((rfp) => {
-                              const statusCfg = rfpStatusConfig[rfp.status as keyof typeof rfpStatusConfig] || rfpStatusConfig.pending;
-                              const StatusIcon = statusCfg.icon;
-                              return (
-                                <div
-                                  key={rfp.id}
-                                  className="flex items-start gap-3 p-3 rounded-lg border bg-card"
-                                  data-testid={`row-drilldown-rfp-${rfp.id}`}
-                                >
-                                  <div className="flex-1 min-w-0">
-                                    <p className="font-medium text-sm truncate">{rfp.title}</p>
-                                    <div className="flex flex-wrap items-center gap-2 mt-1">
-                                      <Badge className={`${statusCfg.color} text-xs`}>
-                                        <StatusIcon className="h-3 w-3 mr-1" />
-                                        {statusCfg.label}
-                                      </Badge>
-                                      {rfp.dueDate && (
-                                        <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                          <Calendar className="h-3 w-3" />
-                                          {new Date(rfp.dueDate).toLocaleDateString()}
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                  <div className="shrink-0 text-right">
-                                    {rfp.value && (
-                                      <p className="font-semibold text-sm">${Number(rfp.value).toLocaleString()}</p>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    });
-                  })()}
-
-                  {isAwardView && (() => {
-                    if (awardsLoading) {
-                      return (
-                        <div className="space-y-3" data-testid="skeleton-drilldown-loading">
-                          {[1, 2, 3].map((i) => (
-                            <div key={i} className="space-y-1.5">
-                              <div className="flex items-center gap-2">
-                                <Skeleton className="h-8 w-8 rounded-full" />
-                                <div className="space-y-1 flex-1">
-                                  <Skeleton className="h-4 w-32" />
-                                  <Skeleton className="h-3 w-20" />
-                                </div>
-                              </div>
-                              <div className="pl-10 space-y-1.5">
-                                <Skeleton className="h-16 w-full rounded-lg" />
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    }
-                    if (awardRows.length === 0) {
-                      return (
-                        <div className="text-center py-12 text-muted-foreground" data-testid="text-drilldown-empty">
-                          <Trophy className="h-10 w-10 mx-auto mb-2 opacity-30" />
-                          <p>No awards found</p>
-                        </div>
-                      );
-                    }
-                    const grouped: Map<string, typeof awardRows> = new Map();
-                    for (const award of awardRows) {
-                      const key = award.companyId || "__none__";
-                      if (!grouped.has(key)) grouped.set(key, []);
-                      grouped.get(key)!.push(award);
-                    }
-                    const groupEntries = Array.from(grouped.entries()).map(([companyId, rows]) => {
-                      const company = companyId !== "__none__" ? companyMap.get(companyId) : undefined;
-                      const groupTotal = rows.reduce((acc, a) => acc + (a.value ? parseFloat(a.value) : 0), 0);
-                      return { companyId, company, rows, groupTotal };
-                    });
-                    if (sortByValue) {
-                      groupEntries.sort((a, b) => b.groupTotal - a.groupTotal);
-                    } else {
-                      groupEntries.sort((a, b) => (a.company?.name || "").localeCompare(b.company?.name || ""));
-                    }
-                    return groupEntries.map(({ companyId, company, rows, groupTotal }) => {
-                      const initials = company ? company.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase() : "?";
-                      return (
-                        <div key={companyId} data-testid={`group-drilldown-award-company-${companyId}`}>
-                          <div className="flex items-center gap-2 mb-2">
-                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-green-500/10 text-green-600 dark:text-green-400 text-xs font-bold">
-                              {initials}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-sm truncate">{company?.name || "Unknown Customer"}</p>
-                              <p className="text-xs text-muted-foreground">{rows.length} {rows.length === 1 ? "award" : "awards"}{groupTotal > 0 ? ` · $${Number(groupTotal).toLocaleString()}` : ""}</p>
-                            </div>
-                          </div>
-                          <div className="space-y-1.5 pl-10">
-                            {rows.map((award) => (
-                              <div
-                                key={award.id}
-                                className="flex items-start gap-3 p-3 rounded-lg border bg-card"
-                                data-testid={`row-drilldown-award-${award.id}`}
-                              >
-                                <div className="flex-1 min-w-0">
-                                  <p className="font-medium text-sm truncate">{award.title}</p>
-                                  <div className="flex flex-wrap items-center gap-2 mt-1">
-                                    {award.awardDate && (
-                                      <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                        <Calendar className="h-3 w-3" />
-                                        {new Date(award.awardDate).toLocaleDateString()}
-                                      </span>
-                                    )}
-                                    {award.lanes && award.lanes.length > 0 && (
-                                      <span className="text-xs text-muted-foreground flex items-center gap-1">
-                                        <TruckIcon className="h-3 w-3" />
-                                        {award.lanes.length} {award.lanes.length === 1 ? "lane" : "lanes"}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="shrink-0 text-right">
-                                  {award.value && (
-                                    <p className="font-semibold text-sm text-green-600 dark:text-green-400">
-                                      ${Number(award.value).toLocaleString()}
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
-              </>
-            );
-          })()}
-        </SheetContent>
-      </Sheet>
 
       {/* Win/Loss Summary Bar */}
       {(stats.totalRfps > 0 || stats.totalAwards > 0) && (
@@ -2741,7 +2061,6 @@ export default function RfpAwards() {
         rfp={convertingRfp}
         company={convertingRfp ? companiesMap.get(convertingRfp.companyId) : undefined}
         onClose={() => setConvertingRfp(null)}
-        onCreated={handleNewAwardCreated}
       />
 
       {isLoading ? (
@@ -2930,65 +2249,7 @@ export default function RfpAwards() {
           if (!open) setEditingAward(undefined);
         }}
         award={editingAward}
-        onCreated={handleNewAwardCreated}
       />
-
-      {/* Procurement prompt — shown after a new award is created with high-volume lanes */}
-      <Dialog open={!!procurementPromptAward} onOpenChange={(open) => { if (!open) { setProcurementPromptAward(null); setProcurementPromptLanes([]); } }}>
-        <DialogContent className="sm:max-w-sm" data-testid="dialog-procurement-prompt">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Trophy className="h-5 w-5 text-amber-500" />
-              Set up carrier procurement?
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 pt-1">
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              <span className="font-medium text-foreground">{procurementPromptAward?.title}</span> has{" "}
-              <span className="font-medium text-foreground">{procurementPromptLanes.length} high-volume lane{procurementPromptLanes.length !== 1 ? "s" : ""}</span> (50+ loads/year).
-              Want to create procurement tasks so your team can start sourcing carrier coverage?
-            </p>
-            <p className="text-xs text-muted-foreground">
-              You can always do this later from the award card.
-            </p>
-            <div className="flex flex-col gap-2 pt-1">
-              <Button
-                onClick={handlePromptCreateTasks}
-                disabled={promptGeneratingTasks}
-                className="w-full"
-                data-testid="button-prompt-create-tasks"
-              >
-                {promptGeneratingTasks ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Creating tasks…</>
-                ) : (
-                  <><ClipboardList className="h-4 w-4 mr-2" />Yes, create procurement tasks</>
-                )}
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => { setProcurementPromptAward(null); setProcurementPromptLanes([]); }}
-                className="w-full text-muted-foreground"
-                data-testid="button-prompt-skip-procurement"
-              >
-                Skip for now
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Workspace dialog opened from the procurement prompt */}
-      {promptProcLanes.length > 0 && (
-        <ProcurementTaskLauncherDialog
-          open={promptProcDialogOpen}
-          onOpenChange={(open) => {
-            setPromptProcDialogOpen(open);
-            if (!open) { setPromptProcLanes([]); setPromptProcTitle(""); }
-          }}
-          title={promptProcTitle}
-          lanes={promptProcLanes}
-        />
-      )}
 
       <AlertDialog open={!!deleteRfpTarget} onOpenChange={(open) => !open && setDeleteRfpTarget(null)}>
         <AlertDialogContent>

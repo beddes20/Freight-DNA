@@ -13,10 +13,10 @@ import { useToast } from "@/hooks/use-toast";
 
 export const OPPORTUNITY_CATEGORIES = [
   { value: "spot_batch", label: "Batch of Spot Loads" },
-  { value: "mini_bid", label: "Mini-Bid" },
-  { value: "other", label: "New Site, First Opp" },
-  { value: "project", label: "Project" },
   { value: "dedicated_contracted", label: "Spot to Contracted Conversion" },
+  { value: "mini_bid", label: "Mini-Bid" },
+  { value: "project", label: "Project" },
+  { value: "other", label: "New Site, First Opp" },
 ];
 
 interface OpportunityLogDialogProps {
@@ -181,7 +181,7 @@ export function OpportunityLogDialog({ open, onOpenChange, companyId, companyNam
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="opp-value">Est. Value $ <span className="text-xs text-muted-foreground">(Margin, optional)</span></Label>
+              <Label htmlFor="opp-value">Est. Value $ <span className="text-xs text-muted-foreground">(optional)</span></Label>
               <Input
                 id="opp-value"
                 type="number"

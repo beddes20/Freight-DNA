@@ -10,12 +10,11 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   Users, Plus, CheckCircle2, Circle, Trash2, ChevronDown, ChevronUp,
-  Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle, History,
+  Archive, RotateCcw, MessageSquare, CalendarDays, AlertCircle,
   StickyNote, ClipboardList, CornerDownRight, CalendarClock, Pencil, X,
   BarChart2, Phone, Mail, MessageCircle, MapPin, Target, CheckCheck, Clock,
   Video, ExternalLink, Link, Lightbulb, Smile, Frown, Meh, Timer,
   SendHorizonal, ArrowRight, Sparkles, Loader2, AlertTriangle, Search,
-  Sun, XCircle, Minus, ClipboardCheck,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
@@ -63,22 +62,6 @@ function initials(name: string) {
 }
 
 // ─── Report Card types ────────────────────────────────────────────────────────
-
-interface LmCheckinSummary {
-  totalCheckins: number;
-  morningCount: number;
-  afternoonCount: number;
-  checkCallsDonePct: number | null;
-  boardCleanMorningPct: number | null;
-  boardCleanAfternoonPct: number | null;
-  checkoutDonePct: number | null;
-  recentCheckins: {
-    id: number; check_date: string; check_type: string;
-    check_calls_done: boolean | null; board_clean: boolean | null;
-    checkout_done: boolean | null; notes: string | null;
-    reviewer_name: string;
-  }[];
-}
 
 interface RepReportData {
   rep: { id: string; name: string; role: string };
@@ -176,7 +159,7 @@ function SessionNotesArea({ sessionId, initialNotes, sessionQueryKey }: { sessio
 
   useEffect(() => {
     setNotes(initialNotes);
-  }, [sessionId]);
+  }, [initialNotes, sessionId]);
 
   const saveNotes = useCallback(async (value: string) => {
     setSaving(true);
@@ -249,27 +232,20 @@ function DevelopmentGoalsPanel({ managerId, repId }: { managerId: string; repId:
   const [saveError, setSaveError] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const latestRef = useRef("");
-  const initializedForRef = useRef<string | null>(null);
-
-  const pairKey = `${managerId}:${repId}`;
 
   useEffect(() => {
-    if (data?.content !== undefined && initializedForRef.current !== pairKey) {
-      initializedForRef.current = pairKey;
+    if (data?.content !== undefined) {
       setContent(data.content);
       latestRef.current = data.content;
     }
-  }, [data?.content, pairKey]);
+  }, [data?.content]);
 
   const save = useCallback(async (value: string) => {
     setSaving(true);
     setSaveError(false);
     try {
       await apiRequest("PATCH", `/api/1on1/dev-goals?namId=${managerId}&amId=${repId}`, { content: value });
-      queryClient.setQueryData<{ content: string; updatedAt: string | null }>(devGoalsKey, (old) => {
-        if (!old) return { content: value, updatedAt: new Date().toISOString() };
-        return { ...old, content: value };
-      });
+      queryClient.invalidateQueries({ queryKey: devGoalsKey });
     } catch {
       setSaveError(true);
     } finally {
@@ -295,7 +271,7 @@ function DevelopmentGoalsPanel({ managerId, repId }: { managerId: string; repId:
 
   if (isLoading) {
     return (
-      <div className="p-4 md:p-6 space-y-3">
+      <div className="p-6 space-y-3">
         <Skeleton className="h-6 w-40" />
         <Skeleton className="h-40 w-full" />
       </div>
@@ -368,7 +344,7 @@ function ActionItemsPanel({ managerId, repId, allUsers }: ActionItemsPanelProps)
 
   if (isLoading) {
     return (
-      <div className="p-4 md:p-6 space-y-3">
+      <div className="p-6 space-y-3">
         <Skeleton className="h-8 w-48" />
         {[1, 2, 3].map(i => <Skeleton key={i} className="h-14 w-full" />)}
       </div>
@@ -731,7 +707,8 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
   const { toast } = useToast();
   const [newText, setNewText] = useState("");
   const [newTag, setNewTag] = useState("fyi");
-  const [activeTab, setActiveTab] = useState<"topics" | "action-items" | "dev-goals" | "history">("topics");
+  const [showArchived, setShowArchived] = useState(false);
+  const [activeTab, setActiveTab] = useState<"topics" | "action-items" | "dev-goals">("topics");
   const [topicPendingFiles, setTopicPendingFiles] = useState<PendingFile[]>([]);
   const [editingDate, setEditingDate] = useState(false);
   const [dateInput, setDateInput] = useState("");
@@ -754,19 +731,6 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
       return all.filter(g => g.amId === repId && g.startDate <= nowStr && g.endDate >= nowStr);
     },
     staleTime: 60000,
-  });
-
-  const repUser = allUsers.find(u => u.id === repId);
-  const isLmRep = repUser?.role === "logistics_manager" || repUser?.role === "logistics_coordinator";
-
-  const { data: lmCheckinSummary } = useQuery<LmCheckinSummary>({
-    queryKey: ["/api/lm-checkins/lm-summary", repId],
-    queryFn: async () => {
-      const res = await fetch(`/api/lm-checkins/lm-summary/${repId}?period=2weeks`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-    enabled: !!repId && isLmRep,
   });
 
   const weeklyReportKey = ["/api/report/rep", repId, "weekly"];
@@ -802,13 +766,12 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
       if (!res.ok) throw new Error("Failed");
       return res.json();
     },
-    refetchInterval: 30000,
   });
 
   const archivedKey = ["/api/1on1/archived", managerId, repId];
   const { data: archivedSessions = [], isLoading: archivedLoading } = useQuery<(OneOnOneSession & { topics: OneOnOneTopic[] })[]>({
     queryKey: archivedKey,
-    enabled: activeTab === "history",
+    enabled: showArchived,
     queryFn: async () => {
       const res = await fetch(`/api/1on1/archived?managerId=${managerId}&repId=${repId}`, { credentials: "include" });
       if (!res.ok) throw new Error("Failed");
@@ -969,6 +932,7 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
                 type="date"
                 className="h-7 px-2 text-xs border border-border rounded bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                 value={dateInput}
+                min={new Date().toISOString().split("T")[0]}
                 onChange={(e) => setDateInput(e.target.value)}
                 data-testid="input-meeting-date"
                 autoFocus
@@ -1158,69 +1122,6 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
         </div>
       )}
 
-      {/* LM Check-In Activity — shown when the 1:1 partner is an LM/LC */}
-      {isLmRep && lmCheckinSummary && lmCheckinSummary.totalCheckins > 0 && (
-        <div className="border-b bg-muted/20 px-6 py-4 space-y-3" data-testid="panel-lm-checkin-activity">
-          <div className="flex items-center gap-2">
-            <ClipboardCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-            <span className="text-sm font-semibold">Check-In Activity</span>
-            <span className="text-xs text-muted-foreground">last 2 weeks · {lmCheckinSummary.totalCheckins} check{lmCheckinSummary.totalCheckins !== 1 ? "s" : ""}</span>
-          </div>
-          {/* Stat row */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {[
-              { label: "Check Calls", pct: lmCheckinSummary.checkCallsDonePct, icon: <Sun className="h-3 w-3" /> },
-              { label: "AM Board", pct: lmCheckinSummary.boardCleanMorningPct, icon: <Sun className="h-3 w-3" /> },
-              { label: "Checkout", pct: lmCheckinSummary.checkoutDonePct, icon: <Clock className="h-3 w-3" /> },
-              { label: "PM Board", pct: lmCheckinSummary.boardCleanAfternoonPct, icon: <Clock className="h-3 w-3" /> },
-            ].map(stat => (
-              <div key={stat.label} className="rounded-lg border border-border bg-background p-2.5 text-center" data-testid={`checkin-stat-${stat.label.toLowerCase().replace(/\s+/g, "-")}`}>
-                <div className="flex items-center justify-center gap-0.5 text-xs text-muted-foreground mb-0.5">{stat.icon}{stat.label}</div>
-                {stat.pct === null
-                  ? <span className="text-base font-bold text-muted-foreground/30">—</span>
-                  : <span className={`text-base font-bold ${stat.pct >= 80 ? "text-emerald-600 dark:text-emerald-400" : stat.pct >= 50 ? "text-amber-500" : "text-red-500"}`}>{stat.pct}%</span>
-                }
-              </div>
-            ))}
-          </div>
-          {/* Recent log — compact */}
-          <div className="space-y-0.5">
-            {lmCheckinSummary.recentCheckins.slice(0, 6).map(r => (
-              <div key={r.id} className="flex items-center gap-2 text-xs py-1 border-b border-border/50 last:border-0" data-testid={`checkin-row-${r.id}`}>
-                <span className="text-muted-foreground w-20 shrink-0">{r.check_date}</span>
-                {r.check_type === "morning"
-                  ? <span className="flex items-center gap-0.5 text-amber-600 dark:text-amber-400 w-8 shrink-0"><Sun className="h-3 w-3" />AM</span>
-                  : <span className="flex items-center gap-0.5 text-blue-600 dark:text-blue-400 w-8 shrink-0"><Clock className="h-3 w-3" />PM</span>
-                }
-                {r.check_type === "morning" && (
-                  <span className="flex items-center gap-0.5 text-muted-foreground">
-                    {r.check_calls_done === true ? <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-                      : r.check_calls_done === false ? <XCircle className="h-3 w-3 text-red-500" />
-                      : <Minus className="h-3 w-3 text-muted-foreground/30" />}
-                    calls
-                  </span>
-                )}
-                {r.check_type === "afternoon" && (
-                  <span className="flex items-center gap-0.5 text-muted-foreground">
-                    {r.checkout_done === true ? <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-                      : r.checkout_done === false ? <XCircle className="h-3 w-3 text-red-500" />
-                      : <Minus className="h-3 w-3 text-muted-foreground/30" />}
-                    checkout
-                  </span>
-                )}
-                <span className="flex items-center gap-0.5 text-muted-foreground">
-                  {r.board_clean === true ? <CheckCircle2 className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
-                    : r.board_clean === false ? <XCircle className="h-3 w-3 text-red-500" />
-                    : <Minus className="h-3 w-3 text-muted-foreground/30" />}
-                  board
-                </span>
-                {r.notes && <span className="text-muted-foreground truncate max-w-[140px] italic">"{r.notes}"</span>}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Goals sync pill */}
       {repGoals.length > 0 && (() => {
         const onTrack = repGoals.filter(g => {
@@ -1305,19 +1206,6 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
           <span className="flex items-center gap-1.5">
             <Target className="h-4 w-4" />
             Development Goals
-          </span>
-        </button>
-        <button
-          onClick={() => setActiveTab("history")}
-          className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${activeTab === "history" ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400" : "border-transparent text-muted-foreground hover:text-foreground"}`}
-          data-testid="tab-session-history"
-        >
-          <span className="flex items-center gap-1.5">
-            <History className="h-4 w-4" />
-            Session History
-            {archivedSessions.length > 0 && (
-              <Badge variant="secondary" className="ml-1 text-xs h-5 min-w-[20px] flex items-center justify-center">{archivedSessions.length}</Badge>
-            )}
           </span>
         </button>
       </div>
@@ -1430,23 +1318,38 @@ function SessionPanel({ managerId, repId, currentUserId, allUsers }: SessionPane
             )}
           </div>
 
+          {/* Past sessions */}
+          <div className="border-t">
+            <button
+              className="flex items-center gap-2 w-full px-6 py-3 text-sm text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors"
+              onClick={() => setShowArchived(v => !v)}
+              data-testid="btn-toggle-archived"
+            >
+              <RotateCcw className="h-4 w-4" />
+              <span>Past Sessions</span>
+              {archivedSessions.length > 0 && (
+                <Badge variant="secondary" className="ml-1 text-xs">{archivedSessions.length}</Badge>
+              )}
+              <span className="ml-auto">
+                {showArchived ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              </span>
+            </button>
+
+            {showArchived && (
+              <div className="px-6 pb-6 space-y-3">
+                {archivedLoading ? (
+                  [1, 2].map(i => <Skeleton key={i} className="h-12 w-full" />)
+                ) : archivedSessions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-4">No past sessions yet</p>
+                ) : (
+                  archivedSessions.map(s => (
+                    <ArchivedSessionCard key={s.id} session={s} allUsers={allUsers} />
+                  ))
+                )}
+              </div>
+            )}
+          </div>
         </>
-      ) : activeTab === "history" ? (
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-3" data-testid="panel-session-history">
-          {archivedLoading ? (
-            [1, 2, 3].map(i => <Skeleton key={i} className="h-16 w-full" />)
-          ) : archivedSessions.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center text-muted-foreground">
-              <History className="h-10 w-10 mb-3 opacity-30" />
-              <p className="text-base font-medium">No past sessions yet</p>
-              <p className="text-sm mt-1">Closed sessions will appear here with their notes and topics</p>
-            </div>
-          ) : (
-            archivedSessions.map(s => (
-              <ArchivedSessionCard key={s.id} session={s} allUsers={allUsers} />
-            ))
-          )}
-        </div>
       ) : (
         <ActionItemsPanel managerId={managerId} repId={repId} allUsers={allUsers} />
       )}
@@ -1722,313 +1625,6 @@ function ArchivedSessionCard({ session, allUsers }: {
   );
 }
 
-// ─── Director View Tab ────────────────────────────────────────────────────────
-
-interface TeamSessionRecord {
-  session: Omit<OneOnOneSession, "moraleScore"> & { moraleScore?: never };
-  namUser: { id: string; name: string; role: string };
-  amUser: { id: string; name: string; role: string };
-  topics: Array<OneOnOneTopic & { replies: OneOnOneTopicReply[] }>;
-}
-
-function DirectorPairingCard({ record }: { record: TeamSessionRecord }) {
-  const [expanded, setExpanded] = useState(false);
-  const { session, namUser, amUser, topics } = record;
-
-  const pendingCount = topics.filter(t => t.status === "pending").length;
-  const discussedCount = topics.filter(t => t.status === "discussed").length;
-  const actionItems = topics.filter(t => t.tag === "action_item");
-
-  return (
-    <div className="border rounded-xl overflow-hidden bg-card" data-testid={`director-pairing-card-${session.id}`}>
-      <button
-        className="w-full flex items-center gap-4 px-5 py-4 hover:bg-muted/40 transition-colors text-left"
-        onClick={() => setExpanded(e => !e)}
-        data-testid={`btn-expand-pairing-${session.id}`}
-      >
-        <div className="flex items-center gap-3 flex-1 min-w-0">
-          <div className="flex -space-x-2">
-            <div className={`h-9 w-9 rounded-full flex items-center justify-center text-white text-xs font-semibold ring-2 ring-background shrink-0 ${avatarColor(namUser.name)}`}>
-              {initials(namUser.name)}
-            </div>
-            <div className={`h-9 w-9 rounded-full flex items-center justify-center text-white text-xs font-semibold ring-2 ring-background shrink-0 ${avatarColor(amUser.name)}`}>
-              {initials(amUser.name)}
-            </div>
-          </div>
-          <div className="min-w-0">
-            <p className="font-medium text-sm" data-testid={`text-pairing-names-${session.id}`}>
-              {namUser.name} &amp; {amUser.name}
-            </p>
-            <p className="text-xs text-muted-foreground truncate">
-              {namUser.role.replace(/_/g, " ")} · {amUser.role.replace(/_/g, " ")}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-3 shrink-0">
-          {session.meetingDate && (
-            <span className="flex items-center gap-1 text-xs text-muted-foreground" data-testid={`text-meeting-date-${session.id}`}>
-              <CalendarDays className="h-3 w-3" />
-              {formatDate(session.meetingDate)}
-            </span>
-          )}
-          <Badge variant={session.status === "active" ? "default" : "secondary"} className="text-xs" data-testid={`badge-session-status-${session.id}`}>
-            {session.status === "active" ? "Active" : "Archived"}
-          </Badge>
-          {pendingCount > 0 && (
-            <span className="flex items-center gap-1 text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400 px-1.5 py-0.5 rounded font-medium" data-testid={`text-pending-count-${session.id}`}>
-              <AlertCircle className="h-3 w-3" />
-              {pendingCount} open
-            </span>
-          )}
-          {expanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-        </div>
-      </button>
-
-      {expanded && (
-        <div className="border-t px-5 py-4 space-y-4" data-testid={`director-pairing-detail-${session.id}`}>
-          {/* Session metadata */}
-          <div className="flex flex-wrap items-center gap-4 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <CalendarDays className="h-3.5 w-3.5" />
-              Session started {formatDate(session.startDate)}
-            </span>
-            {session.closedAt && (
-              <span className="flex items-center gap-1">
-                <Archive className="h-3.5 w-3.5" />
-                Closed {formatDate(session.closedAt)}
-              </span>
-            )}
-            <span className="flex items-center gap-1">
-              <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-              {discussedCount} discussed
-            </span>
-            {actionItems.length > 0 && (
-              <span className="flex items-center gap-1 text-orange-600 dark:text-orange-400">
-                <ClipboardList className="h-3.5 w-3.5" />
-                {actionItems.filter(t => t.status === "pending").length} action items open
-              </span>
-            )}
-          </div>
-
-          {/* Session notes */}
-          {session.notes && session.notes.trim() && (
-            <div className="bg-muted/40 rounded-lg p-3 space-y-1" data-testid={`director-session-notes-${session.id}`}>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1">
-                <StickyNote className="h-3.5 w-3.5" />
-                Session Notes
-              </p>
-              <p className="text-sm whitespace-pre-wrap">{session.notes}</p>
-            </div>
-          )}
-
-          {/* Session summary */}
-          {session.sessionSummary && session.sessionSummary.trim() && (
-            <div className="bg-indigo-50 dark:bg-indigo-950/30 rounded-lg p-3 space-y-1">
-              <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 uppercase tracking-wide flex items-center gap-1">
-                <ClipboardCheck className="h-3.5 w-3.5" />
-                Session Summary
-              </p>
-              <p className="text-sm whitespace-pre-wrap text-indigo-900 dark:text-indigo-200">{session.sessionSummary}</p>
-            </div>
-          )}
-
-          {/* Topics list */}
-          {topics.length > 0 ? (
-            <div className="space-y-1.5">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
-                <MessageSquare className="h-3.5 w-3.5" />
-                Topics ({topics.length})
-              </p>
-              <div className="space-y-1">
-                {topics.map(topic => {
-                  const tag = TAG_CONFIG[topic.tag ?? "fyi"] || TAG_CONFIG.fyi;
-                  const isDiscussed = topic.status === "discussed";
-                  return (
-                    <div
-                      key={topic.id}
-                      className={`rounded-lg border bg-background p-3 space-y-2 ${isDiscussed ? "opacity-60" : ""}`}
-                      data-testid={`director-topic-${topic.id}`}
-                    >
-                      <div className="flex items-start gap-2.5">
-                        {isDiscussed
-                          ? <CheckCircle2 className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
-                          : <Circle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />}
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-sm ${isDiscussed ? "line-through text-muted-foreground" : ""}`} data-testid={`text-director-topic-${topic.id}`}>
-                            {topic.text}
-                          </p>
-                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                            {topic.tag && (
-                              <span className={`inline-flex items-center px-1.5 py-px rounded text-xs font-medium ${tag.color}`} data-testid={`badge-director-tag-${topic.id}`}>
-                                {tag.label}
-                              </span>
-                            )}
-                            <span className="text-xs text-muted-foreground">
-                              {new Date(topic.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Replies (read-only) */}
-                      {topic.replies.length > 0 && (
-                        <div className="ml-6 border-l-2 border-indigo-200 dark:border-indigo-800 pl-3 space-y-1.5" data-testid={`director-replies-${topic.id}`}>
-                          {topic.replies.map(reply => {
-                            const replyAuthor = reply.authorId === namUser.id ? namUser : reply.authorId === amUser.id ? amUser : null;
-                            const replyName = replyAuthor?.name ?? "Unknown";
-                            return (
-                              <div key={reply.id} className="flex items-start gap-1.5" data-testid={`director-reply-${reply.id}`}>
-                                <div className="flex-1 min-w-0">
-                                  <span className="text-xs font-medium">{replyName}</span>
-                                  <span className="text-[10px] text-muted-foreground ml-1.5">
-                                    {new Date(reply.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
-                                  </span>
-                                  <p className="text-xs text-foreground mt-0.5 break-words">{reply.text}</p>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div className="text-center py-6 text-muted-foreground">
-              <MessageSquare className="h-6 w-6 mx-auto mb-2 opacity-30" />
-              <p className="text-sm">No topics in this session</p>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DirectorViewTab() {
-  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "archived">("active");
-  const [searchQuery, setSearchQuery] = useState("");
-
-  const { data: teamSessions = [], isLoading } = useQuery<TeamSessionRecord[]>({
-    queryKey: ["/api/1on1/team-sessions"],
-    queryFn: async () => {
-      const res = await fetch("/api/1on1/team-sessions", { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch team sessions");
-      return res.json();
-    },
-    staleTime: 60000,
-  });
-
-  // Group sessions by pairing key (namId::amId)
-  const pairingMap = new Map<string, TeamSessionRecord[]>();
-  for (const record of teamSessions) {
-    const key = `${record.session.namId}::${record.session.amId}`;
-    const arr = pairingMap.get(key) ?? [];
-    arr.push(record);
-    pairingMap.set(key, arr);
-  }
-
-  // For each pairing, decide which records to show based on filter
-  type PairingGroup = { key: string; namUser: TeamSessionRecord["namUser"]; amUser: TeamSessionRecord["amUser"]; records: TeamSessionRecord[] };
-  const pairingGroups: PairingGroup[] = [];
-  for (const [key, records] of pairingMap) {
-    const filtered = records.filter(r => {
-      if (filterStatus === "active") return r.session.status === "active";
-      if (filterStatus === "archived") return r.session.status === "archived";
-      return true;
-    });
-    if (filtered.length > 0) {
-      pairingGroups.push({ key, namUser: records[0].namUser, amUser: records[0].amUser, records: filtered });
-    }
-  }
-
-  // Apply search filter
-  const query = searchQuery.trim().toLowerCase();
-  const filteredGroups = query
-    ? pairingGroups.filter(g =>
-        g.namUser.name.toLowerCase().includes(query) ||
-        g.amUser.name.toLowerCase().includes(query)
-      )
-    : pairingGroups;
-
-  // Sort pairings: active first, then by namUser name
-  filteredGroups.sort((a, b) => a.namUser.name.localeCompare(b.namUser.name));
-
-  if (isLoading) {
-    return (
-      <div className="flex-1 overflow-y-auto p-6 space-y-3">
-        {[1, 2, 3].map(i => <Skeleton key={i} className="h-20 w-full" />)}
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex-1 overflow-y-auto p-6 space-y-5" data-testid="director-view-tab">
-      {/* Filters / Search */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="flex items-center gap-1 p-1 rounded-lg bg-muted">
-          {(["active", "archived", "all"] as const).map(status => (
-            <button
-              key={status}
-              onClick={() => setFilterStatus(status)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors capitalize ${filterStatus === status ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-              data-testid={`btn-filter-${status}`}
-            >
-              {status === "all" ? "All" : status.charAt(0).toUpperCase() + status.slice(1)}
-            </button>
-          ))}
-        </div>
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Search by name…"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="w-full pl-8 pr-7 py-1.5 text-sm rounded-md border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            data-testid="input-director-search"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              data-testid="btn-clear-director-search"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-        <span className="text-xs text-muted-foreground shrink-0" data-testid="text-pairing-count">
-          {filteredGroups.length} pairing{filteredGroups.length !== 1 ? "s" : ""}
-        </span>
-      </div>
-
-      {filteredGroups.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-muted-foreground text-center">
-          <Users className="h-10 w-10 mb-3 opacity-30" />
-          <p className="text-base font-medium">No sessions found</p>
-          <p className="text-sm mt-1">
-            {searchQuery ? "Try a different search term" : "No 1:1 sessions exist for your team yet"}
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {filteredGroups.map(group => (
-            <div key={group.key} className="space-y-2">
-              {group.records.map(record => (
-                <DirectorPairingCard key={record.session.id} record={record} />
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ─── Pairing List sidebar ─────────────────────────────────────────────────────
 
 interface Pairing {
@@ -2244,8 +1840,6 @@ function PairingList({ pairings, selectedKey, onSelect, showNamLabel, userRole }
 export default function OneOnOnePage() {
   const { user } = useAuth();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [prepOpen, setPrepOpen] = useState(false);
-  const [pageTab, setPageTab] = useState<"my-sessions" | "team-view">("my-sessions");
 
   const { data: allUsers = [], isLoading: usersLoading } = useQuery<SafeUser[]>({
     queryKey: ["/api/team-members"],
@@ -2286,30 +1880,6 @@ export default function OneOnOnePage() {
   const managerId = activePairing?.namId ?? null;
   const repId = activePairing?.amId ?? null;
 
-  type PrepSummaryData = {
-    amName: string;
-    openTopics: number;
-    openActionItems: number;
-    touchesThisWeek: number;
-    touchesThisMonth: number;
-    coldAccounts: number;
-    lastSessionDate: string | null;
-    daysSinceSession: number | null;
-    goalSummary: { metric: string; label: string; current: number; target: number; pct: number }[];
-    recentTouchpoints: { companyName: string; type: string; date: string; note: string | null }[];
-    staleAccounts: { name: string; daysSince: number }[];
-  };
-  const { data: prepData, isLoading: prepLoading } = useQuery<PrepSummaryData>({
-    queryKey: ["/api/1on1/prep-summary", repId],
-    queryFn: async () => {
-      const res = await fetch(`/api/1on1/prep-summary?amId=${repId}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed");
-      return res.json();
-    },
-    enabled: prepOpen && !!repId,
-    staleTime: 60000,
-  });
-
   const pairingDisplayName = activePairing
     ? (isAM || activePairing.section === "upward" ? activePairing.namName : activePairing.amName)
     : null;
@@ -2319,14 +1889,12 @@ export default function OneOnOnePage() {
 
   if (usersLoading || pairingsLoading) {
     return (
-      <div className="p-4 md:p-6 space-y-4">
+      <div className="p-6 space-y-4">
         <Skeleton className="h-8 w-64" />
         <Skeleton className="h-96 w-full" />
       </div>
     );
   }
-
-  const isDirectorOrAdmin = user.role === "director" || user.role === "sales_director" || user.role === "admin";
 
   return (
     <div className="flex flex-col h-full">
@@ -2339,34 +1907,10 @@ export default function OneOnOnePage() {
           <h1 className="text-lg font-semibold" data-testid="text-page-title">1:1 Meetings</h1>
           <p className="text-xs text-muted-foreground">Track topics, action items, and session history</p>
         </div>
-        {/* Director page-level tab switcher */}
-        {isDirectorOrAdmin && (
-          <div className="ml-auto flex items-center gap-1 p-1 rounded-lg bg-muted">
-            <button
-              onClick={() => setPageTab("my-sessions")}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${pageTab === "my-sessions" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-              data-testid="btn-page-tab-my-sessions"
-            >
-              My Sessions
-            </button>
-            <button
-              onClick={() => setPageTab("team-view")}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${pageTab === "team-view" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-              data-testid="btn-page-tab-team-view"
-            >
-              Team 1:1s
-            </button>
-          </div>
-        )}
       </div>
 
-      {/* Director View Tab */}
-      {isDirectorOrAdmin && pageTab === "team-view" && (
-        <DirectorViewTab />
-      )}
-
-      {/* Body — shown when on my-sessions tab */}
-      {pageTab === "my-sessions" && <div className="flex flex-1 overflow-hidden">
+      {/* Body */}
+      <div className="flex flex-1 overflow-hidden">
         {/* Sidebar: pairing list for managers/admins */}
         {!isAM && pairings.length > 1 && (
           <PairingList
@@ -2390,22 +1934,10 @@ export default function OneOnOnePage() {
                       {initials(pairingDisplayName)}
                     </div>
                   )}
-                  <div className="flex-1 min-w-0">
+                  <div>
                     <h2 className="font-semibold" data-testid="text-pairing-title">{pairingTitle}</h2>
                     <p className="text-xs text-muted-foreground">Add topics anytime — discuss them in your next meeting</p>
                   </div>
-                  {!isAM && repId && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="shrink-0 text-xs gap-1.5"
-                      onClick={() => setPrepOpen(true)}
-                      data-testid="btn-prep-summary"
-                    >
-                      <ClipboardList className="h-3.5 w-3.5" />
-                      Prep Summary
-                    </Button>
-                  )}
                 </div>
               </div>
               <SessionPanel
@@ -2433,112 +1965,7 @@ export default function OneOnOnePage() {
             </div>
           )}
         </div>
-      </div>}
-
-      {/* Prep Summary Modal */}
-      <Dialog open={prepOpen} onOpenChange={setPrepOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ClipboardList className="h-4 w-4 text-indigo-500" />
-              Prep Summary — {prepData?.amName ?? pairingDisplayName ?? "Rep"}
-            </DialogTitle>
-          </DialogHeader>
-
-          {prepLoading ? (
-            <div className="space-y-3 py-2">
-              {[1,2,3,4].map(i => <Skeleton key={i} className="h-12 w-full" />)}
-            </div>
-          ) : !prepData ? (
-            <p className="text-sm text-muted-foreground text-center py-6">No prep data available.</p>
-          ) : (
-            <div className="space-y-5 py-1">
-              {/* Quick stats row */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {[
-                  { label: "Open Topics", value: prepData.openTopics, color: "text-indigo-600 dark:text-indigo-400" },
-                  { label: "Action Items", value: prepData.openActionItems, color: "text-amber-600 dark:text-amber-400" },
-                  { label: "Touches (wk)", value: prepData.touchesThisWeek, color: "text-emerald-600 dark:text-emerald-400" },
-                  { label: "Cold Accounts", value: prepData.coldAccounts, color: prepData.coldAccounts > 0 ? "text-red-500 dark:text-red-400" : "text-muted-foreground" },
-                ].map(stat => (
-                  <div key={stat.label} className="rounded-lg bg-muted/50 px-3 py-2 text-center">
-                    <div className={`text-2xl font-bold ${stat.color}`}>{stat.value}</div>
-                    <div className="text-xs text-muted-foreground mt-0.5">{stat.label}</div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Last session */}
-              {prepData.lastSessionDate && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <CalendarDays className="h-4 w-4 shrink-0" />
-                  <span>Last session: <span className="font-medium text-foreground">{new Date(prepData.lastSessionDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</span></span>
-                  {prepData.daysSinceSession != null && <span>({prepData.daysSinceSession} days ago)</span>}
-                </div>
-              )}
-
-              {/* Goal progress */}
-              {prepData.goalSummary.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Goal Progress</p>
-                  <div className="space-y-2">
-                    {prepData.goalSummary.map((g, i) => (
-                      <div key={i}>
-                        <div className="flex items-center justify-between text-xs mb-1">
-                          <span className="font-medium text-foreground">{g.label}</span>
-                          <span className={`font-semibold ${g.pct >= 90 ? "text-emerald-600 dark:text-emerald-400" : g.pct >= 60 ? "text-amber-500" : "text-red-500"}`}>{g.current}/{g.target} ({g.pct}%)</span>
-                        </div>
-                        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                          <div className={`h-full rounded-full transition-all ${g.pct >= 90 ? "bg-emerald-500" : g.pct >= 60 ? "bg-amber-400" : "bg-red-400"}`} style={{ width: `${Math.min(g.pct, 100)}%` }} />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Recent touchpoints */}
-              {prepData.recentTouchpoints.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Recent Activity (last 7 days)</p>
-                  <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                    {prepData.recentTouchpoints.map((tp, i) => (
-                      <div key={i} className="flex items-start gap-2 text-xs">
-                        <span className="shrink-0 mt-0.5">
-                          {tp.type === "call" ? <Phone className="h-3 w-3 text-emerald-500" /> : tp.type === "email" ? <Mail className="h-3 w-3 text-blue-500" /> : tp.type === "text" ? <MessageCircle className="h-3 w-3 text-purple-500" /> : <MapPin className="h-3 w-3 text-orange-500" />}
-                        </span>
-                        <span className="font-medium text-foreground flex-1 truncate">{tp.companyName}</span>
-                        {tp.note && <span className="text-muted-foreground italic truncate max-w-[160px]">{tp.note}</span>}
-                        <span className="text-muted-foreground shrink-0">{new Date(tp.date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Stale accounts */}
-              {prepData.staleAccounts.length > 0 && (
-                <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-1">
-                    <AlertTriangle className="h-3 w-3 text-amber-500" /> Cold Accounts
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {prepData.staleAccounts.map((a, i) => (
-                      <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-800 dark:text-amber-300 font-medium">
-                        {a.name} · {a.daysSince}d
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setPrepOpen(false)} data-testid="btn-prep-close">Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </div>
     </div>
   );
 }

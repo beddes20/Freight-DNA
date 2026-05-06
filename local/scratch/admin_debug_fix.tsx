@@ -1,1 +1,0 @@
-                              {" | "}{item.lane.avgLoadsPerWeek ?? "—"}/wk

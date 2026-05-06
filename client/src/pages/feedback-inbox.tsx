@@ -252,7 +252,7 @@ export default function FeedbackInboxPage() {
     const type = detectType(item.content);
     if (tab === "resolved") return item.status === "resolved";
     if (tab !== "all" && type !== tab) return false;
-    if (item.status === "resolved") return false;
+    if (tab !== "resolved" && item.status === "resolved") return false;
     if (search) {
       const q = search.toLowerCase();
       return (
@@ -280,7 +280,7 @@ export default function FeedbackInboxPage() {
   ];
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-4 md:space-y-6">
+    <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div>
         <h1 className="text-2xl font-bold">Feedback Inbox</h1>
         <p className="text-sm text-muted-foreground mt-1">

@@ -250,9 +250,9 @@ export function CalloutDialog({ open, onOpenChange, companyId, parentId, parentT
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">No tag</SelectItem>
+                    <SelectItem value="Trend">Trend</SelectItem>
                     <SelectItem value="Callout">Callout</SelectItem>
                     <SelectItem value="Idea">Idea</SelectItem>
-                    <SelectItem value="Trend">Trend</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -266,7 +266,7 @@ export function CalloutDialog({ open, onOpenChange, companyId, parentId, parentT
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">No account linked</SelectItem>
-                      {[...companies].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+                      {companies.map(c => (
                         <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                       ))}
                     </SelectContent>

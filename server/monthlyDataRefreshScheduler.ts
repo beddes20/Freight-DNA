@@ -2,8 +2,6 @@ import cron from "node-cron";
 import XLSX from "xlsx";
 import { storage } from "./storage";
 import { isFirstBusinessDay } from "./monthlyGoalScheduler";
-import { getGraphAccessToken, azureCredentialsConfigured } from "./graphService";
-import { resilientFetch } from "./lib/httpRetry";
 
 function logMessage(message: string): void {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
@@ -123,70 +121,33 @@ function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
 }
 
 export async function performOneDriveSync(uploadedBy: string): Promise<{ id: string; fileName: string; rowCount: number }> {
-  const filePath = await storage.getSetting("onedrive_url");
-  if (!filePath) {
-    throw new Error("No OneDrive file path configured. Please save a OneDrive file path or item URL first.");
+  const shareUrl = await storage.getSetting("onedrive_url");
+  if (!shareUrl) {
+    throw new Error("No OneDrive URL configured. Please save a OneDrive share link first.");
   }
 
-  if (!azureCredentialsConfigured()) {
-    throw new Error(
-      "Azure credentials are not configured. OneDrive sync requires OUTLOOK_TENANT_ID, OUTLOOK_CLIENT_ID, and OUTLOOK_CLIENT_SECRET to be set."
-    );
+  const base64 = Buffer.from(shareUrl)
+    .toString("base64")
+    .replace(/=/g, "")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_");
+
+  // Try Microsoft Graph API first (works for OneDrive for Business / Microsoft 365),
+  // then fall back to the personal OneDrive API.
+  const endpoints = [
+    `https://graph.microsoft.com/v1.0/shares/u!${base64}/driveItem/content`,
+    `https://api.onedrive.com/v1.0/shares/u!${base64}/root/content`,
+  ];
+
+  let response: Response | null = null;
+  let lastStatus = 0;
+  for (const url of endpoints) {
+    const r = await fetch(url, { redirect: "follow" });
+    if (r.ok) { response = r; break; }
+    lastStatus = r.status;
   }
-
-  const token = await getGraphAccessToken();
-
-  // Determine the Graph API content URL from the configured value.
-  // Supported formats:
-  //   1. OneDrive share link: https://1drv.ms/... or https://onedrive.live.com/...
-  //   2. Full Graph API URL: https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}/content
-  //   3. Drive item URL without /content suffix (append it automatically)
-  //   4. Relative path like /drives/{driveId}/items/{itemId} or drives/{driveId}/items/{itemId}
-  let contentUrl: string;
-  const trimmed = filePath.trim();
-
-  if (trimmed.startsWith("https://1drv.ms/") || trimmed.startsWith("https://onedrive.live.com/") || trimmed.startsWith("https://sharepoint.com/") || trimmed.includes("sharepoint.com/")) {
-    // OneDrive/SharePoint share link — convert to Graph shares URL
-    // Encoding: "u!" + base64url(url) with no padding
-    const encoded = "u!" + Buffer.from(trimmed).toString("base64").replace(/=/g, "").replace(/\//g, "_").replace(/\+/g, "-");
-    contentUrl = `https://graph.microsoft.com/v1.0/shares/${encoded}/driveItem/content`;
-  } else if (trimmed.startsWith("https://graph.microsoft.com/")) {
-    // Already a full Graph URL — use as-is, but ensure it ends with /content
-    contentUrl = trimmed.endsWith("/content") ? trimmed : `${trimmed}/content`;
-  } else if (trimmed.startsWith("/") || trimmed.startsWith("drives/") || trimmed.startsWith("users/") || trimmed.startsWith("me/")) {
-    // Relative path — prepend base URL
-    const rel = trimmed.startsWith("/") ? trimmed.slice(1) : trimmed;
-    const withContent = rel.endsWith("/content") ? rel : `${rel}/content`;
-    contentUrl = `https://graph.microsoft.com/v1.0/${withContent}`;
-  } else {
-    // Unrecognized format — surface a clear, actionable error
-    throw new Error(
-      `Unrecognized OneDrive path format. Please use one of these formats:\n` +
-      `  • Share link:   https://1drv.ms/x/... (paste the link from OneDrive "Share" dialog)\n` +
-      `  • Full URL:     https://graph.microsoft.com/v1.0/drives/{driveId}/items/{itemId}/content\n` +
-      `  • Relative:     drives/{driveId}/items/{itemId}\n` +
-      `  • User path:    users/{userId}/drive/root:/{path-to-file}\n` +
-      `Note: Share links require the Azure app to have Files.Read.All application permission. ` +
-      `A standalone item ID is not supported — a driveId is required.`
-    );
-  }
-
-  const response = await resilientFetch("onedrive", () => fetch(contentUrl, {
-    headers: { Authorization: `Bearer ${token}` },
-    redirect: "follow",
-  }));
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    let friendlyError: string;
-    if (response.status === 401 || response.status === 403) {
-      friendlyError = `Permission denied (HTTP ${response.status}). Make sure the Azure app has the Files.Read.All application permission granted in Azure Portal.`;
-    } else if (response.status === 404) {
-      friendlyError = `File not found (HTTP 404). Please check the OneDrive file path or item URL is correct.`;
-    } else {
-      friendlyError = `Graph API error (HTTP ${response.status}): ${errorText}`;
-    }
-    throw new Error(friendlyError);
+  if (!response) {
+    throw new Error(`Failed to fetch file from OneDrive (HTTP ${lastStatus}). Make sure the share link allows "Anyone with the link" to view and that it is a direct share link (not a folder link).`);
   }
 
   const arrayBuffer = await response.arrayBuffer();

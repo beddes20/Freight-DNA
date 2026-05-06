@@ -3,7 +3,13 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
-import { ResponsiveDialog } from "@/components/responsive-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -24,7 +30,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import type { Company, Task, User, TaskComment } from "@shared/schema";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
-import { CarrierProcurementWorkspace, type ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
 
 type SafeUser = Omit<User, "password">;
 
@@ -38,7 +43,6 @@ interface PrefillData {
   title: string;
   notes?: string;
   attachedLaneData?: any[];
-  opportunityId?: number;
 }
 
 interface TaskDialogProps {
@@ -278,7 +282,6 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
           assignedTo,
           companyId: effectiveCompanyId && effectiveCompanyId !== "none" ? effectiveCompanyId : null,
           attachedLaneData,
-          opportunityId: prefillData?.opportunityId ?? null,
         });
         taskResult = await res.json() as { id: string };
       }
@@ -356,17 +359,15 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
 
   const showAttachSection = !editingTask && !prefillData && (effectiveCompanyId && effectiveCompanyId !== "none");
 
-  const dialogTitle = prefillData ? "Force Task from Lane" : forwardingTask ? "Forward Task" : editingTask ? "Edit Task" : "New Task";
-
   return (
-    <ResponsiveDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title={dialogTitle}
-      className="sm:max-w-lg max-h-[85vh] overflow-y-auto"
-      footer={undefined}
-    >
-        <form onSubmit={handleSubmit} className="space-y-4" data-testid="task-form">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle data-testid="text-task-dialog-title">
+            {prefillData ? "Force Task from Lane" : forwardingTask ? "Forward Task" : editingTask ? "Edit Task" : "New Task"}
+          </DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="task-title">Title</Label>
             <Input
@@ -505,7 +506,7 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">No account linked</SelectItem>
-                  {[...companies].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+                  {companies.map(c => (
                     <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -587,26 +588,6 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
               )}
             </div>
           )}
-
-          {editingTask && Array.isArray(editingTask.attachedLaneData) && (() => {
-            const procLanes = (editingTask.attachedLaneData as unknown as ProcurementLaneInfo[]).filter(
-              (l) =>
-                l != null &&
-                typeof l === "object" &&
-                l.type === "carrier_procurement" &&
-                typeof l.lane === "string" &&
-                typeof l.awardId === "string"
-            );
-            if (procLanes.length === 0) return null;
-            return (
-              <div className="border rounded-lg p-3" data-testid="section-procurement-workspace">
-                <CarrierProcurementWorkspace
-                  lanes={procLanes}
-                  fallbackTaskId={editingTask.id}
-                />
-              </div>
-            );
-          })()}
 
           <FileAttachmentUpload
             pendingFiles={pendingFiles}
@@ -738,14 +719,17 @@ export function TaskDialog({ open, onOpenChange, companyId, editingTask, forward
             </div>
           )}
 
-          <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-task-cancel">Cancel</Button>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-task-cancel">
+              Cancel
+            </Button>
             <Button type="submit" disabled={isPending || (forwardingTask ? !assignedTo : (!title.trim() || (!editingTask && !assignedTo)))} data-testid="button-task-save">
               {isPending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
               {prefillData ? "Create Task" : forwardingTask ? "Forward Task" : editingTask ? "Save Changes" : "Create Task"}
             </Button>
-          </div>
+          </DialogFooter>
         </form>
-    </ResponsiveDialog>
+      </DialogContent>
+    </Dialog>
   );
 }

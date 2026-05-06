@@ -54,62 +54,6 @@ function StatusBadge({ value }: { value: boolean | null }) {
   );
 }
 
-function isWeekday(dateStr: string): boolean {
-  const d = new Date(dateStr + "T12:00:00");
-  const dow = d.getDay();
-  return dow >= 1 && dow <= 5;
-}
-
-function computeSummary(
-  log: LmDailyCheck[],
-  field: "callsBeforeSevenThirty" | "checkoutCompleted",
-  today: string
-) {
-  const now = new Date(today + "T12:00:00");
-  const nowDay = now.getDay();
-  const mondayOffset = nowDay === 0 ? -6 : 1 - nowDay;
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() + mondayOffset);
-  const weekStartStr = weekStart.toISOString().slice(0, 10);
-
-  const monthStart = today.slice(0, 8) + "01";
-
-  let weekHit = 0;
-  let weekTotal = 0;
-  let monthHit = 0;
-  let monthTotal = 0;
-
-  const allEntries = new Map<string, LmDailyCheck>();
-  for (const e of log) {
-    allEntries.set(e.date, e);
-  }
-
-  let d = new Date(weekStartStr + "T12:00:00");
-  const todayDate = new Date(today + "T12:00:00");
-  while (d <= todayDate) {
-    const ds = d.toISOString().slice(0, 10);
-    if (isWeekday(ds)) {
-      weekTotal++;
-      const entry = allEntries.get(ds);
-      if (entry && entry[field] === true) weekHit++;
-    }
-    d.setDate(d.getDate() + 1);
-  }
-
-  d = new Date(monthStart + "T12:00:00");
-  while (d <= todayDate) {
-    const ds = d.toISOString().slice(0, 10);
-    if (isWeekday(ds)) {
-      monthTotal++;
-      const entry = allEntries.get(ds);
-      if (entry && entry[field] === true) monthHit++;
-    }
-    d.setDate(d.getDate() + 1);
-  }
-
-  return { weekHit, weekTotal, monthHit, monthTotal };
-}
-
 function CheckInPortlet({
   title,
   icon: Icon,
@@ -135,8 +79,6 @@ function CheckInPortlet({
   const todayValue = todayEntry ? todayEntry[field] : null;
 
   const pastEntries = log.filter(e => e.date !== today).slice(0, 30);
-
-  const { weekHit, weekTotal, monthHit, monthTotal } = computeSummary(log, field, today);
 
   return (
     <Card data-testid={`card-lm-checkin-${field}`}>
@@ -178,20 +120,6 @@ function CheckInPortlet({
               </Button>
             </div>
           )}
-        </div>
-
-        <div
-          className="flex items-center gap-4 px-1 text-xs text-muted-foreground"
-          data-testid={`summary-checkin-${field}`}
-        >
-          <span>
-            <span className="font-medium text-foreground">This Week:</span>{" "}
-            <span data-testid={`summary-week-${field}`}>{weekHit}/{weekTotal} days</span>
-          </span>
-          <span>
-            <span className="font-medium text-foreground">This Month:</span>{" "}
-            <span data-testid={`summary-month-${field}`}>{monthHit}/{monthTotal} days</span>
-          </span>
         </div>
 
         {pastEntries.length > 0 && (

@@ -13,13 +13,12 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Trophy, TruckIcon, MapPin, DollarSign, CheckCircle, ChevronDown, ChevronUp, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
-import type { Rfp, Company, Award } from "@shared/schema";
+import type { Rfp, Company } from "@shared/schema";
 
 interface ConvertToAwardDialogProps {
   rfp: Rfp | null;
   company?: Company;
   onClose: () => void;
-  onCreated?: (award: Award) => void;
 }
 
 function formatLane(row: Record<string, any>): string {
@@ -33,7 +32,7 @@ function formatLane(row: Record<string, any>): string {
   return `${origin} → ${dest}${vol}`;
 }
 
-export function ConvertToAwardDialog({ rfp, company, onClose, onCreated }: ConvertToAwardDialogProps) {
+export function ConvertToAwardDialog({ rfp, company, onClose }: ConvertToAwardDialogProps) {
   const { toast } = useToast();
 
   const rfpRows: Record<string, any>[] = (() => {
@@ -71,7 +70,7 @@ export function ConvertToAwardDialog({ rfp, company, onClose, onCreated }: Conve
         ? allLaneLabels.filter((_, i) => selectedLanes.has(i))
         : manualLanes.split(",").map((l) => l.trim()).filter(Boolean);
 
-      const awardRes = await apiRequest("POST", "/api/awards", {
+      await apiRequest("POST", "/api/awards", {
         companyId: rfp!.companyId,
         title,
         value: value || null,
@@ -81,16 +80,13 @@ export function ConvertToAwardDialog({ rfp, company, onClose, onCreated }: Conve
         fileName: null,
         fileData: null,
       });
-      const createdAward = await awardRes.json() as Award;
 
       await apiRequest("PATCH", `/api/rfps/${rfp!.id}`, {
         ...rfp,
         status: "awarded",
       });
-
-      return createdAward;
     },
-    onSuccess: (createdAward: Award) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/awards"] });
       queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
       queryClient.invalidateQueries({ queryKey: ["/api/companies"] });
@@ -99,7 +95,6 @@ export function ConvertToAwardDialog({ rfp, company, onClose, onCreated }: Conve
         description: `${company?.name ?? "Account"} marked as won — RFP status updated to Awarded.`,
       });
       onClose();
-      onCreated?.(createdAward);
     },
     onError: (err: Error) => {
       toast({ title: "Failed to create award", description: err.message, variant: "destructive" });

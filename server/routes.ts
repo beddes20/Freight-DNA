@@ -1,134 +1,199 @@
 import type { Express } from "express";
-import { pStr, qStr, qOptStr } from "./lib/req";
 import { createServer, type Server } from "http";
 import { registerChatbotRoutes } from "./chatbot";
-import { registerTaskRoutes } from "./routes/tasks";
-import { registerEngagementRoutes } from "./routes/engagement";
-import { registerCoachingRoutes } from "./routes/coaching";
-import { registerProspectRoutes } from "./routes/prospects";
-import { registerFinancialRoutes } from "./routes/financials";
-import { registerLoadFactRoutes } from "./routes/loadFact";
-import { registerCarrierIntelligenceScoringRoutes } from "./routes/carrierIntelligenceScoring";
-import { registerHeroSliceAdminRoutes } from "./routes/heroSliceAdmin";
-import { registerAdminEmailDerivedCompaniesRoutes } from "./routes/adminEmailDerivedCompanies";
-import { registerCarrierIntelligencePrefsRoutes } from "./routes/carrierIntelligencePrefs";
-import { registerGoalRoutes } from "./routes/goals";
-import { registerDashboardRoutes } from "./routes/dashboard";
-import { registerForcedFocusRoutes } from "./routes/forcedFocus";
-import { registerLaneCarrierOutreachRoutes } from "./routes/laneCarrierOutreach";
-import { registerLaneSwitchboardRoutes } from "./routes/laneSwitchboard";
-import { registerLaneCockpitRoutes } from "./routes/laneCockpit";
-import { registerTodayQueueRoutes } from "./routes/todayQueue";
-import { registerCarrierHubRoutes } from "./routes/carrierHub";
-import { registerMyProcurementRoutes } from "./routes/myProcurement";
-import { registerWonLoadAutopilotRoutes } from "./routes/wonLoadAutopilot";
-import { registerCapacityMatchesRoutes } from "./routes/capacityMatches";
-import { registerCompanyCollaboratorRoutes } from "./routes/companyCollaborators";
-import { registerProcurementOutreachRoutes } from "./routes/procurementOutreach";
-import { registerProactiveOpportunityRoutes } from "./routes/proactiveOpportunities";
-import { registerFreightCockpitRoutes } from "./routes/freightOpportunityCockpit";
-import { registerFreightConversionFailuresRoutes } from "./routes/freightConversionFailures";
-import { registerQuotePipelineHealthRoutes } from "./routes/quotePipelineHealth";
-import { registerIntelRoutes } from "./routes/intel";
-import { registerGraphWebhookRoutes } from "./routes/graphWebhook";
-import { registerMarketSignalRoutes } from "./routes/marketSignals";
-import { registerEmailIntelligenceRoutes } from "./routes/emailIntelligence";
-import { registerEmailFactsRoutes } from "./routes/emailFacts";
-import { registerConversationsRoutes } from "./routes/conversations";
-import { registerProvenTacticsRoutes } from "./routes/provenTactics";
-import { registerPlaybookRoutes } from "./routes/playbook";
-import { registerEmailAnalyticsRoutes } from "./routes/emailAnalytics";
-import { registerGeographicResponsibilitiesRoutes } from "./routes/geographicResponsibilities";
-import { registerContactGeographySuggestionRoutes } from "./routes/contactGeographySuggestions";
-import { registerSonarRoutes } from "./routes/sonar";
-import { registerCallIntelligenceRoutes } from "./routes/callIntelligence";
-import { registerAIIntelligenceRoutes } from "./routes/aiIntelligence";
-import { registerDocumentRoutes } from "./routes/documents";
-import { registerCopilotCardRoutes } from "./routes/copilotCards";
-import { getPlayForRuleType } from "./playsRegistry";
-import { ruleTypeToBucket, BUCKET_ORDER, BUCKET_PRIORITY, type WorkspaceBucket } from "./lib/dailyWorkspaceBuckets";
-import { registerEmailDraftingRoutes } from "./routes/emailDrafting";
-import { registerNbaReadyToActRoutes } from "./routes/nbaReadyToAct";
-import { registerMonitoredMailboxRoutes } from "./routes/monitoredMailboxes";
-import { registerEmailPipelineOpsRoutes } from "./routes/emailPipelineOps";
-import { registerPodIntakeRoutes } from "./routes/podIntake";
-import { registerWebexRoutes } from "./routes/webex";
-import { registerCallTrendlineRoutes } from "./routes/callTrendlines";
-import { registerCustomerQuoteRoutes } from "./routes/customerQuotes";
-import { registerLiveSyncRoutes } from "./routes/liveSync";
-import { publish as publishLiveSync, subscribeAll as subscribeAllLiveSync } from "./services/liveSync";
-import { registerLaneInboxRoutes } from "./routes/laneInbox";
-import { registerLeakConsoleRoutes } from "./routes/leakConsole";
-import { registerLaneStoryRoutes } from "./routes/laneStory";
-import { registerNotificationRoutes } from "./routes/notifications";
-import { registerContextNotesRoutes } from "./routes/contextNotes";
-import { registerContactRoutes } from "./routes/contacts";
-import { registerCompanyRoutes } from "./routes/companies";
-import { createRateLimiter } from "./lib/rateLimiter";
 import { readFileSync } from "fs";
 import { join } from "path";
 import multer from "multer";
 import XLSX from "xlsx";
 import bcrypt from "bcrypt";
 import { storage } from "./storage";
-import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany, getVisibleRepUserIds, canSeeRepUser } from "./auth";
-import { isAdmin, isLeadership, canEditOtherUsers, isAdminOrDirector } from "./lib/roles";
-import { fanOutCelebration } from "./lib/fanOutCelebration";
-import { getErrorMessage } from "./lib/errors";
-import { projectNbaCard, collectProjectionIds } from "./lib/nbaCardProjection";
+import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "./auth";
 import { geocodeCity, haversineDistance } from "./geocoding";
-import { insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, type UserRole, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, contactBaseHistory, insertLaneCarrierSchema, internalPosts as internalPostsTable, upsertSidebarTooltipSchema, type Contact, type RecurringLane } from "@shared/schema";
-import { normalizeLaneLocation, normalizeEquipmentType } from "@shared/laneFormatters";
+import { insertCompanySchema, insertContactSchema, insertRfpSchema, insertAwardSchema, insertTaskSchema, userRoles, insertCalloutSchema, insertFeedPostSchema, type Callout, insertOneOnOneTopicSchema, type User, sharedRepSchema, type SharedRep, contactBaseHistory } from "@shared/schema";
 import { performOneDriveSync } from "./monthlyDataRefreshScheduler";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getSalespersonFromRow, getStatusFromRow, getCustomerFromRow, type FinancialCols } from "./colResolver";
-import { isExcludedRow, parseHistoricalRow, isBadSummaryData, computeLoadsForRepGoal, extractSheetsFromWorkbook, toMonthKey } from "./financialHelpers";
 import { analyzeTouchpointNote } from "./aiTouchpoint";
-import { computeGrowthScore } from "./growthScoreCalculator";
-import { checkAndFireMomentumDropNotification } from "./momentumNotifications";
-import { computeNextBestAction } from "./nextBestActionEngine";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
-import { getUncachableStripeClient, getStripePublishableKey } from "./stripeClient";
-import { db } from "./storage";
-import { sql, eq, and, desc, inArray } from "drizzle-orm";
+
+// Customer/ops-user codes that must never appear in any financial report, summary, or aggregation.
+const EXCLUDED_FINANCIAL_CODES = new Set(["valubuaz"]);
+
+/** Returns true if a financial row should be excluded from all processing. */
+function isExcludedRow(row: any, cols: FinancialCols): boolean {
+  const customer = getCustomerFromRow(row, cols).toLowerCase();
+  const rep = getRepFromRow(row, cols).toLowerCase();
+  for (const code of EXCLUDED_FINANCIAL_CODES) {
+    if (customer.includes(code) || rep.includes(code)) return true;
+  }
+  return false;
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
-
-const bulkImportRateLimit = createRateLimiter(10, 60_000, "Too many bulk-import requests. Please wait a moment.");
-const aiPreviewRateLimit = createRateLimiter(20, 60_000, "AI rate limit exceeded. Please wait a moment.");
 
 const zipCodeMap: Record<string, string> = JSON.parse(
   readFileSync(join(process.cwd(), "server", "zipcodes.json"), "utf-8")
 );
-
-// Build 3-digit zip prefix → best representative city map at startup
-const zipPrefixMap: Record<string, string> = (() => {
-  const prefixCities: Record<string, Record<string, number>> = {};
-  for (const [zip, city] of Object.entries(zipCodeMap)) {
-    const prefix = zip.substring(0, 3);
-    if (!prefixCities[prefix]) prefixCities[prefix] = {};
-    prefixCities[prefix][city] = (prefixCities[prefix][city] || 0) + 1;
-  }
-  const result: Record<string, string> = {};
-  for (const [prefix, cities] of Object.entries(prefixCities)) {
-    const best = Object.entries(cities).sort((a, b) => b[1] - a[1])[0];
-    if (best) result[prefix] = best[0]; // e.g. "217" -> "Hagerstown, MD"
-  }
-  return result;
-})();
 
 function findSheetByName(workbook: XLSX.WorkBook, preferredName: string): string {
   const match = workbook.SheetNames.find(s => s.trim().toLowerCase() === preferredName.toLowerCase());
   return match || workbook.SheetNames[0];
 }
 
+// Guard against bad summary rows (documentation/description strings stored instead of real customer data)
+function isBadSummaryData(rows: any[]): boolean {
+  if (!rows.length) return true;
+  const firstRow = rows[0];
+  const usesEmpty = "__EMPTY" in firstRow;
+  const sampleNames = rows.slice(0, 5).map((r: any) =>
+    String(usesEmpty ? (r["__EMPTY"] || "") : (r["Customer Name"] || r["customer name"] || "")).trim()
+  );
+  return sampleNames.every(name =>
+    name.length > 60 ||
+    name.includes("—") ||
+    name.toLowerCase().startsWith("use") ||
+    name.toLowerCase().startsWith("remove") ||
+    name.toLowerCase().startsWith("date")
+  );
+}
+
+function extractSheetsFromWorkbook(workbook: XLSX.WorkBook) {
+  const readSheet = (name: string): any[] => {
+    const match = workbook.SheetNames.find(s => s.trim().toLowerCase() === name.toLowerCase());
+    if (!match) return [];
+    return XLSX.utils.sheet_to_json(workbook.Sheets[match], { defval: "" });
+  };
+
+  // Smart reader: skips decorative title rows and uses the first row with ≥2 real string headers
+  const readSheetSmart = (name: string): any[] => {
+    const match = workbook.SheetNames.find(s => s.trim().toLowerCase() === name.toLowerCase());
+    if (!match) return [];
+    const raw: any[][] = XLSX.utils.sheet_to_json(workbook.Sheets[match], { header: 1, defval: "" }) as any[][];
+    let headerIdx = 0;
+    for (let i = 0; i < Math.min(10, raw.length); i++) {
+      const row = raw[i];
+      const nonEmpty = row.filter((c: any) => c !== "" && c !== null && c !== undefined);
+      const realStrings = nonEmpty.filter((c: any) => typeof c === "string" && !/^[\u{1F300}-\u{1FFFF}]/u.test(String(c)));
+      if (realStrings.length >= 2) { headerIdx = i; break; }
+    }
+    const headers = (raw[headerIdx] as any[]).map((h: any, i: number) => (h !== "" && h !== null ? String(h).trim() : `_c${i}`));
+    return raw.slice(headerIdx + 1)
+      .filter((row: any[]) => row.some((c: any) => c !== "" && c !== null && c !== undefined))
+      .map((row: any[]) => {
+        const obj: Record<string, any> = {};
+        headers.forEach((h: string, i: number) => { obj[h] = row[i] ?? ""; });
+        return obj;
+      });
+  };
+
+  // Check for a month-specific tab: ReplitNumbers[Month] e.g. "ReplitNumbersMarch"
+  // If present, merge it with the ReplitNumbers historical tab so trends get full history
+  // and account-summary gets the accurate current-month data.
+  const monthNames = ["january","february","march","april","may","june","july","august","september","october","november","december"];
+  const monthTabMatch = workbook.SheetNames.find(s => {
+    const lower = s.trim().toLowerCase();
+    return monthNames.some(m => lower === `replitnumbers${m}`);
+  });
+  const monthTabRows = monthTabMatch ? readSheet(monthTabMatch) : [];
+  const replitHistoricalRows = readSheet("ReplitNumbers");
+
+  // Helper: parse a row's pickup/delivery date into { month, year }
+  const getRowMonthYear = (r: any): { month: number; year: number } | null => {
+    const dateVal = r["Pickup Date"] ?? r["pickup date"] ?? r["Pickup date"] ??
+                    r["Delivery date"] ?? r["Delivery Date"] ?? r["delivery date"] ??
+                    r["Date"] ?? r["date"] ?? "";
+    if (!dateVal && dateVal !== 0) return null;
+    let d: Date | null = null;
+    if (typeof dateVal === "number" && dateVal > 40000) {
+      // Excel date serial
+      d = new Date(Math.round((dateVal - 25569) * 86400 * 1000));
+    } else {
+      const parsed = new Date(String(dateVal).trim());
+      if (!isNaN(parsed.getTime())) d = parsed;
+    }
+    if (!d || isNaN(d.getTime())) return null;
+    return { month: d.getMonth() + 1, year: d.getFullYear() };
+  };
+
+  let rows: any[];
+  if (monthTabRows.length > 0 && replitHistoricalRows.length > 0) {
+    // The month tab (e.g. ReplitNumbersMarch) is the exclusive source for its month.
+    // Strip that month from ReplitNumbers so data isn't mixed or double-counted.
+    const monthIndex = monthNames.findIndex(m => monthTabMatch!.trim().toLowerCase() === `replitnumbers${m}`);
+    const currentMonthNum = monthIndex + 1; // 1-based (March = 3)
+    const currentYear = new Date().getFullYear();
+    const historicalFiltered = replitHistoricalRows.filter(r => {
+      const my = getRowMonthYear(r);
+      if (!my) return true; // Can't determine date — keep it
+      return !(my.month === currentMonthNum && my.year === currentYear);
+    });
+    // Historical months from ReplitNumbers + current month exclusively from the month tab
+    rows = [...historicalFiltered, ...monthTabRows];
+  } else if (monthTabRows.length > 0) {
+    rows = monthTabRows;
+  } else if (replitHistoricalRows.length > 0) {
+    rows = replitHistoricalRows;
+  } else {
+    const boraRaw: any[] = readSheet("YTD BORA");
+    if (boraRaw.length > 0) {
+      // NUMBERS.xlsx format: filter YTD BORA to Value Truck rows only
+      const filtered = boraRaw.filter((r: any) => {
+        const rc = (r["Revenue code"] || r["Revenue Code"] || "").toString().trim().toUpperCase();
+        return rc === "UTAHB";
+      });
+      // If UTAHB filter yields nothing, use all BORA rows (different revenue code naming)
+      rows = filtered.length > 0 ? filtered : boraRaw;
+    } else {
+      // No YTD BORA sheet — try "All Data (YTD)" (legacy sheet name)
+      const altRows = readSheet("All Data (YTD)");
+      if (altRows.length > 0) {
+        rows = altRows;
+      } else {
+        // Last resort: read the sheet with the most data rows
+        const bestSheetName = workbook.SheetNames.reduce((best, name) => {
+          const sh = workbook.Sheets[name];
+          const len = (XLSX.utils.sheet_to_json(sh, { header: 1, defval: "" }) as any[][]).length;
+          const bestLen = (XLSX.utils.sheet_to_json(workbook.Sheets[best], { header: 1, defval: "" }) as any[][]).length;
+          return len > bestLen ? name : best;
+        }, workbook.SheetNames[0]);
+        rows = readSheet(bestSheetName);
+      }
+    }
+  }
+  return {
+    rows,
+    bestDealDaysSpot: readSheet("Best Deal Days (SPOT)"),
+    bestDealDaysAll: readSheet("Best Deal Days (ALL)"),
+    trendAnalysis: readSheet("Trend Analysis"),
+    averagesData: readSheet("Averages"),
+    dailyAcquisition: readSheetSmart("Daily Acquisition Data"),
+  };
+}
+
+async function getVisibleFeedAuthorIds(user: { id: string; role: string; managerId: string | null; organizationId: string }): Promise<string[]> {
+  if (user.role === "admin") {
+    const orgUsers = await storage.getUsers(user.organizationId);
+    return orgUsers.map(u => u.id);
+  }
+  if (user.role === "director" || user.role === "sales_director") {
+    const ids = await storage.getTeamMemberIds(user.id, user.organizationId);
+    ids.push(user.id);
+    return ids;
+  }
+  if (user.role === "national_account_manager" || user.role === "sales") {
+    const ids = await storage.getTeamMemberIds(user.id, user.organizationId);
+    if (user.managerId) ids.push(user.managerId);
+    ids.push(user.id);
+    return ids;
+  }
+  const ids = new Set<string>([user.id]);
+  if (user.managerId) ids.add(user.managerId);
+  return Array.from(ids);
+}
+
 const ZIP_REGEX = /^\d{5}(-\d{4})?$/;
 
 function zipToCity(value: string): string {
   const trimmed = value.trim();
-  // Handle 3-digit zip prefix (e.g. "217" from Staples-style RFPs)
-  if (/^\d{3}$/.test(trimmed)) {
-    return zipPrefixMap[trimmed] || trimmed;
-  }
   if (!ZIP_REGEX.test(trimmed)) return trimmed;
   const zip5 = trimmed.substring(0, 5);
   return zipCodeMap[zip5] || trimmed;
@@ -539,193 +604,140 @@ function analyzeRfpSpreadsheetWithMapping(workbook: XLSX.WorkBook, confirmedMapp
   };
 }
 
+function toMonthKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function parseHistoricalRow(row: any, cols?: FinancialCols): {
+  destCity: string; destState: string;
+  origCity: string; origState: string;
+  weekKey: string; monthKey: string; margin: number; revenue: number;
+} {
+  const destK      = cols?.destination      ?? "Destination";
+  const destStateK = cols?.destinationState ?? "Destination state";
+  const origK      = cols?.origin           ?? "Origin";
+  const origStateK = cols?.originState      ?? "Origin state";
+  const weekK      = cols?.week             ?? "Week";
+  const delivK     = cols?.deliveryDate     ?? "Delivery date";
+  const marginK    = cols?.marginDollar     ?? "Margin $";
+  const revenueK   = cols?.revenue          ?? "Total revenue";
+
+  const hasNewFormat = row[origStateK] || row[destStateK]
+    || "Origin state" in row || "Destination state" in row
+    || ("Origin" in row && "Destination" in row);
+
+  if (hasNewFormat) {
+    const destRaw  = String(row[destK]      || "").trim();
+    const destState = String(row[destStateK] || "").trim();
+    const destCity  = destRaw.includes(",") ? destRaw.split(",")[0].trim() : destRaw;
+    const origRaw   = String(row[origK]     || "").trim();
+    const origState = String(row[origStateK] || "").trim();
+    const origCity  = origRaw.includes(",") ? origRaw.split(",")[0].trim() : origRaw;
+    const weekRaw   = String(row[weekK]     || "").trim();
+    let weekKey  = weekRaw || "";
+    let monthKey = "";
+
+    // 1. Best source: "Month" field directly (e.g. "2026 M02")
+    const monthFieldRaw = String(row["Month"] || row["month"] || "").trim();
+    const mfMatch = monthFieldRaw.match(/^(\d{4})\s+M(\d+)$/i);
+    if (mfMatch) {
+      monthKey = `${mfMatch[1]}-${String(parseInt(mfMatch[2])).padStart(2, "0")}`;
+    }
+
+    // 2. Excel serial delivery date
+    if (!monthKey) {
+      const serial = Number(row[delivK]);
+      if (!isNaN(serial) && serial > 40000) {
+        const d = new Date(new Date(1899, 11, 30).getTime() + serial * 86400000);
+        monthKey = toMonthKey(d);
+        if (!weekKey) {
+          const y = d.getFullYear();
+          const wn = Math.ceil(((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000 + new Date(y, 0, 1).getDay() + 1) / 7);
+          weekKey = `${y}-W${wn}`;
+        }
+      }
+    }
+
+    // 3. ISO/string delivery date (stored after cellDates:true serialization)
+    if (!monthKey && row[delivK]) {
+      const dStr = String(row[delivK]).trim();
+      if (dStr && isNaN(Number(dStr))) {
+        const d = new Date(dStr);
+        if (!isNaN(d.getTime())) monthKey = toMonthKey(d);
+      }
+    }
+
+    // 4. Week key fallback
+    if (!monthKey && weekKey) {
+      const m = weekKey.match(/^(\d{4})\s*W(\d+)$/);
+      if (m) {
+        const d = new Date(parseInt(m[1]), 0, 1 + (parseInt(m[2]) - 1) * 7);
+        monthKey = toMonthKey(d);
+      }
+    }
+    return { destCity, destState, origCity, origState, weekKey, monthKey, margin: Number(row[marginK]) || 0, revenue: Number(row[revenueK]) || 0 };
+  }
+
+  // TMS / ReplistNumbers format
+  const consigneeCityK  = cols?.consigneeCity  ?? "Consignee city";
+  const consigneeStateK = cols?.consigneeState ?? "Consignee state";
+  const shipperCityK    = cols?.shipperCity    ?? "Shipper city";
+  const shipperStateK   = cols?.shipperState   ?? "Shipper state";
+  const dateOrderedK    = cols?.dateOrdered    ?? "Date ordered";
+  const totalChargesK   = cols?.totalCharges   ?? "Total charges";
+  const freightChargeK  = cols?.freightCharge  ?? "Freight charge";
+
+  const destCity  = String(row[consigneeCityK]  || "").trim();
+  const destState = String(row[consigneeStateK] || "").trim();
+  const origCity  = String(row[shipperCityK]    || "").trim();
+  const origState = String(row[shipperStateK]   || "").trim();
+  const dateStr   = String(row[dateOrderedK]    || "").trim();
+  const tc = Number(row[totalChargesK]  || 0);
+  const fc = Number(row[freightChargeK] || 0);
+  const rv = Number(row[revenueK]       || row[totalChargesK] || 0);
+
+  let weekKey  = "";
+  let monthKey = "";
+  if (dateStr) {
+    try {
+      const d = new Date(dateStr);
+      if (!isNaN(d.getTime())) {
+        const y = d.getFullYear();
+        const wn = Math.ceil(((d.getTime() - new Date(y, 0, 1).getTime()) / 86400000 + new Date(y, 0, 1).getDay() + 1) / 7);
+        weekKey  = `${y}-W${wn}`;
+        monthKey = toMonthKey(d);
+      }
+    } catch {}
+  }
+  return { destCity, destState, origCity, origState, weekKey, monthKey, margin: tc - fc, revenue: rv || tc };
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
 
-  // ── Endpoint-perf timing middleware (Task #705) ─────────────────────────────
-  // Registered FIRST so it captures latency for every API route below — moving
-  // this lower would silently exclude all routes registered before it from the
-  // perf budget dashboard.
-  const { perfTimingMiddleware } = await import("./routes/endpointPerf");
-  app.use(perfTimingMiddleware);
-
-  // ── NBA in-process cache ────────────────────────────────────────────────────
-  // Declared here (top of registerRoutes) so all touchpoint POST routes can
-  // delete stale keys immediately after a new touchpoint is saved, rather than
-  // waiting up to 30 min for the TTL to expire naturally.
-  const _nbaCache = new Map<string, { result: unknown; expiresAt: number }>();
-  const NBA_TTL_MS = 30 * 60 * 1000; // 30 minutes
-
   app.use("/api", (req, res, next) => {
     if (req.path.startsWith("/auth/")) return next();
-    if (req.path === "/config/public" && req.method === "GET") return next();
     if (req.path === "/demo-requests" && req.method === "POST") return next();
-    // Public Stripe endpoints (no auth required — landing page checkout flow)
-    if (req.path === "/stripe/config" && req.method === "GET") return next();
-    if (req.path === "/stripe/products" && req.method === "GET") return next();
-    if (req.path === "/stripe/checkout" && req.method === "POST") return next();
-    if (req.path === "/stripe/confirm-checkout" && req.method === "GET") return next();
-    if (req.path === "/marketing-chat" && req.method === "POST") return next();
-    // Outlook reply webhook — Microsoft Graph calls this endpoint directly (no session cookie)
-    // Security is handled by clientState secret validation inside the handler
-    if (req.path === "/webhooks/outlook-reply") return next();
-    // Microsoft Graph webhook endpoints — public (Graph calls without session cookies)
-    if (req.path.startsWith("/webhooks/graph/")) return next();
-    // Live-sync SSE — bypass requireAuth because EventSource cannot send the
-    // Authorization Bearer header. The route handler itself verifies a Clerk
-    // JWT in `?token=` (or falls back to req.session.organizationId) and
-    // returns 401 when neither is valid. See server/routes/liveSync.ts and
-    // tests/code-quality-guardrails.test.ts Section 28.
-    if (req.path === "/live-sync/stream") return next();
-    // Internal service endpoints — can be accessed via INTERNAL_SERVICE_TOKEN header
-    // (machine-to-machine) or by an authenticated user session (browser clients).
-    if (req.path.startsWith("/internal/")) {
-      const token = process.env.INTERNAL_SERVICE_TOKEN;
-      const provided = req.headers["x-internal-token"];
-      if (token && provided === token) {
-        return next(); // Valid service-to-service token — skip session check
-      }
-      // Fall through to normal session-based requireAuth for browser clients
-      return requireAuth(req, res, next);
-    }
     requireAuth(req, res, next);
   });
 
   registerChatbotRoutes(app);
 
-  // ── Public marketing chatbot (landing page, no auth required) ──────────────
-  const MARKETING_SYSTEM_PROMPT = `You are Dana, the Freight DNA sales assistant. You help freight brokers learn about the Freight DNA platform and decide if it's the right fit for their team. You are warm, knowledgeable, and consultative — not pushy. You ask good questions, listen, and give honest answers. When it makes sense, you encourage prospects to schedule a live demo.
-
-ABOUT FREIGHT DNA:
-Freight DNA is a purpose-built sales intelligence and CRM platform designed exclusively for transportation brokerage companies. Core philosophy: "Down, not across" — the highest-ROI growth path for most brokerages is unlocking wallet share in accounts they already own, not just chasing new logos.
-
-PRICING:
-All plans start with a demo — we do a call first to make sure it's the right fit before anyone signs.
-- Trial: $1,000 for the first month. Includes full platform access, hands-on setup, data import, team configuration, and training. No commitment beyond the trial month.
-- Standard: $1,500/month (or $1,200/month billed annually — 20% savings). Full platform, up to 50 team members, all 20+ modules, all AI features, dedicated onboarding support. No per-seat fees.
-- Enterprise: $2,000/month (or $1,600/month billed annually — 20% savings). For brokerages with 50+ team members. Everything in Standard plus unlimited seats, dedicated account manager, multi-org/multi-team support, and priority feature development. No per-seat fees.
-- Custom Feature Buildout: Quoted per project based on scope and complexity. Simple additions are quick, easy, and start around $500; larger integrations or standalone modules are scoped individually. Contact info@freight-dna.com to discuss.
-
-ONBOARDING:
-- Most brokerages are fully live within one week.
-- We handle everything: data import, team configuration, workflow setup, training.
-- No IT or Salesforce consultants needed.
-- Platform is configurable to match how the brokerage actually operates.
-- Ongoing flexibility: new features, reports, and workflows can be requested and built quickly.
-
-ROLES SUPPORTED:
-Admin (full access, billing, user management), Director (all teams, rep performance), National Account Manager/NAM (team of AMs, goal setting, 1:1s, own book), Account Manager/AM (front-line rep, accounts, contacts, touchpoints), Logistics Manager, Logistics Coordinator. Role-based access means every user sees only what's relevant to their job.
-
-CORE MODULES (22+):
-1. Dashboard — role-aware, KPI cards, daily briefing, activity streaks, alerts for cold contacts, RFP deadlines, tasks due
-2. Customer/Account Management — rich company profiles, wallet share calculation, health scores, momentum scores, financial snapshots, transportation-specific fields (portal credentials, tendering process, account quirks, operating hours, shipping modes: LTL/FTL/Drayage/IMDL)
-3. Contacts & Org Charts — visual org charts, decision-maker mapping, relationship base tracking (1st/2nd/3rd Base/Home Run system), relationship history timeline, lane attributions, contact freight reporting
-4. Touchpoint Logging — log calls, emails, texts, site visits in one click from anywhere; automated alerts for cold contacts; daily activity streak tracking
-5. Sales Pipeline — Kanban board for prospects; CSV import with template and failed-row recovery; AI Sales Intel Brief generation on prospects; stage-change tracking
-6. Pre-Call Planner — AI health narrative, AI touchpoint summary (last 5 notes), lane gap talking points, relationship intel, quick touchpoint log
-7. RFP & Award Management — full bid lifecycle, Excel upload with AI column mapping, lane-level analysis, deadline alerts, award tracking vs. bids
-8. Goals & Accountability — NAMs set goals for AMs (loads, margin, touchpoints, new contacts); auto-tracking against live data; goal comments
-9. 1:1 Sessions — structured manager-rep meetings, threaded topic replies, session summaries, morale tracking, meeting links, automated reminders
-10. Team Performance Dashboards — activity metrics, load/margin tracking, leaderboards, rep scorecards, period-over-period trends
-11. Top Opportunities — auto-surfaced accounts by untapped wallet share, greenfield accounts flagged
-12. Tasks — create/assign/track tasks on accounts and contacts, due dates, comments, dashboard alerts
-13. PTO Passoff — structured account coverage during rep absences, covering notes per account, automated return workflow
-14. Financial Data & Lane Analytics — Excel/CSV upload or OneDrive auto-sync, load attribution to contacts/relationships, wallet share calc, interactive maps, coverage gap analysis
-15. Carrier Lane Search — search financial upload history by corridor (origin + destination + radius) to build an instant carrier call list: every carrier that has run the lane, loads hauled, market share %, avg carrier pay, avg margin, and last ship date — all grouped by mode (Van, Reefer, Flatbed, LTL, Drayage, IMDL). Perfect for when freight drops and you need coverage fast.
-16. RFP Lane Search — search across ALL uploaded RFPs in the platform by corridor. Instantly see which customers have freight on specific lanes, what volumes they're bidding, and what equipment they need — grouped by mode. Find your next bid target before the RFP even hits your inbox.
-17. DNA Guru Chatbot — natural language Q&A against live CRM data; can log touchpoints and create tasks via confirmed AI proposals; proactive nudges for goals behind, cold contacts, urgent RFPs; PLUS live carrier lane search: ask "what carriers run TX-CA for dry vans?" or "how much are we paying CA-TX?" and get a real-time answer from your own freight data
-18. Daily Digest Emails — personalized weekday morning emails with tasks, cold contacts, RFP deadlines, goal progress, AI "Priority for Today"
-19. Shared Callouts & Trends Feed — internal broadcast for market intel, lane trends, carrier notes; posts can be pinned
-20. Career Progression Tracking — development goals, promotion criteria, nomination workflow
-21. Coordinator's Corner — centralized secure storage for customer portal credentials and tendering procedures
-22. Feedback Inbox — reps submit feedback; admins respond; submitter notified by email
-
-AI FEATURES:
-- AI Sales Intel Brief: one-click prospect intelligence (freight profile, pain points, network overlap, conversation starters, competitive tips) — powered by GPT-4o-mini
-- AI Health Score Narrative: 2-sentence GPT-4o-mini explanation of why an account is healthy or at-risk
-- AI Touchpoint Summary: auto-summarizes last 5 touchpoint notes for pre-call prep
-- Lane Gap Talking Points: AI-generated conversation starters for uncovered freight corridors
-- Lane Gap Priority Scoring: High/Medium/Low badges ranked by volume, RFP presence, award status
-- DNA Guru Chatbot: natural language CRM queries + action execution (log touchpoint, create task); live carrier lane search via natural language ("what carriers run TX-CA for dry vans?", "how much are we paying CA-TX?")
-- Proactive Nudges: chatbot surfaces goals behind, cold contacts, urgent RFPs, tasks due today
-- Carrier Lane Search: instant carrier call list from financial history by corridor and mode
-- RFP Lane Search: find which customers have freight on specific lanes across all uploaded RFPs, grouped by mode
-- RFP Column Mapping: AI suggests which Excel columns map to required RFP data fields
-- Daily Brief "Priority for Today": AI-generated daily focus suggestion
-- Auto-Intel on Stage Change: brief auto-generates when a prospect first moves pipeline stages
-
-KEY DIFFERENTIATORS vs. Salesforce/HubSpot:
-- Built exclusively for freight brokerage — lane data, wallet share, RFPs, shipping modes are native
-- 1st/2nd/3rd Base/Home Run relationship depth system (not just contact volume)
-- Actual freight loads attributed to specific relationships — dollar impact per contact
-- Wallet share as a core metric, not just revenue
-- Flat pricing — no per-seat fees
-- Done-for-you setup in ~1 week
-- Responsive development — feature requests move fast
-
-RULES FOR YOUR RESPONSES:
-- Keep answers concise and conversational. Don't dump every feature at once.
-- Ask follow-up questions to understand their situation before making recommendations.
-- If they ask about pricing, be direct: Trial is $1,000 for the first month, Standard is $1,500/month (or $1,200 billed annually), Enterprise is $2,000/month (or $1,600 billed annually). All plans are flat — no per-seat fees.
-- If they seem interested or ask about next steps, suggest scheduling a demo.
-- If they ask something you don't know, say so honestly and suggest they schedule a demo to get the full picture.
-- Do not make up features or pricing that aren't described above.
-- Never be defensive or argue. If they have a criticism, acknowledge it and pivot to what the platform does well.
-- You can sign off messages as "Dana" occasionally but don't overdo it.`;
-
-  // PUBLIC — no requireAuth. This endpoint is called from the marketing landing
-  // page by unauthenticated visitors. It only accesses the AI model, never any
-  // org data. Rate limiting via OpenAI token cap (max_tokens: 400).
-  app.post("/api/marketing-chat", async (req, res) => {
-    try {
-      const { messages } = req.body as { messages: { role: string; content: string }[] };
-      if (!Array.isArray(messages) || messages.length === 0) {
-        return res.status(400).json({ error: "messages array required" });
-      }
-      // Safety: cap conversation history to last 20 messages, content to 2000 chars each
-      const safeMessages = messages.slice(-20).map((m: any) => ({
-        role: (m.role === "user" ? "user" : "assistant") as "user" | "assistant",
-        content: String(m.content ?? "").slice(0, 2000),
-      }));
-
-      const OpenAI = (await import("openai")).default;
-      const openai = new OpenAI({
-        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-      });
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [
-          { role: "system", content: MARKETING_SYSTEM_PROMPT },
-          ...safeMessages,
-        ],
-        max_tokens: 400,
-        temperature: 0.7,
-      });
-      const reply = completion.choices[0]?.message?.content ?? "Sorry, I couldn't generate a response. Please try again.";
-      res.json({ reply });
-    } catch (err) {
-      console.error("[marketing-chat]", err);
-      res.status(500).json({ error: "Failed to generate response" });
-    }
-  });
-
-  app.get("/api/search", requireAuth, async (req, res) => {
+  app.get("/api/search", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const q = (qStr(req.query.q) || "").trim();
-      if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [], tasks: [], carriers: [] });
-      const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, matchedTasks, allCompanies, matchedCarriers] = await Promise.all([
+      const q = (req.query.q as string || "").trim();
+      if (!q) return res.json({ accounts: [], accountManagers: [], nationalAccountManagers: [], contacts: [], rfps: [], tasks: [] });
+      const [matchedCompanies, matchedUsers, matchedContacts, matchedRfps, matchedTasks, allCompanies] = await Promise.all([
         storage.searchCompanies(q, req.session.organizationId!),
         storage.searchUsers(q, ["account_manager", "national_account_manager", "director", "sales"], req.session.organizationId!),
         storage.searchContacts(q, req.session.organizationId!),
         storage.searchRfps(q, req.session.organizationId!),
         storage.searchTasks(q, req.session.organizationId!),
         storage.getCompanies(req.session.organizationId!),
-        storage.searchCarriers(q, req.session.organizationId!),
       ]);
       const companyNameMap = new Map(allCompanies.map(c => [c.id, c.name]));
       const accounts = matchedCompanies.map(c => ({ id: c.id, name: c.name }));
@@ -734,8 +746,7 @@ RULES FOR YOUR RESPONSES:
       const contacts = matchedContacts.map(c => ({ id: c.id, name: c.name, title: c.title, companyId: c.companyId, companyName: companyNameMap.get(c.companyId) || "" }));
       const rfps = matchedRfps.map(r => ({ id: r.id, title: r.title, companyId: r.companyId, status: r.status }));
       const tasks = matchedTasks.map(t => ({ id: t.id, title: t.title, status: t.status, companyId: t.companyId || null, companyName: t.companyId ? (companyNameMap.get(t.companyId) || "") : "" }));
-      const carriers = matchedCarriers.map(c => ({ id: c.id, name: c.name, mcDot: c.mcDot, state: c.state }));
-      res.json({ accounts, accountManagers, nationalAccountManagers, contacts, rfps, tasks, carriers });
+      res.json({ accounts, accountManagers, nationalAccountManagers, contacts, rfps, tasks });
     } catch (error) {
       res.status(500).json({ error: "Search failed" });
     }
@@ -743,15 +754,9 @@ RULES FOR YOUR RESPONSES:
 
   app.get("/api/users/sales", requireAuth, async (req, res) => {
     try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       const allUsers = await storage.getUsers(req.session.organizationId!);
-      // Scope by viewer's reporting tree so Directors only see sales reps in
-      // their team. Admin gets the full org list (visible === null).
-      const visible = await getVisibleRepUserIds(currentUser);
       const salesUsers = allUsers
         .filter(u => u.role === "sales" || u.role === "sales_director")
-        .filter(u => visible === null || visible.includes(u.id))
         .map(({ password, ...u }) => u);
       res.json(salesUsers);
     } catch (error) {
@@ -759,44 +764,31 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.get("/api/users", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      const allRoles = [...managerRoles, "account_manager", "logistics_manager", "logistics_coordinator"];
-      const withManagers = req.query.includeManagers === "true";
-
-      // Lower-level roles may only call this endpoint when explicitly fetching their coverage chain
-      if (!allRoles.includes(currentUser.role) || (!managerRoles.includes(currentUser.role) && !withManagers)) {
-        return res.status(403).json({ error: "Access required" });
-      }
-
-      const allUsers = await storage.getUsers(req.session.organizationId!);
-      const safeUsers = allUsers.map(({ password, ...u }) => u);
-      if (isAdmin(currentUser)) return res.json(safeUsers);
-
-      const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-      if (withManagers) {
-        const managerIds = await storage.getManagerChainIds(currentUser.id, currentUser.organizationId);
-        const allIds = Array.from(new Set([...teamIds, ...managerIds]));
-        return res.json(safeUsers.filter(u => allIds.includes(u.id)));
-      }
-      return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
-    } catch (error) {
-      res.status(500).json({ error: "Failed to fetch users" });
-    }
-  });
-
-  app.post("/api/users", requireAuth, async (req, res) => {
+  app.get("/api/users", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
       if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
         return res.status(403).json({ error: "Access required" });
       }
-      const { username, password, name, role, managerId, emailSignature } = req.body;
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      const safeUsers = allUsers.map(({ password, ...u }) => u);
+      if (currentUser.role === "admin") return res.json(safeUsers);
+      const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+      return res.json(safeUsers.filter(u => teamIds.includes(u.id)));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch users" });
+    }
+  });
+
+  app.post("/api/users", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
+        return res.status(403).json({ error: "Access required" });
+      }
+      const { username, password, name, role, managerId } = req.body;
       if (!username || !password || !name) {
         return res.status(400).json({ error: "Username, password, and name are required" });
       }
@@ -819,7 +811,6 @@ RULES FOR YOUR RESPONSES:
         name,
         role: assignedRole,
         managerId: assignedManagerId,
-        emailSignature: emailSignature?.trim() || null,
       });
       const { password: _, ...safeUser } = user;
       res.status(201).json(safeUser);
@@ -828,7 +819,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/users/bulk-import", requireAuth, bulkImportRateLimit, upload.single("file"), async (req, res) => {
+  app.post("/api/users/bulk-import", upload.single("file"), async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -871,7 +862,7 @@ RULES FOR YOUR RESPONSES:
           skipped.push(name);
           continue;
         }
-        await storage.createUser({ organizationId: req.session.organizationId!, username: email, password: hashedPassword, name, role: role as UserRole, managerId: null });
+        await storage.createUser({ organizationId: req.session.organizationId!, username: email, password: hashedPassword, name, role: (role as any), managerId: null });
         created.push(name);
       }
 
@@ -882,187 +873,17 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  // ── Import templates download ────────────────────────────────────────────
-  app.get("/api/import-templates/:type", requireAuth, async (req, res) => {
+  app.patch("/api/users/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-
-      const type = pStr(req.params.type);
-      const XLSX = await import("xlsx");
-      let wb: any;
-
-      if (type === "users") {
-        const ws = XLSX.utils.aoa_to_sheet([
-          ["display_name", "Email", "title"],
-          ["Jane Smith", "jane@example.com", "Account Manager"],
-          ["John Doe", "john@example.com", "National Account Manager"],
-        ]);
-        wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Users");
-      } else if (type === "companies") {
-        const ws = XLSX.utils.aoa_to_sheet([
-          ["company_name", "industry", "website", "shipping_modes", "estimated_freight_spend", "assigned_rep_email", "account_summary", "financial_alias"],
-          ["Acme Corp", "Manufacturing", "https://acme.com", "FTL,LTL", "500000", "rep@example.com", "Key account in Midwest", "ACME"],
-          ["Beta Logistics", "Logistics", "https://beta.com", "Drayage,IMDL", "250000", "", "", "BETA"],
-        ]);
-        wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Companies");
-      } else if (type === "contacts") {
-        const ws = XLSX.utils.aoa_to_sheet([
-          ["contact_name", "company_name", "title", "email", "phone", "relationship_base"],
-          ["Alice Johnson", "Acme Corp", "VP of Logistics", "alice@acme.com", "555-1234", "2nd Base"],
-          ["Bob Williams", "Beta Logistics", "Director of Ops", "bob@beta.com", "555-5678", "1st Base"],
-        ]);
-        wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Contacts");
-      } else {
-        return res.status(400).json({ error: "Invalid template type" });
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
+        return res.status(403).json({ error: "Access required" });
       }
-
-      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-      res.setHeader("Content-Disposition", `attachment; filename="${type}-import-template.xlsx"`);
-      res.send(buf);
-    } catch (error) {
-      console.error("Template download error:", error);
-      res.status(500).json({ error: "Failed to generate template" });
-    }
-  });
-
-  // ── Companies bulk import ────────────────────────────────────────────────
-  app.post("/api/companies/bulk-import", requireAuth, bulkImportRateLimit, upload.single("file"), async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-      const XLSX = await import("xlsx");
-      const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
-
-      // Build a username→userId map for rep assignment
-      const orgUsers = await storage.getUsers(req.session.organizationId!);
-      const repMap = new Map<string, string>(orgUsers.map(u => [u.username.toLowerCase(), u.id]));
-
-      const created: string[] = [];
-      const skipped: string[] = [];
-      const errors: string[] = [];
-      const toInsert: any[] = [];
-
-      // Pre-load existing company names to detect duplicates
-      const existingCompanies = await storage.getCompanies(req.session.organizationId!);
-      const existingNames = new Set(existingCompanies.map(c => c.name.toLowerCase().trim()));
-
-      for (const row of rows) {
-        const name = String(row["company_name"] || "").trim();
-        if (!name) { errors.push("Skipped row — missing company_name"); continue; }
-        if (existingNames.has(name.toLowerCase())) { skipped.push(name); continue; }
-
-        const rawModes = String(row["shipping_modes"] || "").trim();
-        const shippingModes = rawModes ? rawModes.split(",").map((m: string) => m.trim()).filter(Boolean) : null;
-
-        const assignedRepEmail = String(row["assigned_rep_email"] || "").trim().toLowerCase();
-        const assignedTo = assignedRepEmail ? (repMap.get(assignedRepEmail) ?? null) : null;
-
-        const rawSpend = String(row["estimated_freight_spend"] || "").replace(/[^0-9.]/g, "");
-        const estimatedFreightSpend = rawSpend ? rawSpend : null;
-
-        toInsert.push({
-          organizationId: req.session.organizationId!,
-          name,
-          industry: String(row["industry"] || "").trim() || null,
-          website: String(row["website"] || "").trim() || null,
-          accountSummary: String(row["account_summary"] || "").trim() || null,
-          financialAlias: String(row["financial_alias"] || "").trim() || null,
-          assignedTo,
-          shippingModes,
-          estimatedFreightSpend,
-        });
-        existingNames.add(name.toLowerCase());
-        created.push(name);
-      }
-
-      if (toInsert.length > 0) await storage.bulkCreateCompanies(toInsert);
-
-      res.json({ created, skipped, errors, total: rows.length });
-    } catch (error) {
-      console.error("Company bulk import error:", error);
-      res.status(500).json({ error: "Failed to import companies" });
-    }
-  });
-
-  // ── Contacts global bulk import ──────────────────────────────────────────
-  app.post("/api/contacts/bulk-import", requireAuth, upload.single("file"), async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-      const XLSX = await import("xlsx");
-      const wb = XLSX.read(req.file.buffer, { type: "buffer" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[];
-
-      // Build company name → id map (org-scoped)
-      const orgCompanies = await storage.getCompanies(req.session.organizationId!);
-      const companyMap = new Map<string, string>(orgCompanies.map(c => [c.name.toLowerCase().trim(), c.id]));
-
-      const created: string[] = [];
-      const errors: string[] = [];
-      const toInsert: any[] = [];
-      const now = new Date().toISOString();
-
-      for (const row of rows) {
-        const contactName = String(row["contact_name"] || "").trim();
-        const companyName = String(row["company_name"] || "").trim();
-        if (!contactName) { errors.push(`Skipped row — missing contact_name`); continue; }
-        if (!companyName) { errors.push(`${contactName} — missing company_name`); continue; }
-
-        const companyId = companyMap.get(companyName.toLowerCase());
-        if (!companyId) { errors.push(`${contactName} — company "${companyName}" not found`); continue; }
-
-        toInsert.push({
-          companyId,
-          name: contactName,
-          title: String(row["title"] || "").trim() || null,
-          email: String(row["email"] || "").trim() || null,
-          phone: String(row["phone"] || "").trim() || null,
-          relationshipBase: String(row["relationship_base"] || "").trim() || null,
-          createdAt: now,
-          createdBy: currentUser.id,
-        });
-        created.push(`${contactName} (${companyName})`);
-      }
-
-      if (toInsert.length > 0) await storage.bulkCreateContacts(toInsert);
-
-      res.json({ created, errors, total: rows.length });
-    } catch (error) {
-      console.error("Contact bulk import error:", error);
-      res.status(500).json({ error: "Failed to import contacts" });
-    }
-  });
-
-  app.patch("/api/users/:id", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const isSelf = (pStr(req.params.id)) === currentUser.id;
-      // Any authenticated user can update their own profile (name, email signature, etc.)
-      // Editing another user requires manager-level access
-      if (!isSelf) {
-        if (!canEditOtherUsers(currentUser)) return res.status(403).json({ error: "Cannot edit other users" });
-        // Managers can only edit their own team members (not arbitrary users)
-        if (!isAdmin(currentUser)) {
-          const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-          if (!teamIds.includes((pStr(req.params.id)))) {
-            return res.status(403).json({ error: "Cannot edit this user" });
-          }
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+        if (!teamIds.includes((req.params.id as string)) || (req.params.id as string) === currentUser.id) {
+          return res.status(403).json({ error: "Cannot edit this user" });
         }
       }
       const data: any = {};
@@ -1070,71 +891,18 @@ RULES FOR YOUR RESPONSES:
       if (req.body.username !== undefined) data.username = req.body.username;
       if (req.body.email !== undefined) data.email = req.body.email || null;
       if (req.body.password) data.password = await bcrypt.hash(req.body.password, 10);
-      if (req.body.emailSignature !== undefined) data.emailSignature = req.body.emailSignature?.trim() || null;
-      let pendingRoleChange: { newRole: string } | null = null;
-      if (isAdmin(currentUser)) {
+      if (currentUser.role === "admin") {
         if (req.body.role !== undefined) {
           if (!userRoles.includes(req.body.role)) {
             return res.status(400).json({ error: "Invalid role" });
           }
-          // Defer the role write to applyRolePromotion below so every
-          // role mutation flows through one audited helper. Removing the
-          // write from `data` here is intentional — the promotion helper
-          // owns it.
-          pendingRoleChange = { newRole: req.body.role };
+          data.role = req.body.role;
         }
-        if (req.body.managerId !== undefined) {
-          // Normalize falsy values ("" / undefined-as-string) to null so the
-          // DB column stores a real NULL and downstream chain walks terminate
-          // cleanly instead of hitting an empty-string lookup.
-          const rawManagerId = req.body.managerId;
-          const normalizedManagerId =
-            typeof rawManagerId === "string" && rawManagerId.trim().length > 0
-              ? rawManagerId
-              : null;
-          if (normalizedManagerId) {
-            const targetUserId = pStr(req.params.id);
-            const wouldCycle = await storage.wouldCreateManagerCycle(
-              targetUserId,
-              normalizedManagerId,
-              currentUser.organizationId,
-            );
-            if (wouldCycle) {
-              return res.status(400).json({
-                error:
-                  "This Reports To assignment would create a circular reporting loop. A user cannot report to themselves or to one of their own descendants.",
-              });
-            }
-          }
-          data.managerId = normalizedManagerId;
-        }
+        if (req.body.managerId !== undefined) data.managerId = req.body.managerId;
         if (req.body.financialRepId !== undefined) data.financialRepId = req.body.financialRepId || null;
       }
-      let user = Object.keys(data).length > 0
-        ? await storage.updateUser((pStr(req.params.id)), currentUser.organizationId, data)
-        : await storage.getUser((pStr(req.params.id)));
+      const user = await storage.updateUser((req.params.id as string), currentUser.organizationId, data);
       if (!user) return res.status(404).json({ error: "User not found" });
-
-      // Audited role-promotion path. Centralizes the write so dropped
-      // promotions (the TJ-LM-to-AM incident) are detectable in logs and
-      // every role transition emits a uniform `[role-promotion] APPLIED`
-      // line. The helper is the only place that should mutate users.role.
-      if (pendingRoleChange) {
-        const { applyRolePromotion } = await import("./lib/rolePromotion");
-        const result = await applyRolePromotion({
-          actorId: currentUser.id,
-          actorRole: currentUser.role,
-          targetUserId: pStr(req.params.id),
-          organizationId: currentUser.organizationId,
-          newRole: pendingRoleChange.newRole,
-        });
-        if (!result.ok) {
-          if (result.reason === "invalid-role") return res.status(400).json({ error: "Invalid role" });
-          if (result.reason === "not-found") return res.status(404).json({ error: "User not found" });
-          return res.status(500).json({ error: "Failed to update role" });
-        }
-        user = result.user;
-      }
       // Invalidate financial summary caches when financialRepId changes so team performance
       // immediately reflects the updated rep attribution without waiting for TTL expiry.
       if (req.body.financialRepId !== undefined) {
@@ -1146,15 +914,11 @@ RULES FOR YOUR RESPONSES:
       const { password: _, ...safeUser } = user;
       res.json(safeUser);
     } catch (error) {
-      // Log the actual stack so we can diagnose the (previously silent) 500s
-      // that surfaced as 503s when the request was cut short before a response
-      // could be written.
-      console.error("[PATCH /api/users/:id] update failed:", error);
       res.status(500).json({ error: "Failed to update user" });
     }
   });
 
-  app.delete("/api/users/:id", requireAuth, async (req, res) => {
+  app.delete("/api/users/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1163,14 +927,14 @@ RULES FOR YOUR RESPONSES:
       }
       if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales" || currentUser.role === "sales_director") {
         const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-        if (!teamIds.includes((pStr(req.params.id))) || (pStr(req.params.id)) === currentUser.id) {
+        if (!teamIds.includes((req.params.id as string)) || (req.params.id as string) === currentUser.id) {
           return res.status(403).json({ error: "Cannot delete this user" });
         }
       }
-      if ((pStr(req.params.id)) === currentUser.id) {
+      if ((req.params.id as string) === currentUser.id) {
         return res.status(400).json({ error: "Cannot delete yourself" });
       }
-      const deleted = await storage.deleteUser((pStr(req.params.id)), currentUser.organizationId);
+      const deleted = await storage.deleteUser((req.params.id as string), currentUser.organizationId);
       if (!deleted) return res.status(404).json({ error: "User not found" });
       res.status(204).send();
     } catch (error) {
@@ -1178,139 +942,561 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  // Cross-RFP lane search: search origin/destination across all uploaded RFP lane data
-  app.get("/api/rfps/lane-search", requireAuth, async (req, res) => {
+  app.get("/api/companies", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
 
-      const originQuery = String(req.query.origin || "").trim();
-      const destQuery = String(req.query.destination || "").trim();
-      const radiusMiles = Math.max(1, Math.min(500, parseFloat(String(req.query.radius || "75")) || 75));
-
-      if (!originQuery && !destQuery) {
-        return res.status(400).json({ error: "Provide at least an origin or destination to search" });
-      }
-
-      // Parse "City, ST" or "City ST" or "ST" into {city, state} for geocoding
-      function parseCityState(q: string): { city: string; state: string } {
-        if (!q) return { city: "", state: "" };
-        const commaMatch = q.match(/^(.+),\s*([A-Za-z]{2})$/);
-        if (commaMatch) return { city: commaMatch[1].trim(), state: commaMatch[2].trim().toUpperCase() };
-        const spaceMatch = q.match(/^(.+)\s+([A-Za-z]{2})$/);
-        if (spaceMatch) return { city: spaceMatch[1].trim(), state: spaceMatch[2].trim().toUpperCase() };
-        if (/^[A-Za-z]{2}$/.test(q)) return { city: "", state: q.trim().toUpperCase() };
-        return { city: q.trim(), state: "" };
-      }
-
-      // Geocode the query locations (used as the center of the radius buffer)
-      const originParsed = parseCityState(originQuery);
-      const destParsed = parseCityState(destQuery);
-      const originCenter = originQuery ? geocodeCity(originParsed.city, originParsed.state) : null;
-      const destCenter = destQuery ? geocodeCity(destParsed.city, destParsed.state) : null;
-
-      // Check if a lane endpoint is within radiusMiles of the query center.
-      // Falls back to text matching when geocoding isn't possible.
-      function locationMatches(
-        laneCity: string, laneState: string, laneText: string,
-        queryRaw: string, queryCenter: [number, number] | null,
-      ): { match: boolean; distanceMiles: number | null } {
-        if (!queryRaw) return { match: true, distanceMiles: null };
-
-        if (queryCenter) {
-          const laneCoords = geocodeCity(laneCity, laneState);
-          if (laneCoords) {
-            const dist = haversineDistance(queryCenter[0], queryCenter[1], laneCoords[0], laneCoords[1]);
-            return { match: dist <= radiusMiles, distanceMiles: Math.round(dist) };
-          }
-        }
-        // Geocode not available — fall back to text contains
-        const haystack = laneText.toLowerCase();
-        const needle = queryRaw.toLowerCase();
-        return { match: haystack.includes(needle), distanceMiles: null };
-      }
-
-      // Get all visible RFPs for this org
-      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
-      let rfpList = await storage.getRfpsByOrg(currentUser.organizationId);
+      let allCompanies = await storage.getCompanies(req.session.organizationId!);
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
-        rfpList = rfpList.filter(r => visibleIds.includes(r.companyId));
+        allCompanies = allCompanies.filter(c => visibleIds.includes(c.id));
       }
-
-      const companyMap = new Map<string, string>(orgCompanies.map(c => [c.id, c.name]));
-
-      const results: {
-        companyId: string;
-        companyName: string;
-        rfpId: string;
-        rfpTitle: string;
-        rfpStatus: string;
-        rfpDueDate: string | null;
-        matchingLanes: any[];
-        totalMatchVolume: number;
-      }[] = [];
-
-      for (const rfp of rfpList) {
-        const fd = rfp.fileData as { rows?: any[]; highVolumeLanes?: any[] } | null;
-        if (!fd) continue;
-
-        const lanes: any[] = fd.highVolumeLanes || [];
-        if (!lanes.length) continue;
-
-        const matchingLanes: any[] = [];
-        for (const lane of lanes) {
-          const originText = [lane.origin || "", lane.originState || "", lane.lane || ""].join(" ");
-          const destText = [lane.destination || "", lane.destinationState || "", lane.lane || ""].join(" ");
-
-          const originCheck = locationMatches(lane.origin || "", lane.originState || "", originText, originQuery, originCenter);
-          const destCheck = locationMatches(lane.destination || "", lane.destinationState || "", destText, destQuery, destCenter);
-
-          if (originCheck.match && destCheck.match) {
-            matchingLanes.push({
-              ...lane,
-              originDistanceMiles: originCheck.distanceMiles,
-              destDistanceMiles: destCheck.distanceMiles,
-            });
-          }
-        }
-
-        if (matchingLanes.length === 0) continue;
-
-        const totalMatchVolume = matchingLanes.reduce((sum, l) => sum + (l.volume || 0), 0);
-        results.push({
-          companyId: rfp.companyId,
-          companyName: companyMap.get(rfp.companyId) || "Unknown",
-          rfpId: rfp.id,
-          rfpTitle: rfp.title,
-          rfpStatus: rfp.status,
-          rfpDueDate: rfp.dueDate || null,
-          matchingLanes,
-          totalMatchVolume,
-        });
+      const includeArchived = req.query.includeArchived === "true";
+      if (!includeArchived) {
+        allCompanies = allCompanies.filter(c => !c.archivedAt);
       }
-
-      results.sort((a, b) => b.totalMatchVolume - a.totalMatchVolume);
-
-      res.json({
-        results,
-        originQuery,
-        destQuery,
-        radiusMiles,
-        originGeocoded: !!originCenter,
-        destGeocoded: !!destCenter,
-      });
+      res.json(allCompanies);
     } catch (error) {
-      console.error("Lane search error:", error);
-      res.status(500).json({ error: "Lane search failed" });
+      console.error("Error fetching companies:", error);
+      res.status(500).json({ error: "Failed to fetch companies" });
     }
   });
 
-  app.get("/api/rfps", requireAuth, async (req, res) => {
+  app.get("/api/companies/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      let rfps = await storage.getRfpsByOrg(currentUser.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), currentUser.organizationId);
+      if (!company) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+      if (!(await canAccessCompany(currentUser, company.id))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      res.json(company);
+    } catch (error) {
+      console.error("Error fetching company:", error);
+      res.status(500).json({ error: "Failed to fetch company" });
+    }
+  });
+
+  app.get("/api/companies/:id/shared-reps", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      if (!(await canAccessCompany(currentUser, company.id))) return res.status(403).json({ error: "Access denied" });
+      const reps = (company.sharedReps || []) as SharedRep[];
+      const allUsers = await storage.getUsers(currentUser.organizationId);
+      const result = reps.map(r => {
+        const u = allUsers.find(u => u.id === r.userId);
+        return { userId: r.userId, territoryNote: r.territoryNote || "", name: u?.name || "Unknown" };
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch shared reps" });
+    }
+  });
+
+  app.post("/api/companies/:id/shared-reps", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Only admins and NAMs can manage shared reps" });
+      }
+      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const parsed = sharedRepSchema.safeParse(req.body);
+      if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+      const { userId, territoryNote } = parsed.data;
+      const targetUser = await storage.getUser(userId);
+      if (!targetUser || targetUser.organizationId !== currentUser.organizationId) {
+        return res.status(400).json({ error: "User not found in organization" });
+      }
+      const existing = (company.sharedReps || []) as SharedRep[];
+      if (existing.some(r => r.userId === userId)) {
+        return res.status(400).json({ error: "User is already a shared rep on this account" });
+      }
+      const updated = [...existing, { userId, territoryNote: territoryNote || "" }];
+      await storage.updateCompany(company.id, currentUser.organizationId, { sharedReps: updated });
+      res.json({ userId, territoryNote: territoryNote || "", name: targetUser.name });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to add shared rep" });
+    }
+  });
+
+  app.delete("/api/companies/:id/shared-reps/:userId", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (currentUser.role !== "admin" && currentUser.role !== "national_account_manager") {
+        return res.status(403).json({ error: "Only admins and NAMs can manage shared reps" });
+      }
+      const company = await storage.getCompanyInOrg(req.params.id, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      const existing = (company.sharedReps || []) as SharedRep[];
+      const updated = existing.filter(r => r.userId !== req.params.userId);
+      await storage.updateCompany(company.id, currentUser.organizationId, { sharedReps: updated });
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to remove shared rep" });
+    }
+  });
+
+  app.get("/api/team-members", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      const safeUsers = allUsers.map(({ password, ...u }) => u);
+      if (currentUser.role === "admin") {
+        return res.json(safeUsers);
+      }
+      if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+        const visibleIds = new Set([...teamIds, currentUser.id]);
+        // Always include manager (they can post replies to this user's sessions)
+        if (currentUser.managerId) visibleIds.add(currentUser.managerId);
+        // Always include admins (they can see and post to any session)
+        safeUsers.filter(u => u.role === "admin").forEach(u => visibleIds.add(u.id));
+        return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
+      }
+      const visibleIds = new Set<string>([currentUser.id]);
+      if (currentUser.managerId) {
+        visibleIds.add(currentUser.managerId);
+        allUsers.forEach(u => {
+          if (u.managerId === currentUser.managerId) visibleIds.add(u.id);
+        });
+      }
+      // Always include admins (they can see and post to any session)
+      safeUsers.filter(u => u.role === "admin").forEach(u => visibleIds.add(u.id));
+      return res.json(safeUsers.filter(u => visibleIds.has(u.id)));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch team members" });
+    }
+  });
+
+  function getBaseRank(base: string | null | undefined): number {
+    if (!base) return 0;
+    const s = base.toLowerCase().replace(/\s+/g, "");
+    if (s.includes("home") || s === "hr" || s === "homerun") return 4;
+    if (s.includes("3rd") || s.includes("third")) return 3;
+    if (s.includes("2nd") || s.includes("second")) return 2;
+    if (s.includes("1st") || s.includes("first")) return 1;
+    return 0;
+  }
+
+  async function fanOutCelebration(type: "new_account" | "new_contact" | "base_advanced", title: string, body: string, link: string, relatedId: string, actorId: string, organizationId: string) {
+    try {
+      const allUsers = await storage.getUsers(organizationId);
+      const actor = allUsers.find(u => u.id === actorId);
+      const notifyIds = new Set<string>();
+      // Walk up the manager chain from the actor
+      let current = actor;
+      while (current?.managerId) {
+        const manager = allUsers.find(u => u.id === current!.managerId);
+        if (manager) notifyIds.add(manager.id);
+        current = manager;
+      }
+      // Always include all admins
+      allUsers.filter(u => u.role === "admin").forEach(u => notifyIds.add(u.id));
+      // Never notify the actor themselves
+      notifyIds.delete(actorId);
+      await Promise.all([...notifyIds].map(uid =>
+        storage.createNotification({ userId: uid, type, title, body, link, relatedId, read: false }).catch(() => {})
+      ));
+    } catch (e) {
+      console.error("fanOutCelebration error:", e);
+    }
+  }
+
+  app.post("/api/companies", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const parsed = insertCompanySchema.omit({ organizationId: true }).safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.message });
+      }
+      const data = { ...parsed.data, organizationId: req.session.organizationId! };
+      if (currentUser.role === "admin") {
+        // admin can assign to anyone — leave assignedTo as-is
+      } else if (currentUser.role === "director" || currentUser.role === "national_account_manager" || currentUser.role === "sales" || currentUser.role === "sales_director") {
+        if (data.assignedTo) {
+          const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+          if (!teamIds.includes(data.assignedTo)) {
+            data.assignedTo = currentUser.id;
+          }
+        } else {
+          data.assignedTo = currentUser.id;
+        }
+      } else {
+        data.assignedTo = currentUser.id;
+      }
+      const company = await storage.createCompany(data);
+      fanOutCelebration(
+        "new_account",
+        `🎉 New account: ${company.name}`,
+        `${currentUser.name} just added a new account to the CRM.`,
+        `/companies/${company.id}`,
+        company.id,
+        currentUser.id,
+        req.session.organizationId!
+      );
+      res.status(201).json(company);
+    } catch (error) {
+      console.error("Error creating company:", error);
+      res.status(500).json({ error: "Failed to create company" });
+    }
+  });
+
+  app.patch("/api/companies/:id", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const parsed = insertCompanySchema.omit({ organizationId: true }).partial().safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.message });
+      }
+      const data = { ...parsed.data };
+      if (currentUser.role !== "admin") {
+        delete (data as any).assignedTo;
+      }
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, data);
+      if (!company) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+      res.json(company);
+    } catch (error) {
+      console.error("Error updating company:", error);
+      res.status(500).json({ error: "Failed to update company" });
+    }
+  });
+
+  app.patch("/api/companies/:id/financial-alias", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { financialAlias } = req.body;
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { financialAlias: financialAlias || null } as any);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update financial alias" });
+    }
+  });
+
+  app.patch("/api/companies/:id/salesperson", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const { salesPersonId } = req.body;
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { salesPersonId: salesPersonId || null } as any);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update salesperson" });
+    }
+  });
+
+  app.patch("/api/companies/:id/reassign", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      if (currentUser.role !== "admin" && currentUser.role !== "director" && currentUser.role !== "national_account_manager" && currentUser.role !== "sales" && currentUser.role !== "sales_director") {
+        return res.status(403).json({ error: "Only admins, directors and NAMs can reassign accounts" });
+      }
+      const { assignedTo } = req.body;
+      if (!assignedTo) return res.status(400).json({ error: "assignedTo is required" });
+      if (currentUser.role === "national_account_manager" || currentUser.role === "director" || currentUser.role === "sales") {
+        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
+        if (!teamIds.includes(assignedTo)) {
+          return res.status(403).json({ error: "Can only assign to team members" });
+        }
+      }
+      const existing = await storage.getCompanyInOrg((req.params.id as string), currentUser.organizationId);
+      if (!existing) return res.status(404).json({ error: "Company not found" });
+      const company = await storage.updateCompany((req.params.id as string), currentUser.organizationId, { ...existing, assignedTo });
+      if (!company) return res.status(404).json({ error: "Company not found" });
+      // Notify the new assignee if they're different from the actor
+      if (assignedTo !== currentUser.id && assignedTo !== existing.assignedTo) {
+        storage.createNotification({
+          userId: assignedTo,
+          type: "account_assigned",
+          title: `${currentUser.name} assigned you an account`,
+          body: existing.name,
+          link: `/companies/${existing.id}`,
+          relatedId: existing.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to reassign company" });
+    }
+  });
+
+  app.delete("/api/companies/:id", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const deleted = await storage.deleteCompany((req.params.id as string), currentUser.organizationId);
+      if (!deleted) {
+        return res.status(404).json({ error: "Company not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting company:", error);
+      res.status(500).json({ error: "Failed to delete company" });
+    }
+  });
+
+  app.post("/api/companies/:id/archive", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const updated = await storage.archiveCompany((req.params.id as string), currentUser.organizationId);
+      if (!updated) return res.status(404).json({ error: "Company not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to archive company" });
+    }
+  });
+
+  app.post("/api/companies/:id/unarchive", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const updated = await storage.unarchiveCompany((req.params.id as string), currentUser.organizationId);
+      if (!updated) return res.status(404).json({ error: "Company not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to unarchive company" });
+    }
+  });
+
+  app.get("/api/contacts", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      let contacts = await storage.getContacts();
+      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+      contacts = contacts.filter(c => orgCompanyIds.has(c.companyId));
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      if (visibleIds !== null) {
+        contacts = contacts.filter(c => visibleIds.includes(c.companyId));
+      }
+      res.json(contacts);
+    } catch (error) {
+      console.error("Error fetching contacts:", error);
+      res.status(500).json({ error: "Failed to fetch contacts" });
+    }
+  });
+
+  app.get("/api/companies/:companyId/contacts", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.companyId as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const contacts = await storage.getContactsByCompany((req.params.companyId as string));
+      res.json(contacts);
+    } catch (error) {
+      console.error("Error fetching contacts:", error);
+      res.status(500).json({ error: "Failed to fetch contacts" });
+    }
+  });
+
+  app.post("/api/companies/:companyId/contacts", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.companyId as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const contactData = {
+        ...req.body,
+        companyId: (req.params.companyId as string),
+        createdAt: new Date().toISOString(),
+        createdBy: currentUser.id,
+      };
+      const parsed = insertContactSchema.safeParse(contactData);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.message });
+      }
+      const contact = await storage.createContact(parsed.data);
+      const _orgIdForFanOut1 = req.session.organizationId!;
+      storage.getCompanyInOrg((req.params.companyId as string), _orgIdForFanOut1).then(co => {
+        fanOutCelebration(
+          "new_contact",
+          `🎉 New contact: ${contact.name}`,
+          `${currentUser.name} added ${contact.name}${contact.title ? ` (${contact.title})` : ""} at ${co?.name ?? "an account"}.`,
+          `/companies/${(req.params.companyId as string)}`,
+          contact.id,
+          currentUser.id,
+          _orgIdForFanOut1
+        );
+      }).catch(() => {});
+      res.status(201).json(contact);
+    } catch (error) {
+      console.error("Error creating contact:", error);
+      res.status(500).json({ error: "Failed to create contact" });
+    }
+  });
+
+  app.post("/api/companies/:companyId/contacts/bulk-import", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(currentUser, (req.params.companyId as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const rows: any[] = req.body.contacts;
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return res.status(400).json({ error: "No contacts provided" });
+      }
+      const now = new Date().toISOString();
+      const toInsert = rows.map(r => ({
+        companyId: (req.params.companyId as string),
+        name: (r.name || "").trim(),
+        title: r.title?.trim() || null,
+        email: r.email?.trim() || null,
+        phone: r.phone?.trim() || null,
+        notes: r.notes?.trim() || null,
+        nextSteps: r.nextSteps?.trim() || null,
+        createdAt: now,
+        createdBy: currentUser.id,
+      })).filter(r => r.name.length > 0);
+      if (toInsert.length === 0) return res.status(400).json({ error: "No valid contacts (name is required)" });
+      const created = await storage.bulkCreateContacts(toInsert);
+      res.status(201).json({ count: created.length, contacts: created });
+    } catch (error) {
+      console.error("Error bulk importing contacts:", error);
+      res.status(500).json({ error: "Failed to import contacts" });
+    }
+  });
+
+  app.patch("/api/contacts/:id", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getContact((req.params.id as string));
+      if (!existing) {
+        return res.status(404).json({ error: "Contact not found" });
+      }
+      if (!(await canAccessCompany(currentUser, existing.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const contactData = {
+        ...req.body,
+        companyId: existing.companyId,
+      };
+      const parsed = insertContactSchema.safeParse(contactData);
+      if (!parsed.success) {
+        return res.status(400).json({ error: parsed.error.message });
+      }
+      const baseChanged = parsed.data.relationshipBase && parsed.data.relationshipBase !== existing.relationshipBase;
+      if (baseChanged) {
+        parsed.data.baseAdvancedAt = new Date().toISOString().split("T")[0];
+        const oldRank = getBaseRank(existing.relationshipBase);
+        const newRank = getBaseRank(parsed.data.relationshipBase);
+        if (newRank > oldRank && newRank > 0) {
+          const _orgIdForFanOut2 = req.session.organizationId!;
+          storage.getCompanyInOrg(existing.companyId, _orgIdForFanOut2).then(co => {
+            fanOutCelebration(
+              "base_advanced",
+              `🎉 Relationship advanced: ${parsed.data.name ?? existing.name}`,
+              `${currentUser.name} moved ${parsed.data.name ?? existing.name} at ${co?.name ?? "an account"} from ${existing.relationshipBase ?? "no base"} → ${parsed.data.relationshipBase}.`,
+              `/companies/${existing.companyId}`,
+              (req.params.id as string),
+              currentUser.id,
+              _orgIdForFanOut2
+            );
+          }).catch(() => {});
+        }
+        // Log history
+        storage.logContactBaseHistory(
+          req.params.id as string,
+          existing.relationshipBase ?? null,
+          parsed.data.relationshipBase!,
+          currentUser.id
+        ).catch(() => {});
+      }
+      const contact = await storage.updateContact((req.params.id as string), parsed.data);
+      res.json(contact);
+    } catch (error) {
+      console.error("Error updating contact:", error);
+      res.status(500).json({ error: "Failed to update contact" });
+    }
+  });
+
+  app.delete("/api/contacts/:id", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getContact((req.params.id as string));
+      if (!existing) {
+        return res.status(404).json({ error: "Contact not found" });
+      }
+      if (!(await canAccessCompany(currentUser, existing.companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const deleted = await storage.deleteContact((req.params.id as string));
+      if (!deleted) {
+        return res.status(404).json({ error: "Contact not found" });
+      }
+      res.status(204).send();
+    } catch (error) {
+      console.error("Error deleting contact:", error);
+      res.status(500).json({ error: "Failed to delete contact" });
+    }
+  });
+
+  // T003: Relationship advancement history
+  app.get("/api/contacts/:id/base-history", requireAuth, async (req, res) => {
+    try {
+      const history = await storage.getContactBaseHistory(req.params.id as string);
+      res.json(history);
+    } catch (e) {
+      console.error("Error fetching base history:", e);
+      res.status(500).json({ error: "Failed to fetch history" });
+    }
+  });
+
+  app.get("/api/rfps", async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      let rfps = await storage.getRfps();
+      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+      rfps = rfps.filter(r => orgCompanyIds.has(r.companyId));
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         rfps = rfps.filter(r => visibleIds.includes(r.companyId));
@@ -1322,7 +1508,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/rfps", requireAuth, async (req, res) => {
+  app.post("/api/rfps", async (req, res) => {
     try {
       const parsed = insertRfpSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -1336,7 +1522,7 @@ RULES FOR YOUR RESPONSES:
     }
   });
 
-  app.post("/api/rfps/preview-headers", requireAuth, aiPreviewRateLimit, upload.single("file"), async (req, res) => {
+  app.post("/api/rfps/preview-headers", upload.single("file"), async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) {
@@ -1356,11 +1542,8 @@ RULES FOR YOUR RESPONSES:
       // PDF path: extract text via pdf-parse, then use AI to extract lane data
       if (fileExt === ".pdf") {
         try {
-          // pdf-parse v2 class API; see comment in server/routes/valueiq.ts
-          // for the v1→v2 migration note. Buffer→Uint8Array is required.
-          const { PDFParse } = await import("pdf-parse");
-          const parser = new PDFParse({ data: new Uint8Array(req.file.buffer) });
-          const pdfData = await parser.getText();
+          const pdfParse = (await import("pdf-parse")).default;
+          const pdfData = await pdfParse(req.file.buffer);
           const pdfText = pdfData.text?.trim() || "";
 
           if (!pdfText) {
@@ -1499,20 +1682,16 @@ Rules:
 Your task is to map spreadsheet column headers to standard freight lane fields.
 The standard fields are:
 - origin_city: City name for origin/pickup location
-- origin_state: State abbreviation for origin (e.g. "Origin*", "Origin Country*" with state samples, "Orig State")
-- origin_zip: ZIP code or partial postal code for origin (e.g. "Origin Partial Postal Code*", "Origin ZIP", "Orig Zip", "From Zip")
+- origin_state: State abbreviation for origin
+- origin_zip: ZIP code for origin
 - dest_city: City name for destination/delivery location  
-- dest_state: State abbreviation for destination (e.g. "Destination*", "Dest State", "To State")
-- dest_zip: ZIP code or partial postal code for destination (e.g. "Destination Partial Postal Code*", "Dest ZIP", "To Zip")
-- volume: Number of loads/shipments (e.g. "Estimated Volume*", "Volume*", "Annual Loads", "Weekly Loads")
-- equipment: Equipment or trailer type (e.g. "Equipment Type*", "Trailer Type", "Van", "Flatbed", "Reefer")
-- lane_id: Lane identifier or name (e.g. "Lane Name*", "Lane ID", "Lane #")
-- miles: Distance in miles for the lane (e.g. "Length Of Haul*", "Miles", "Distance", "Mileage")
+- dest_state: State abbreviation for destination
+- dest_zip: ZIP code for destination
+- volume: Number of loads/shipments (annual or weekly)
+- equipment: Equipment or trailer type (e.g. Van, Flatbed, Reefer)
+- lane_id: Lane identifier or name
+- miles: Distance in miles for the lane (also called distance, mileage, mi, loaded miles, deadhead miles)
 - ignore: Column is not relevant
-
-IMPORTANT: "Origin Partial Postal Code*" and "Destination Partial Postal Code*" contain 3-digit zip prefix codes — map these to origin_zip and dest_zip respectively.
-"Origin*" when samples show 2-letter state codes (MD, FL, TX, etc.) should be mapped to origin_state.
-"Destination*" when samples show 2-letter state codes should be mapped to dest_state.
 
 Respond ONLY with a JSON object where keys are the original column names and values are one of the standard field types above.
 Be conservative - if unsure, use "ignore". Every column must be assigned.`,
@@ -1557,42 +1736,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/rfps/parse-file", requireAuth, upload.single("file"), async (req, res) => {
-    try {
-      if (!req.file) {
-        return res.status(400).json({ error: "No file uploaded" });
-      }
-
-      const allowedExts = [".xlsx", ".xls", ".csv"];
-      const fileExt = req.file.originalname.toLowerCase().replace(/.*(\.[^.]+)$/, "$1");
-      if (!allowedExts.includes(fileExt)) {
-        return res.status(400).json({ error: "Invalid file type. Please upload an Excel (.xlsx, .xls) or CSV file." });
-      }
-
-      let workbook: XLSX.WorkBook;
-      try {
-        workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      } catch {
-        return res.status(400).json({ error: "Could not parse file. Please ensure it is a valid Excel or CSV file." });
-      }
-
-      const result = analyzeRfpSpreadsheet(workbook);
-
-      return res.json({
-        fileName: req.file.originalname,
-        fileData: { rows: result.rows, highVolumeLanes: result.highVolumeLanes, sheetName: result.sheetName },
-        laneCount: result.analysis.laneCount,
-        totalVolume: result.analysis.totalVolume,
-        originStates: result.analysis.originStates,
-        destinationStates: result.analysis.destinationStates,
-      });
-    } catch (error) {
-      console.error("Error parsing RFP file:", error);
-      res.status(500).json({ error: "Failed to parse file" });
-    }
-  });
-
-  app.post("/api/rfps/upload", requireAuth, aiPreviewRateLimit, upload.single("file"), async (req, res) => {
+  app.post("/api/rfps/upload", upload.single("file"), async (req, res) => {
     try {
       if (!req.file) {
         return res.status(400).json({ error: "No file uploaded" });
@@ -1654,53 +1798,6 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       };
 
       const rfp = await storage.createRfp(rfpData);
-
-      // Auto-create a coverage-review task for the AM when the upload has extracted lanes.
-      // Non-fatal: a task creation failure must never block the upload response.
-      if (result.highVolumeLanes && result.highVolumeLanes.length >= 1) {
-        try {
-          const existingCoverageTask = await storage.findRfpCoverageReviewTask(rfp.id);
-          if (!existingCoverageTask) {
-            const currentUser = await getCurrentUser(req);
-            const assignee = company.assignedTo ?? currentUser?.id;
-            if (assignee) {
-              const assignedBy = currentUser?.id ?? assignee;
-              const laneCount = result.highVolumeLanes.length;
-              const topLanes = result.highVolumeLanes
-                .slice(0, 3)
-                .map((l: any) => `${l.origin || "?"} → ${l.destination || "?"}`)
-                .join("; ");
-              // Set due date to 5 business days from today
-              const dueMs = new Date();
-              let bDays = 0;
-              while (bDays < 5) {
-                dueMs.setDate(dueMs.getDate() + 1);
-                const dow = dueMs.getDay();
-                if (dow !== 0 && dow !== 6) bDays++;
-              }
-              const dueDate = dueMs.toISOString().split("T")[0];
-              await storage.createTask({
-                title: `RFP Coverage Review: ${rfpData.title}`,
-                notes: `${laneCount} high-volume lane${laneCount !== 1 ? "s" : ""} extracted from this RFP (top: ${topLanes}). Open the RFP & Lanes tab to see which facility sites have no contact assigned. For each uncovered location, identify who controls inbound/outbound freight decisions and either add them as a contact or ask an existing contact for an introduction.`,
-                status: "open",
-                dueDate,
-                assignedTo: assignee,
-                assignedBy,
-                companyId: rfp.companyId,
-                contactId: null,
-                orgId: req.session.organizationId ?? null,
-                companyName: company.name ?? null,
-                contactName: null,
-                attachedLaneData: [{ type: "rfp_coverage_review", rfpId: rfp.id, laneCount }],
-                createdAt: new Date().toISOString(),
-              });
-            }
-          }
-        } catch (taskErr) {
-          console.error("[rfp-upload] Failed to create coverage-review task (non-fatal):", taskErr);
-        }
-      }
-
       res.status(201).json({ rfp, analysis: result.analysis, headers: result.headers, highVolumeLanes: result.highVolumeLanes, previewRows: result.rows.slice(0, 10), sheetName: result.sheetName });
     } catch (error) {
       console.error("Error uploading RFP:", error);
@@ -1708,109 +1805,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  // Award lane parsing endpoint — reuses same analyzeRfpSpreadsheet logic as RFP upload
-  app.post("/api/awards/parse-lanes", requireAuth, bulkImportRateLimit, upload.single("file"), async (req, res) => {
-    try {
-      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-      const allowedExts = [".xlsx", ".xls", ".csv"];
-      const fileExt = req.file.originalname.toLowerCase().replace(/.*(\.[^.]+)$/, "$1");
-      if (!allowedExts.includes(fileExt)) {
-        return res.status(400).json({ error: "Invalid file type. Please upload an Excel (.xlsx, .xls) or CSV file." });
-      }
-      let workbook: XLSX.WorkBook;
-      try {
-        workbook = XLSX.read(req.file.buffer, { type: "buffer" });
-      } catch {
-        return res.status(400).json({ error: "Could not parse file. Please ensure it is a valid Excel or CSV file." });
-      }
-      const confirmedMappingRaw = req.body.confirmedMapping;
-      let result: ReturnType<typeof analyzeRfpSpreadsheet>;
-      if (confirmedMappingRaw) {
-        try {
-          const confirmedMapping: ConfirmedColumnMapping = typeof confirmedMappingRaw === "string"
-            ? JSON.parse(confirmedMappingRaw) : confirmedMappingRaw;
-          result = analyzeRfpSpreadsheetWithMapping(workbook, confirmedMapping) as any;
-        } catch {
-          result = analyzeRfpSpreadsheet(workbook);
-        }
-      } else {
-        result = analyzeRfpSpreadsheet(workbook);
-      }
-      // Build the column→field reverse lookup from the confirmed mapping
-      const fieldToOriginalCol = (field: string): string | null => {
-        for (const [col, f] of Object.entries(confirmedMappingRaw ? (typeof confirmedMappingRaw === "string" ? JSON.parse(confirmedMappingRaw) : confirmedMappingRaw) : {})) {
-          if (f === field) return col;
-        }
-        return null;
-      };
-      const oCityCol   = fieldToOriginalCol("origin_city");
-      const oStateCol  = fieldToOriginalCol("origin_state");
-      const oZipCol    = fieldToOriginalCol("origin_zip");
-      const dCityCol   = fieldToOriginalCol("dest_city");
-      const dStateCol  = fieldToOriginalCol("dest_state");
-      const dZipCol    = fieldToOriginalCol("dest_zip");
-      const volCol     = fieldToOriginalCol("volume");
-
-      // Detect cadence for volume scaling (same logic as analyzeRfpSpreadsheetWithMapping)
-      let isWeekly = false, isMonthly = false;
-      if (volCol) {
-        const colLower = volCol.toLowerCase();
-        if (colLower.includes("week") || colLower.includes("wkly")) isWeekly = true;
-        else if (colLower.includes("month") || colLower.includes("mthly")) isMonthly = true;
-        else {
-          const nums = result.rows.map((r: Record<string, any>) => parseFloat(String(r[volCol] || "").replace(/[^0-9.]/g, ""))).filter((v: number) => !isNaN(v) && v > 0);
-          if (nums.length > 0 && Math.max(...nums) <= 52) isWeekly = true;
-        }
-      }
-
-      const allLaneLabels: string[] = result.rows
-        .map((row: Record<string, any>) => {
-          const rawOCity  = oCityCol  ? String(row[oCityCol]  || "").trim() : "";
-          const oState    = oStateCol ? String(row[oStateCol] || "").trim() : "";
-          const rawOZip   = oZipCol   ? String(row[oZipCol]   || "").trim() : "";
-          const rawDCity  = dCityCol  ? String(row[dCityCol]  || "").trim() : "";
-          const dState    = dStateCol ? String(row[dStateCol] || "").trim() : "";
-          const rawDZip   = dZipCol   ? String(row[dZipCol]   || "").trim() : "";
-
-          const oCity = rawOCity || zipToCity(rawOZip);
-          const dCity = rawDCity || zipToCity(rawDZip);
-
-          // zipToCity returns "City, ST" format — don't double-append state if already embedded
-          const fmtLocation = (city: string, state: string, zip: string): string => {
-            if (city && city.includes(",")) return city; // already "City, ST"
-            if (city && state) return `${city}, ${state}`;
-            if (city) return city;
-            return state || zip;
-          };
-          const originPart = fmtLocation(oCity, oState, rawOZip);
-          const destPart   = fmtLocation(dCity, dState, rawDZip);
-
-          if (!originPart || !destPart) return null;
-
-          let vol = 0;
-          if (volCol && row[volCol] !== "" && row[volCol] != null) {
-            const v = parseFloat(String(row[volCol]).replace(/[^0-9.]/g, ""));
-            if (!isNaN(v) && v > 0) vol = isWeekly ? v * 52 : isMonthly ? v * 12 : v;
-          }
-          const volSuffix = vol > 0 ? ` (${Math.round(vol).toLocaleString()} loads)` : "";
-          return `${originPart} → ${destPart}${volSuffix}`;
-        })
-        .filter((l: string | null): l is string => l !== null);
-
-      return res.json({
-        lanes: result.highVolumeLanes,
-        allLaneLabels,
-        analysis: result.analysis,
-        headers: result.headers,
-        sheetName: result.sheetName,
-      });
-    } catch (err) {
-      console.error("award parse-lanes error", err);
-      return res.status(500).json({ error: "Failed to process file" });
-    }
-  });
-
-  app.post("/api/rfps/upload-pdf", requireAuth, async (req, res) => {
+  app.post("/api/rfps/upload-pdf", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -1860,34 +1855,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/rfps/:id", requireAuth, async (req, res) => {
+  app.patch("/api/rfps/:id", async (req, res) => {
     try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      // Org-scoped lookup — cross-org IDs hit the 404 branch instead of
-      // silently returning a foreign tenant's RFP.
-      const existing = await storage.getRfpInOrg(pStr(req.params.id), currentUser.organizationId);
+      const existing = await storage.getRfp((req.params.id as string));
       if (!existing) {
         return res.status(404).json({ error: "RFP not found" });
-      }
-      // Even within the same org, enforce per-company visibility (matches
-      // the read paths in /api/rfps and /api/research-tasks).
-      if (!(await canAccessCompany(currentUser, existing.companyId))) {
-        return res.status(403).json({ error: "Access denied" });
       }
       const parsed = insertRfpSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      // SECURITY: pin companyId server-side. The insert schema accepts a
-      // companyId from the client, but allowing PATCH to reassign would
-      // let a caller authorized on company A move the record to company
-      // B (potentially in a foreign org or one they don't have visibility
-      // on). Reparenting an RFP is not an existing product flow — if it
-      // becomes one, build a dedicated /reassign endpoint that validates
-      // the target.
-      const safeData = { ...parsed.data, companyId: existing.companyId };
-      const rfp = await storage.updateRfp((pStr(req.params.id)), safeData);
+      const rfp = await storage.updateRfp((req.params.id as string), parsed.data);
       res.json(rfp);
     } catch (error) {
       console.error("Error updating RFP:", error);
@@ -1895,19 +1873,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/rfps/:id/lanes/:laneIndex/status", requireAuth, async (req, res) => {
+  app.patch("/api/rfps/:id/lanes/:laneIndex/status", async (req, res) => {
     try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const rfp = await storage.getRfpInOrg(pStr(req.params.id), currentUser.organizationId);
+      const rfp = await storage.getRfp((req.params.id as string));
       if (!rfp) {
         return res.status(404).json({ error: "RFP not found" });
       }
-      if (!(await canAccessCompany(currentUser, rfp.companyId))) {
-        return res.status(403).json({ error: "Access denied" });
-      }
 
-      const laneIndex = parseInt((pStr(req.params.laneIndex)));
+      const laneIndex = parseInt((req.params.laneIndex as string));
       if (isNaN(laneIndex) || laneIndex < 0) {
         return res.status(400).json({ error: "Invalid lane index" });
       }
@@ -1927,7 +1900,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         fileData.highVolumeLanes[laneIndex].contactId = contactId;
       }
 
-      const updated = await storage.updateRfp((pStr(req.params.id)), { ...rfp, fileData } as any);
+      const updated = await storage.updateRfp((req.params.id as string), { ...rfp, fileData } as any);
       res.json(updated);
     } catch (error) {
       console.error("Error updating lane status:", error);
@@ -1935,16 +1908,16 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/research-tasks", requireAuth, async (req, res) => {
+  app.get("/api/research-tasks", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      let allRfps = await storage.getRfpsByOrg(currentUser.organizationId);
+      let allRfps = await storage.getRfps();
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         allRfps = allRfps.filter(r => visibleIds.includes(r.companyId));
       }
-      const companyFilter = qOptStr(req.query.companyId);
+      const companyFilter = req.query.companyId as string | undefined;
       const tasks: any[] = [];
 
       for (const rfp of allRfps) {
@@ -1980,10 +1953,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/companies/:id/lane-patterns", requireAuth, async (req, res) => {
+  app.get("/api/companies/:id/lane-patterns", async (req, res) => {
     try {
-      const companyId = (pStr(req.params.id));
-      const allRfps = await storage.getRfpsByCompanyId(companyId);
+      const companyId = (req.params.id as string);
+      const allRfps = await storage.getRfps();
 
       const corridorMap = new Map<string, {
         origin: string;
@@ -2122,10 +2095,10 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/companies/:id/facility-coverage", requireAuth, async (req, res) => {
+  app.get("/api/companies/:id/facility-coverage", async (req, res) => {
     try {
-      const companyId = (pStr(req.params.id));
-      const allRfps = await storage.getRfpsByCompanyId(companyId);
+      const companyId = (req.params.id as string);
+      const allRfps = await storage.getRfps();
       const contacts = await storage.getContactsByCompany(companyId);
 
       const facilityMap = new Map<string, {
@@ -2171,13 +2144,24 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         }
       }
 
+      const contactLanes = new Set<string>();
+      const contactRegions = new Set<string>();
+      for (const contact of contacts) {
+        if (contact.lanes) {
+          for (const l of contact.lanes) contactLanes.add(l.toLowerCase());
+        }
+        if (contact.regions) {
+          for (const r of contact.regions) contactRegions.add(r.toLowerCase());
+        }
+      }
+
       const facilities = Array.from(facilityMap.values()).map((f) => {
         const facilityLower = f.facility.toLowerCase();
         const stateLower = f.state.toLowerCase();
         const fullName = f.state ? `${f.facility}, ${f.state}` : f.facility;
         const fullNameLower = fullName.toLowerCase();
 
-        const coveredBy: { id: string; name: string }[] = [];
+        let coveredBy: string | null = null;
         for (const contact of contacts) {
           const lanes = (contact.lanes || []).map(l => l.toLowerCase().trim());
           const regions = (contact.regions || []).map(r => r.toLowerCase().trim());
@@ -2198,14 +2182,15 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
           });
 
           if (laneMatch || regionMatch) {
-            coveredBy.push({ id: contact.id, name: contact.name });
+            coveredBy = contact.name;
+            break;
           }
         }
 
         return {
           ...f,
           fullName,
-          covered: coveredBy.length > 0,
+          covered: !!coveredBy,
           coveredBy,
         };
       });
@@ -2225,9 +2210,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/rfps/:id", requireAuth, async (req, res) => {
+  app.delete("/api/rfps/:id", async (req, res) => {
     try {
-      const deleted = await storage.deleteRfp((pStr(req.params.id)));
+      const deleted = await storage.deleteRfp((req.params.id as string));
       if (!deleted) {
         return res.status(404).json({ error: "RFP not found" });
       }
@@ -2238,11 +2223,14 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/awards", requireAuth, async (req, res) => {
+  app.get("/api/awards", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      let allAwards = await storage.getAwardsByOrg(currentUser.organizationId);
+      let allAwards = await storage.getAwards();
+      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
+      const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
+      allAwards = allAwards.filter(a => orgCompanyIds.has(a.companyId));
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         allAwards = allAwards.filter(a => visibleIds.includes(a.companyId));
@@ -2254,58 +2242,13 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/awards", requireAuth, async (req, res) => {
+  app.post("/api/awards", async (req, res) => {
     try {
       const parsed = insertAwardSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
       const award = await storage.createAward(parsed.data);
-
-      // Auto-create an AM-facing onboarding task for each new award.
-      // Non-fatal: task failure must never block the award creation response.
-      try {
-        const existingOnboarding = await storage.findAwardOnboardingTask(award.id);
-        if (!existingOnboarding) {
-          const currentUser = await getCurrentUser(req);
-          const company = award.companyId ? await storage.getCompany(award.companyId) : null;
-          const assignee = company?.assignedTo ?? currentUser?.id;
-          if (assignee) {
-            const assignedBy = currentUser?.id ?? assignee;
-            const laneList = (award.lanes ?? []).filter(Boolean);
-            const laneCount = laneList.length;
-            // Build lane summary for notes (first 3 lanes)
-            const laneSnippet = laneList.slice(0, 3).join("; ") || "No specific lanes recorded";
-            // Due date: 7 business days from today
-            const dueMs = new Date();
-            let bDays = 0;
-            while (bDays < 7) {
-              dueMs.setDate(dueMs.getDate() + 1);
-              const dow = dueMs.getDay();
-              if (dow !== 0 && dow !== 6) bDays++;
-            }
-            const dueDate = dueMs.toISOString().split("T")[0];
-            await storage.createTask({
-              title: `Award Onboarding: ${award.title}`,
-              notes: `${laneCount > 0 ? `${laneCount} lane${laneCount !== 1 ? "s" : ""} won (top: ${laneSnippet}).` : "Award created — no lanes specified yet."} Confirm the kickoff timeline with your contact, verify which lanes will start moving first, and check that the tendering process is set up correctly. Log a touchpoint once the first load ships.`,
-              status: "open",
-              dueDate,
-              assignedTo: assignee,
-              assignedBy,
-              companyId: award.companyId ?? null,
-              contactId: null,
-              orgId: req.session.organizationId ?? null,
-              companyName: company?.name ?? null,
-              contactName: null,
-              attachedLaneData: [{ type: "award_onboarding", awardId: award.id, laneCount }],
-              createdAt: new Date().toISOString(),
-            });
-          }
-        }
-      } catch (taskErr) {
-        console.error("[award-create] Failed to create onboarding task (non-fatal):", taskErr);
-      }
-
       res.status(201).json(award);
     } catch (error) {
       console.error("Error creating award:", error);
@@ -2313,24 +2256,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/awards/:id", requireAuth, async (req, res) => {
+  app.patch("/api/awards/:id", async (req, res) => {
     try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getAwardInOrg(pStr(req.params.id), currentUser.organizationId);
+      const existing = await storage.getAward((req.params.id as string));
       if (!existing) {
         return res.status(404).json({ error: "Award not found" });
-      }
-      if (!(await canAccessCompany(currentUser, existing.companyId))) {
-        return res.status(403).json({ error: "Access denied" });
       }
       const parsed = insertAwardSchema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({ error: parsed.error.message });
       }
-      // SECURITY: pin companyId server-side — see RFP PATCH for rationale.
-      const safeData = { ...parsed.data, companyId: existing.companyId };
-      const award = await storage.updateAward((pStr(req.params.id)), safeData);
+      const award = await storage.updateAward((req.params.id as string), parsed.data);
       res.json(award);
     } catch (error) {
       console.error("Error updating award:", error);
@@ -2338,21 +2274,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/awards/:id", requireAuth, async (req, res) => {
+  app.delete("/api/awards/:id", async (req, res) => {
     try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      // Previously this route had ZERO auth check beyond requireAuth — any
-      // authenticated user could delete any award by guessing IDs. Lock it
-      // down with the standard org+visibility gate before mutating.
-      const existing = await storage.getAwardInOrg(pStr(req.params.id), currentUser.organizationId);
-      if (!existing) {
-        return res.status(404).json({ error: "Award not found" });
-      }
-      if (!(await canAccessCompany(currentUser, existing.companyId))) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-      const deleted = await storage.deleteAward(pStr(req.params.id));
+      const deleted = await storage.deleteAward((req.params.id as string));
       if (!deleted) {
         return res.status(404).json({ error: "Award not found" });
       }
@@ -2365,11 +2289,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
 
   // ── Market Share ──────────────────────────────────────────────────────────
 
-  app.get("/api/companies/:id/market-share", requireAuth, async (req, res) => {
+  app.get("/api/companies/:id/market-share", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const entries = await storage.getMarketShareEntries((pStr(req.params.id)));
+      const entries = await storage.getMarketShareEntries((req.params.id as string));
       res.json(entries);
     } catch (error) {
       console.error("Error fetching market share:", error);
@@ -2378,11 +2302,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   // Auto-calculate monthly load counts from financial data for a given company
-  app.get("/api/companies/:id/market-share/auto-calc", requireAuth, async (req, res) => {
+  app.get("/api/companies/:id/market-share/auto-calc", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const customerAliases = company.financialAlias
@@ -2427,20 +2351,20 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         };
       });
 
-      res.json({ months: result, totalRows: matchedRows.length, customerName: company.name });
+      res.json({ months: result, totalRows: matchedRows.length, customerName });
     } catch (error) {
       console.error("Error auto-calculating market share:", error);
       res.status(500).json({ error: "Failed to calculate from financial data" });
     }
   });
 
-  app.post("/api/companies/:id/market-share", requireAuth, async (req, res) => {
+  app.post("/api/companies/:id/market-share", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       const entry = await storage.createMarketShareEntry({
         ...req.body,
-        companyId: (pStr(req.params.id)),
+        companyId: (req.params.id as string),
         createdAt: new Date().toISOString(),
         createdBy: user.id,
       });
@@ -2451,7 +2375,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/companies/:id/market-share/upload", requireAuth, bulkImportRateLimit, upload.single("file"), async (req, res) => {
+  app.post("/api/companies/:id/market-share/upload", upload.single("file"), async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -2492,7 +2416,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         const totalMarketLoads = totalStr ? parseInt(totalStr.replace(/,/g, ""), 10) || null : null;
 
         const entry = await storage.createMarketShareEntry({
-          companyId: (pStr(req.params.id)),
+          companyId: (req.params.id as string),
           entryType: entryType === "rfp_cycle" ? "rfp_cycle" : "monthly",
           periodLabel,
           periodStart: periodStart || null,
@@ -2515,11 +2439,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/market-share/:id", requireAuth, async (req, res) => {
+  app.patch("/api/market-share/:id", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const updated = await storage.updateMarketShareEntry((pStr(req.params.id)), req.body);
+      const updated = await storage.updateMarketShareEntry((req.params.id as string), req.body);
       if (!updated) return res.status(404).json({ error: "Entry not found" });
       res.json(updated);
     } catch (error) {
@@ -2528,11 +2452,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/market-share/:id", requireAuth, async (req, res) => {
+  app.delete("/api/market-share/:id", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deleteMarketShareEntry((pStr(req.params.id)));
+      const deleted = await storage.deleteMarketShareEntry((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Entry not found" });
       res.status(204).send();
     } catch (error) {
@@ -2542,7 +2466,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   // Market share summary: all companies visible to user, with latest % + trend
-  app.get("/api/market-share/summary", requireAuth, async (req, res) => {
+  app.get("/api/market-share/summary", async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
@@ -2612,127 +2536,2555 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  registerTaskRoutes(app);
-  registerForcedFocusRoutes(app);
-  registerEngagementRoutes(app);
-  registerLaneCarrierOutreachRoutes(app);
-  registerLaneSwitchboardRoutes(app);
-  registerLaneCockpitRoutes(app);
-  registerTodayQueueRoutes(app);
-  registerCarrierHubRoutes(app);
-  registerMyProcurementRoutes(app);
-  registerWonLoadAutopilotRoutes(app);
-  registerCapacityMatchesRoutes(app);
-  registerCompanyCollaboratorRoutes(app);
-  registerProcurementOutreachRoutes(app);
-  // Cockpit routes MUST register first so /cockpit, /cockpit-prefs, /bulk-action,
-  // /saved-views aren't shadowed by the proactiveOpportunities `/:id` catch-alls.
-  registerFreightCockpitRoutes(app);
-  registerFreightConversionFailuresRoutes(app);
-  registerQuotePipelineHealthRoutes(app);
-  registerProactiveOpportunityRoutes(app);
-  registerIntelRoutes(app);
-  registerGraphWebhookRoutes(app);
-  registerMarketSignalRoutes(app);
-  registerEmailIntelligenceRoutes(app);
-  registerEmailFactsRoutes(app);
-  registerConversationsRoutes(app);
-  registerProvenTacticsRoutes(app);
-  registerPlaybookRoutes(app);
-  registerEmailAnalyticsRoutes(app);
-  registerSonarRoutes(app);
-  registerCallIntelligenceRoutes(app);
-  registerCoachingRoutes(app);
-  registerProspectRoutes(app);
-  registerEmailDraftingRoutes(app);
-  registerNbaReadyToActRoutes(app);
-  registerMonitoredMailboxRoutes(app);
-  registerEmailPipelineOpsRoutes(app);
-  registerPodIntakeRoutes(app);
-  registerWebexRoutes(app);
-  registerCallTrendlineRoutes(app);
-  registerCustomerQuoteRoutes(app);
-  registerLiveSyncRoutes(app);
-  registerLaneInboxRoutes(app);
-  registerLeakConsoleRoutes(app);
-  registerLaneStoryRoutes(app);
-  registerNotificationRoutes(app);
-  registerContextNotesRoutes(app);
-  registerContactRoutes(app);
-  registerCompanyRoutes(app);
-  // Task #478 — periodic lost-streak alerts for customers and lane groups.
-  {
-    const { initQuoteLostStreakScheduler } = await import("./quoteLostStreakScheduler");
-    initQuoteLostStreakScheduler().catch((err) =>
-      console.error("[quote-lost-streak] init error:", err)
-    );
-  }
-  const { registerAgentAdminRoutes } = await import("./routes/agentAdmin");
-  registerAgentAdminRoutes(app);
-  const { registerAgentAnalyticsRoutes } = await import("./routes/agentAnalytics");
-  registerAgentAnalyticsRoutes(app);
-  // Task #926 — Copilot Intelligence (extractions, intelligence rows, plays).
-  const { registerCopilotIntelligenceRoutes } = await import("./routes/copilotIntelligence");
-  registerCopilotIntelligenceRoutes(app);
-  // Task #700: AI engagement instrumentation — batched event ingest + admin overview.
-  const { registerAiEngagementRoutes } = await import("./routes/aiEngagement");
-  registerAiEngagementRoutes(app);
-  // Task #701: Integrations Health Console — admin probe snapshot.
-  const { registerIntegrationsHealthRoutes } = await import("./routes/integrationsHealth");
-  registerIntegrationsHealthRoutes(app);
-  // Phase 2a — quote-request leakage diagnostic (read-only).
-  const { registerConversationsLeakageRoutes } = await import("./routes/conversationsLeakage");
-  registerConversationsLeakageRoutes(app);
-  // Task #705: Endpoint performance budgets — admin overview.
-  // perfTimingMiddleware was registered at the very top of registerRoutes
-  // (Task #705) so it captures every route below; we only need to register
-  // the admin-facing perf routes here.
-  const { registerEndpointPerfRoutes } = await import("./routes/endpointPerf");
-  registerEndpointPerfRoutes(app);
-  const { registerValueIQRoutes } = await import("./routes/valueiq");
-  registerValueIQRoutes(app);
-  const { registerAccountReviewRoutes } = await import("./routes/accountReviews");
-  registerAccountReviewRoutes(app);
-  const { registerAgenticRoutes } = await import("./routes/agentic");
-  registerAgenticRoutes(app);
+  // ── Task Assignment ──────────────────────────────────────────────────────────
 
-  // Unified AI Center read-side aggregation (combined fleet across both kinds).
-  const { registerAiCenterRoutes } = await import("./routes/aiCenter");
-  registerAiCenterRoutes(app);
-
-  // Org corpus indexer — nightly reindex + admin trigger.
-  {
-    const cron = (await import("node-cron")).default;
-    const { indexAllOrgs, indexOrg } = await import("./agent/corpusIndexer");
-    cron.schedule("0 3 * * *", () => {
-      console.log("[corpus] nightly indexAllOrgs starting");
-      indexAllOrgs().catch((err) => console.error("[corpus] nightly failed:", err));
-    });
-    app.post("/api/admin/agents/reindex-corpus", requireAuth, async (req, res) => {
-      try {
-        const me = await getCurrentUser(req);
-        if (!me || me.role !== "admin") return res.status(403).json({ error: "Admin only" });
-        const result = await indexOrg(me.organizationId);
-        res.json(result);
-      } catch (err) {
-        res.status(500).json({ error: getErrorMessage(err) });
+  app.get("/api/tasks", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const allTasks = await storage.getTasks();
+      let filtered: typeof allTasks;
+      if (user.role === "admin") {
+        filtered = allTasks;
+      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        filtered = allTasks.filter(t => teamIds.includes(t.assignedTo) || teamIds.includes(t.assignedBy));
+      } else {
+        filtered = allTasks.filter(t => t.assignedTo === user.id || t.assignedBy === user.id);
       }
-    });
+      const counts = await storage.getTaskCommentCounts(filtered.map(t => t.id));
+      return res.json(filtered.map(t => ({ ...t, commentCount: counts[t.id] ?? 0 })));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch tasks" });
+    }
+  });
+
+  app.get("/api/tasks/company/:companyId", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(user, (req.params.companyId as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const companyTasks = await storage.getTasksByCompany((req.params.companyId as string));
+      const counts = await storage.getTaskCommentCounts(companyTasks.map(t => t.id));
+      res.json(companyTasks.map(t => ({ ...t, commentCount: counts[t.id] ?? 0 })));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch company tasks" });
+    }
+  });
+
+  app.post("/api/tasks", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { title, notes, status, dueDate, assignedTo, companyId, contactId } = req.body;
+      if (!title || typeof title !== "string" || !title.trim()) {
+        return res.status(400).json({ error: "Title is required" });
+      }
+      if (!assignedTo || typeof assignedTo !== "string") {
+        return res.status(400).json({ error: "Assignee is required" });
+      }
+      const validStatuses = ["open", "in_progress", "completed"];
+      const taskStatus = status && validStatuses.includes(status) ? status : "open";
+      if (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) {
+        return res.status(400).json({ error: "Invalid date format" });
+      }
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      let assignableIds: Set<string>;
+      if (user.role === "admin") {
+        assignableIds = new Set(allUsers.map(u => u.id));
+      } else if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        assignableIds = new Set(teamIds);
+        // Also allow assigning upward to their manager and all admins
+        if (user.managerId) assignableIds.add(user.managerId);
+        allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
+      } else {
+        assignableIds = new Set([user.id]);
+        if (user.managerId) {
+          assignableIds.add(user.managerId);
+          allUsers.forEach(u => {
+            if (u.managerId === user.managerId) assignableIds.add(u.id);
+          });
+        }
+        // Also allow assigning to any admin
+        allUsers.filter(u => u.role === "admin").forEach(u => assignableIds.add(u.id));
+      }
+      if (!assignableIds.has(assignedTo)) {
+        return res.status(403).json({ error: "Cannot assign task to that user" });
+      }
+      if (companyId && !(await canAccessCompany(user, companyId))) {
+        return res.status(403).json({ error: "Cannot link task to inaccessible company" });
+      }
+      const task = await storage.createTask({
+        title: title.trim(),
+        notes: notes || null,
+        status: taskStatus,
+        dueDate: dueDate || null,
+        assignedTo,
+        assignedBy: user.id,
+        companyId: companyId || null,
+        contactId: contactId || null,
+        createdAt: new Date().toISOString(),
+      });
+      if (assignedTo !== user.id) {
+        storage.createNotification({
+          userId: assignedTo,
+          type: "task_assigned",
+          title: `${user.name} assigned you a task`,
+          body: title.trim(),
+          link: "/tasks",
+          relatedId: task.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
+      res.status(201).json(task);
+    } catch (error) {
+      console.error("Error creating task:", error);
+      res.status(500).json({ error: "Failed to create task" });
+    }
+  });
+
+  app.patch("/api/tasks/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getTask((req.params.id as string));
+      if (!existing) return res.status(404).json({ error: "Task not found" });
+      if (existing.assignedTo !== user.id && existing.assignedBy !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Not authorized to edit this task" });
+      }
+      const validStatuses = ["open", "in_progress", "completed"];
+      const data: any = {};
+      if (req.body.title !== undefined) {
+        const trimmed = String(req.body.title).trim();
+        if (!trimmed) return res.status(400).json({ error: "Title cannot be empty" });
+        data.title = trimmed;
+      }
+      if (req.body.notes !== undefined) data.notes = req.body.notes;
+      if (req.body.status !== undefined) {
+        if (!validStatuses.includes(req.body.status)) {
+          return res.status(400).json({ error: "Invalid status. Must be open, in_progress, or completed" });
+        }
+        data.status = req.body.status;
+      }
+      if (req.body.dueDate !== undefined) {
+        if (req.body.dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(req.body.dueDate)) {
+          return res.status(400).json({ error: "Invalid date format" });
+        }
+        data.dueDate = req.body.dueDate;
+      }
+      if (req.body.assignedTo !== undefined) {
+        data.assignedTo = req.body.assignedTo;
+      }
+      const task = await storage.updateTask((req.params.id as string), data);
+      // Notify new assignee if reassigned to someone else
+      if (data.assignedTo && data.assignedTo !== existing.assignedTo && data.assignedTo !== user.id) {
+        storage.createNotification({
+          userId: data.assignedTo,
+          type: "task_assigned",
+          title: `${user.name} assigned you a task`,
+          body: task?.title ?? existing.title,
+          link: "/tasks",
+          relatedId: existing.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
+      // Notify creator when assignee marks task completed
+      const justCompleted = data.status === "completed" && existing.status !== "completed";
+      const completionNote = typeof req.body.completionNote === "string" ? req.body.completionNote.trim() : "";
+      if (justCompleted && existing.assignedBy && existing.assignedBy !== user.id) {
+        // Post the completion note as a task comment so it's visible in the thread
+        if (completionNote) {
+          await storage.createTaskComment({
+            taskId: existing.id,
+            authorId: user.id,
+            content: completionNote,
+            createdAt: new Date().toISOString(),
+            parentId: null,
+          }).catch((e) => console.error("Completion note comment error:", e));
+        }
+        const notifyBody = completionNote
+          ? `${task?.title ?? existing.title} — "${completionNote}"`
+          : task?.title ?? existing.title;
+        storage.createNotification({
+          userId: existing.assignedBy,
+          type: "task_completed",
+          title: `${user.name} completed a task`,
+          body: notifyBody,
+          link: "/tasks",
+          relatedId: existing.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
+      res.json(task);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update task" });
+    }
+  });
+
+  app.delete("/api/tasks/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getTask((req.params.id as string));
+      if (!existing) return res.status(404).json({ error: "Task not found" });
+      if (existing.assignedBy !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Only the creator or admin can delete tasks" });
+      }
+      await storage.deleteTask((req.params.id as string));
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete task" });
+    }
+  });
+
+  // ── Task Comments ────────────────────────────────────────────────────────
+
+  app.get("/api/tasks/:id/comments", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const comments = await storage.getTaskComments((req.params.id as string));
+      res.json(comments);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch comments" });
+    }
+  });
+
+  app.post("/api/tasks/:id/comments", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { content, parentId } = req.body;
+      if (!content?.trim()) return res.status(400).json({ error: "Content is required" });
+      const task = await storage.getTask((req.params.id as string));
+      if (!task) return res.status(404).json({ error: "Task not found" });
+      const comment = await storage.createTaskComment({
+        taskId: (req.params.id as string),
+        authorId: user.id,
+        content: content.trim(),
+        createdAt: new Date().toISOString(),
+        parentId: parentId || null,
+      });
+      // Notify task assignee, creator, and anyone who has previously commented (thread following)
+      const existingComments = await storage.getTaskComments((req.params.id as string));
+      const threadParticipants = existingComments.map(c => c.authorId);
+      const notifyIds = [...new Set([task.assignedTo, task.assignedBy, ...threadParticipants])].filter(
+        (id): id is string => !!id && id !== user.id
+      );
+      for (const uid of notifyIds) {
+        storage.createNotification({
+          userId: uid,
+          type: "task_comment",
+          title: `${user.name} commented on a task`,
+          body: task.title,
+          link: "/tasks",
+          relatedId: task.id,
+          read: false,
+        }).catch((e) => console.error("Notification error:", e));
+      }
+      res.status(201).json(comment);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create comment" });
+    }
+  });
+
+  app.post("/api/tasks/:id/bump", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const task = await storage.getTask((req.params.id as string));
+      if (!task) return res.status(404).json({ error: "Task not found" });
+      if (task.assignedBy !== user.id) return res.status(403).json({ error: "Only the task creator can send a reminder" });
+      if (task.status === "completed") return res.status(400).json({ error: "Task is already completed" });
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const due = task.dueDate ? new Date(task.dueDate + "T00:00:00") : null;
+      if (!due) return res.status(400).json({ error: "Task has no due date" });
+      const daysOverdue = Math.floor((today.getTime() - due.getTime()) / 86400000);
+      if (daysOverdue < 2) return res.status(400).json({ error: "Task must be at least 2 days overdue to send a reminder" });
+      storage.createNotification({
+        userId: task.assignedTo,
+        type: "task_reminder",
+        title: `Reminder from ${user.name}`,
+        body: `"${task.title}" is ${daysOverdue} day${daysOverdue !== 1 ? "s" : ""} overdue`,
+        link: "/tasks",
+        relatedId: task.id,
+        read: false,
+      }).catch((e) => console.error("Notification error:", e));
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to send reminder" });
+    }
+  });
+
+  app.delete("/api/tasks/:taskId/comments/:commentId", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const comments = await storage.getTaskComments((req.params.taskId as string));
+      const comment = comments.find(c => c.id === (req.params.commentId as string));
+      if (!comment) return res.status(404).json({ error: "Comment not found" });
+      if (comment.authorId !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Not authorized" });
+      }
+      await storage.deleteTaskComment((req.params.commentId as string));
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete comment" });
+    }
+  });
+
+  // ── Callouts ─────────────────────────────────────────────────────────────
+
+  app.get("/api/callouts", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const allCallouts = await storage.getCallouts();
+      const visibleIds = await getVisibleCompanyIds(user);
+      const visibleAuthorIds = await getVisibleFeedAuthorIds(user);
+      const filtered = visibleIds === null
+        ? allCallouts
+        : allCallouts.filter(c => {
+            const companyOk = !c.companyId || visibleIds.includes(c.companyId);
+            const authorOk = !visibleAuthorIds || visibleAuthorIds.includes(c.authorId);
+            return companyOk && authorOk;
+          });
+      res.json(filtered);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch callouts" });
+    }
+  });
+
+  app.get("/api/callouts/company/:companyId", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!(await canAccessCompany(user, (req.params.companyId as string)))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const companyCallouts = await storage.getCalloutsByCompany((req.params.companyId as string));
+      res.json(companyCallouts);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch company callouts" });
+    }
+  });
+
+  app.post("/api/callouts", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { title, body, tag, companyId, parentId } = req.body;
+      if (!title || typeof title !== "string" || !title.trim()) {
+        return res.status(400).json({ error: "Title is required" });
+      }
+      const validTags = ["Trend", "Callout", "Idea"];
+      if (tag && !validTags.includes(tag)) {
+        return res.status(400).json({ error: "Invalid tag" });
+      }
+      let parentCallout: Awaited<ReturnType<typeof storage.getCallout>> = undefined;
+      if (parentId) {
+        parentCallout = await storage.getCallout(parentId);
+        if (!parentCallout) return res.status(404).json({ error: "Parent callout not found" });
+      }
+      if (companyId) {
+        if (!(await canAccessCompany(user, companyId))) {
+          return res.status(403).json({ error: "Cannot link callout to inaccessible company" });
+        }
+      }
+      const callout = await storage.createCallout({
+        title: title.trim(),
+        body: body || null,
+        tag: tag || null,
+        companyId: companyId || null,
+        authorId: user.id,
+        parentId: parentId || null,
+        createdAt: new Date().toISOString(),
+      });
+      // Notify the original author + all thread participants (thread following)
+      if (parentCallout) {
+        const allCallouts = await storage.getCallouts();
+        const threadReplies = allCallouts.filter(c => c.parentId === parentCallout!.id);
+        const threadParticipants = new Set([
+          parentCallout.authorId,
+          ...threadReplies.map(c => c.authorId),
+        ]);
+        threadParticipants.delete(user.id);
+        for (const uid of threadParticipants) {
+          const isOriginalAuthor = uid === parentCallout.authorId;
+          storage.createNotification({
+            userId: uid,
+            type: "post_reply",
+            title: isOriginalAuthor
+              ? `${user.name} replied to your callout`
+              : `${user.name} replied to a thread you're in`,
+            body: (title.trim()).length > 80 ? title.trim().slice(0, 80) + "…" : title.trim(),
+            link: "/",
+            relatedId: callout.id,
+            read: false,
+          }).catch((e) => console.error("Notification error:", e));
+        }
+      }
+      res.status(201).json(callout);
+    } catch (error) {
+      console.error("Error creating callout:", error);
+      res.status(500).json({ error: "Failed to create callout" });
+    }
+  });
+
+  app.delete("/api/callouts/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const callout = await storage.getCallout((req.params.id as string));
+      if (!callout) return res.status(404).json({ error: "Callout not found" });
+      if (callout.authorId !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Only the author or admin can delete callouts" });
+      }
+      await storage.deleteCallout((req.params.id as string));
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete callout" });
+    }
+  });
+
+  // ── Opportunity / Win Logs ────────────────────────────────────────────────
+  app.get("/api/opportunity-logs", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { repId, companyId, type, startDate, endDate } = req.query as Record<string, string>;
+      const logs = await storage.getOpportunityLogs(req.session.organizationId!, {
+        repId: repId || undefined,
+        companyId: companyId || undefined,
+        type: type || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+      });
+      res.json(logs);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch opportunity logs" });
+    }
+  });
+
+  app.get("/api/opportunity-logs/summary", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { repIds, startDate, endDate } = req.query as Record<string, string>;
+      const ids = repIds ? repIds.split(",") : [];
+      const summary = await storage.getOpportunityLogSummary(
+        ids,
+        startDate || `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`,
+        endDate || new Date().toISOString().split("T")[0]
+      );
+      res.json(summary);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch opportunity log summary" });
+    }
+  });
+
+  app.post("/api/opportunity-logs", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { type, category, title, description, companyId, estimatedLoads, estimatedValue, loggedAt } = req.body;
+      if (!type || !title) return res.status(400).json({ error: "type and title are required" });
+
+      const log = await storage.createOpportunityLog({
+        organizationId: req.session.organizationId!,
+        repId: user.id,
+        companyId: companyId || null,
+        type,
+        category: category || "other",
+        title,
+        description: description || null,
+        estimatedLoads: estimatedLoads != null ? Number(estimatedLoads) : null,
+        estimatedValue: estimatedValue != null ? String(estimatedValue) : null,
+        loggedAt: loggedAt || new Date().toISOString().split("T")[0],
+        createdAt: new Date().toISOString(),
+      });
+
+      // Auto-post to callouts feed when a win is logged
+      if (type === "win") {
+        const categoryLabels: Record<string, string> = {
+          spot_batch: "Batch of Spot Loads",
+          dedicated_contracted: "Spot to Contracted Conversion",
+          mini_bid: "Mini-Bid",
+          project: "Project",
+          other: "New Site, First Opp",
+        };
+        const catLabel = categoryLabels[category] || category || "Win";
+        const parts = [`🏆 ${user.name} logged a win: ${title}`, `Category: ${catLabel}`];
+        if (description) parts.push(description);
+        const extras: string[] = [];
+        if (estimatedLoads) extras.push(`${estimatedLoads} loads`);
+        if (estimatedValue) extras.push(`$${Number(estimatedValue).toLocaleString()} est. value`);
+        if (extras.length) parts.push(extras.join(" · "));
+        await storage.createCallout({
+          title: `${user.name}: ${title}`,
+          body: parts.slice(1).join("\n"),
+          tag: "win",
+          companyId: companyId || null,
+          authorId: user.id,
+          parentId: null,
+          createdAt: new Date().toISOString(),
+        });
+      }
+
+      res.status(201).json(log);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create opportunity log" });
+    }
+  });
+
+  app.delete("/api/opportunity-logs/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const logs = await storage.getOpportunityLogs(req.session.organizationId!);
+      const log = logs.find(l => l.id === req.params.id);
+      if (!log) return res.status(404).json({ error: "Not found" });
+      if (log.repId !== user.id && user.role !== "admin") return res.status(403).json({ error: "Not authorized" });
+      await storage.deleteOpportunityLog(req.params.id as string);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete opportunity log" });
+    }
+  });
+
+  // ── Feed Posts (Trends / Growth / Ideas) ─────────────────────────────────
+
+  app.get("/api/feed-posts", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const visibleAuthorIds = await getVisibleFeedAuthorIds(user);
+      const topLevel = await storage.getFeedPosts(visibleAuthorIds);
+      // Attach replies to each top-level post
+      const parentIds = topLevel.map((p: any) => p.id);
+      const replies = await storage.getFeedReplies(parentIds);
+      const replyMap: Record<string, any[]> = {};
+      for (const r of replies) {
+        if (!replyMap[r.parentId!]) replyMap[r.parentId!] = [];
+        replyMap[r.parentId!].push(r);
+      }
+      return res.json(topLevel.map((p: any) => ({ ...p, replies: replyMap[p.id] || [] })));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch feed posts" });
+    }
+  });
+
+  app.post("/api/feed-posts", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { content, category, parentId } = req.body;
+      const trimmed = typeof content === "string" ? content.trim() : "";
+      if (!trimmed) return res.status(400).json({ error: "Content is required" });
+
+      // If replying to an existing post, all roles are allowed
+      if (parentId) {
+        const parent = await storage.getFeedPost(parentId);
+        if (!parent) return res.status(404).json({ error: "Parent post not found" });
+        const post = await storage.createFeedPost({
+          content: trimmed,
+          category: parent.category,
+          authorId: user.id,
+          createdAt: new Date().toISOString(),
+          parentId,
+        });
+        // Notify the original post author if someone else replied
+        if (parent.authorId !== user.id) {
+          storage.createNotification({
+            userId: parent.authorId,
+            type: "post_reply",
+            title: `${user.name} replied to your post`,
+            body: trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed,
+            link: "/",
+            relatedId: post.id,
+            read: false,
+          }).catch((e) => console.error("Notification error:", e));
+        }
+        return res.status(201).json(post);
+      }
+
+      // Top-level post: all authenticated users can post
+      const validCategories = ["trend", "growth", "idea", "celebrate"];
+      if (!validCategories.includes(category)) return res.status(400).json({ error: "Invalid category" });
+      const post = await storage.createFeedPost({
+        content: trimmed,
+        category,
+        authorId: user.id,
+        createdAt: new Date().toISOString(),
+        parentId: null,
+      });
+      // Fan out notification to team members who can see this post
+      (async () => {
+        try {
+          const allUsers = await storage.getUsers(req.session.organizationId!);
+          const directReports = allUsers.filter(u => u.managerId === user.id).map(u => u.id);
+          const grandReports = allUsers.filter(u => directReports.includes(u.managerId ?? "")).map(u => u.id);
+          let recipientIds: string[];
+          if (user.role === "admin") {
+            recipientIds = allUsers.filter(u => u.id !== user.id).map(u => u.id);
+          } else if (user.role === "director" || user.role === "sales_director") {
+            recipientIds = [...new Set([...directReports, ...grandReports])];
+          } else {
+            recipientIds = [...new Set([...directReports, ...grandReports])];
+            if (user.managerId) recipientIds.push(user.managerId);
+          }
+          const categoryLabel = category === "growth" ? "Growth Win" : category === "trend" ? "Trend" : "Idea";
+          const preview = trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed;
+          await Promise.all(
+            recipientIds
+              .filter(id => id !== user.id)
+              .map(id =>
+                storage.createNotification({
+                  userId: id,
+                  type: "new_post",
+                  title: `${user.name} posted a ${categoryLabel}`,
+                  body: preview,
+                  link: "/",
+                  relatedId: post.id,
+                  read: false,
+                }).catch(() => {})
+              )
+          );
+        } catch (e) {
+          console.error("Feed notification fan-out error:", e);
+        }
+      })();
+      res.status(201).json(post);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create feed post" });
+    }
+  });
+
+  app.delete("/api/feed-posts/:id", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const post = await storage.getFeedPost((req.params.id as string));
+      if (!post) return res.status(404).json({ error: "Post not found" });
+      if (post.authorId !== user.id && user.role !== "admin") {
+        return res.status(403).json({ error: "Only the author or admin can delete posts" });
+      }
+      await storage.deleteFeedPost((req.params.id as string));
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete feed post" });
+    }
+  });
+
+  app.patch("/api/feed-posts/:id/pin", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const canPin = ["admin", "director", "national_account_manager", "sales_director"].includes(user.role);
+      if (!canPin) return res.status(403).json({ error: "Only admins and managers can pin posts" });
+      const post = await storage.getFeedPost((req.params.id as string));
+      if (!post) return res.status(404).json({ error: "Post not found" });
+      const updated = await storage.pinFeedPost((req.params.id as string), !!req.body.pinned);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to pin post" });
+    }
+  });
+
+  // ── Internal Posts (Leadership → Team Direct Messages) ────────────────────
+
+  app.get("/api/internal-posts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const orgUsers = await storage.getUsers(user.organizationId);
+      const orgUserIds = orgUsers.map(u => u.id);
+      const posts = await storage.getInternalPosts(user.id, user.role, orgUserIds);
+      res.json(posts);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch internal posts" });
+    }
+  });
+
+  app.post("/api/internal-posts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { content, recipientIds, parentId } = req.body;
+      // Allow empty content when attachments will follow (attachments are uploaded separately after the post is created)
+      // Only admins/directors can start new threads; anyone who can see the thread can reply
+      const isLeadership = user.role === "admin" || user.role === "director";
+      if (!parentId && !isLeadership) {
+        return res.status(403).json({ error: "Only admins and directors can start new threads" });
+      }
+      const post = await storage.createInternalPost({
+        content: content.trim(),
+        authorId: user.id,
+        recipientIds: Array.isArray(recipientIds) ? recipientIds : [],
+        parentId: parentId || null,
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(post);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create internal post" });
+    }
+  });
+
+  app.delete("/api/internal-posts/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const isLeadership = user.role === "admin" || user.role === "director";
+      if (!isLeadership) return res.status(403).json({ error: "Only admins and directors can delete posts" });
+      await storage.deleteInternalPost((req.params.id as string));
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete internal post" });
+    }
+  });
+
+  // ── Callout Reactions ──────────────────────────────────────────────────────
+
+  app.get("/api/callouts/reactions", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const ids = req.query.ids;
+      if (!ids || typeof ids !== "string") return res.json([]);
+      const requestedIds = ids.split(",").filter(Boolean);
+      if (requestedIds.length === 0) return res.json([]);
+
+      let visibleCallouts: Callout[];
+      if (user.role === "admin") {
+        visibleCallouts = await storage.getCallouts();
+      } else {
+        visibleCallouts = await storage.getCallouts();
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const teamSet = new Set(teamIds);
+        visibleCallouts = visibleCallouts.filter(c => teamSet.has(c.authorId));
+      }
+
+      const visibleCalloutIds = new Set(visibleCallouts.map(c => c.id));
+      const filteredIds = requestedIds.filter(id => visibleCalloutIds.has(id));
+      if (filteredIds.length === 0) return res.json([]);
+
+      const reactions = await storage.getReactionsByCalloutIds(filteredIds);
+      res.json(reactions);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch reactions" });
+    }
+  });
+
+  app.post("/api/callouts/:id/reactions", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "admin" && user.role !== "director" && user.role !== "sales_director") {
+        return res.status(403).json({ error: "Only admins and directors can react" });
+      }
+      const { emoji } = req.body;
+      const validEmojis = ["👍", "❤️", "🔥", "💡", "✅"];
+      if (!emoji || !validEmojis.includes(emoji)) {
+        return res.status(400).json({ error: "Invalid emoji" });
+      }
+      const callout = await storage.getCallout((req.params.id as string));
+      if (!callout) return res.status(404).json({ error: "Callout not found" });
+      const result = await storage.toggleReaction((req.params.id as string), user.id, emoji);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to toggle reaction" });
+    }
+  });
+
+  // ── Feed Post Reactions ─────────────────────────────────────────────────────
+
+  app.get("/api/feed/reactions", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const ids = req.query.ids;
+      if (!ids || typeof ids !== "string") return res.json([]);
+      const requestedIds = ids.split(",").filter(Boolean);
+      if (requestedIds.length === 0) return res.json([]);
+
+      const visibleAuthorIds = await getVisibleFeedAuthorIds(user);
+      const visiblePosts = await storage.getFeedPosts(visibleAuthorIds);
+      const visiblePostIds = new Set(visiblePosts.map(p => p.id));
+      const filteredIds = requestedIds.filter(id => visiblePostIds.has(id));
+      if (filteredIds.length === 0) return res.json([]);
+
+      const reactions = await storage.getReactionsByFeedPostIds(filteredIds);
+      res.json(reactions);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch feed reactions" });
+    }
+  });
+
+  app.post("/api/feed/:id/reactions", async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { emoji } = req.body;
+      const validEmojis = ["👍", "🔥", "💡", "❤️", "✅"];
+      if (!emoji || !validEmojis.includes(emoji)) {
+        return res.status(400).json({ error: "Invalid emoji" });
+      }
+      const post = await storage.getFeedPost((req.params.id as string));
+      if (!post) return res.status(404).json({ error: "Feed post not found" });
+      if (post.parentId) return res.status(400).json({ error: "Reactions are only allowed on top-level posts" });
+
+      const visibleAuthorIds = await getVisibleFeedAuthorIds(user);
+      if (visibleAuthorIds && !visibleAuthorIds.includes(post.authorId)) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const result = await storage.toggleFeedPostReaction((req.params.id as string), user.id, emoji);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to toggle feed reaction" });
+    }
+  });
+
+  // ── 1-on-1 Sessions ────────────────────────────────────────────────────────
+
+  app.get("/api/1on1/session", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { managerId, repId } = req.query as { managerId?: string; repId?: string };
+      if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === managerId || user.id === repId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const session = await storage.getOrCreateActiveSession(managerId, repId);
+      const topics = await storage.getTopicsBySession(session.id);
+      res.json({ session, topics });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get session" });
+    }
+  });
+
+  app.post("/api/1on1/session/:id/topics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { text, tag } = req.body;
+      if (!text?.trim()) return res.status(400).json({ error: "Text required" });
+      const topic = await storage.createTopic({
+        sessionId: (req.params.id as string),
+        addedById: user.id,
+        text: text.trim(),
+        tag: tag || "fyi",
+        status: "pending",
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(topic);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to add topic" });
+    }
+  });
+
+  app.patch("/api/1on1/topics/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { status } = req.body;
+      if (!status) return res.status(400).json({ error: "Status required" });
+      const updated = await storage.updateTopicStatus((req.params.id as string), status);
+      if (!updated) return res.status(404).json({ error: "Topic not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update topic" });
+    }
+  });
+
+  app.delete("/api/1on1/topics/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const deleted = await storage.deleteTopic((req.params.id as string));
+      if (!deleted) return res.status(404).json({ error: "Topic not found" });
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete topic" });
+    }
+  });
+
+  app.post("/api/1on1/session/:id/close", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { carryForwardTopicIds, moraleScore, sessionSummary, sendSummaryEmail } = req.body || {};
+      const oldSession = await storage.getSession((req.params.id as string));
+      const newSession = await storage.closeSession((req.params.id as string), {
+        carryForwardTopicIds: Array.isArray(carryForwardTopicIds) ? carryForwardTopicIds : undefined,
+        moraleScore: typeof moraleScore === "number" ? moraleScore : undefined,
+        sessionSummary: typeof sessionSummary === "string" && sessionSummary.trim() ? sessionSummary.trim() : undefined,
+      });
+      // Optionally send summary email to both participants
+      if (sendSummaryEmail && oldSession) {
+        try {
+          const { build1on1SummaryEmail, sendEmail } = await import("./emailService");
+          const topics = await storage.getTopicsBySession((req.params.id as string));
+          const allUsers = await storage.getUsers();
+          const nam = allUsers.find(u => u.id === oldSession.namId);
+          const am = allUsers.find(u => u.id === oldSession.amId);
+          if (nam?.email && am?.email) {
+            const html = build1on1SummaryEmail({ session: { ...oldSession, moraleScore: moraleScore ?? null, sessionSummary: sessionSummary ?? null }, topics, namName: nam.name, amName: am.name });
+            await sendEmail({ to: nam.email, subject: `1:1 Session Recap — ${am.name}`, html });
+            await sendEmail({ to: am.email, subject: `1:1 Session Recap — with ${nam.name}`, html });
+          }
+        } catch (emailErr) {
+          console.error("[1on1] summary email error:", emailErr);
+        }
+      }
+      res.json(newSession);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to close session" });
+    }
+  });
+
+  app.get("/api/1on1/archived", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { managerId, repId } = req.query as { managerId?: string; repId?: string };
+      if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === managerId || user.id === repId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const sessions = await storage.getArchivedSessions(managerId, repId);
+      const sessionsWithTopics = await Promise.all(
+        sessions.map(async (s) => ({
+          ...s,
+          topics: await storage.getTopicsBySession(s.id),
+        }))
+      );
+      res.json(sessionsWithTopics);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get archived sessions" });
+    }
+  });
+
+  app.patch("/api/1on1/session/:id/meeting-date", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { meetingDate } = req.body;
+      const session = await storage.getSession((req.params.id as string));
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === session.namId || user.id === session.amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const updated = await storage.updateSessionMeetingDate((req.params.id as string), meetingDate || null);
+      if (!updated) return res.status(404).json({ error: "Session not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update meeting date" });
+    }
+  });
+
+  app.patch("/api/1on1/session/:id/meeting-link", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { meetingLink } = req.body;
+      if (meetingLink !== undefined && meetingLink !== null && meetingLink !== "" && typeof meetingLink !== "string") {
+        return res.status(400).json({ error: "meetingLink must be a string or null" });
+      }
+      let normalizedLink: string | null = null;
+      if (meetingLink && typeof meetingLink === "string" && meetingLink.trim()) {
+        const trimmed = meetingLink.trim();
+        try {
+          const url = new URL(trimmed);
+          if (url.protocol !== "https:" && url.protocol !== "http:") {
+            return res.status(400).json({ error: "Meeting link must use http or https" });
+          }
+        } catch {
+          return res.status(400).json({ error: "Invalid URL format" });
+        }
+        if (trimmed.length > 2048) {
+          return res.status(400).json({ error: "Meeting link is too long" });
+        }
+        normalizedLink = trimmed;
+      }
+      const session = await storage.getSession((req.params.id as string));
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === session.namId || user.id === session.amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const updated = await storage.updateSessionMeetingLink((req.params.id as string), normalizedLink);
+      if (!updated) return res.status(404).json({ error: "Session not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update meeting link" });
+    }
+  });
+
+  app.patch("/api/1on1/session/:id/notes", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { notes } = req.body;
+      if (typeof notes !== "string") return res.status(400).json({ error: "Notes must be a string" });
+      const session = await storage.getSession((req.params.id as string));
+      if (!session) return res.status(404).json({ error: "Session not found" });
+      if (session.status !== "active") return res.status(400).json({ error: "Cannot update notes on an archived session" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === session.namId || user.id === session.amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const updated = await storage.updateSessionNotes((req.params.id as string), notes);
+      if (!updated) return res.status(404).json({ error: "Session not found" });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update notes" });
+    }
+  });
+
+  app.get("/api/1on1/action-items", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { managerId, repId } = req.query as { managerId?: string; repId?: string };
+      if (!managerId || !repId) return res.status(400).json({ error: "managerId and repId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === managerId || user.id === repId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const actionItems = await storage.getActionItemsByPairing(managerId, repId);
+      res.json(actionItems);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get action items" });
+    }
+  });
+
+  app.get("/api/1on1/manager-overview", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { managerId } = req.query as { managerId?: string };
+      if (!managerId) return res.status(400).json({ error: "managerId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isSelf = user.id === managerId;
+      if (!isAdmin && !isSelf) return res.status(403).json({ error: "Access denied" });
+      const activeSessions = await storage.getActiveSessionsForManager(managerId);
+      const overview = await Promise.all(
+        activeSessions.map(async (s) => {
+          const topics = await storage.getTopicsBySession(s.id);
+          // Find the most recently archived session for cadence tracking
+          const archived = await storage.getArchivedSessions(managerId, s.amId);
+          const lastClosed = archived.length > 0
+            ? archived.sort((a, b) => new Date(b.closedAt || b.startDate).getTime() - new Date(a.closedAt || a.startDate).getTime())[0]
+            : null;
+          const daysSinceClose = lastClosed?.closedAt
+            ? Math.round((Date.now() - new Date(lastClosed.closedAt).getTime()) / 86400000)
+            : null;
+          return {
+            amId: s.amId,
+            sessionId: s.id,
+            startDate: s.startDate,
+            pendingCount: topics.filter(t => t.status === "pending").length,
+            discussedCount: topics.filter(t => t.status === "discussed").length,
+            totalCount: topics.length,
+            lastClosedAt: lastClosed?.closedAt ?? null,
+            daysSinceClose,
+          };
+        })
+      );
+      res.json(overview);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get manager overview" });
+    }
+  });
+
+  // ── Suggested topics for 1:1 based on rep's account data ──────────────────
+  app.get("/api/1on1/suggested-topics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { repId } = req.query as { repId?: string };
+      if (!repId) return res.status(400).json({ error: "repId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager";
+      const isSelf = user.id === repId;
+      if (!isAdmin && !isSelf) return res.status(403).json({ error: "Access denied" });
+
+      const suggestions: { type: string; text: string; account?: string }[] = [];
+      const today = new Date();
+      const todayStr = today.toISOString().split("T")[0];
+      const thirtyDaysAgo = new Date(today.getTime() - 30 * 86400000).toISOString();
+      const fourteenDaysFromNow = new Date(today.getTime() + 14 * 86400000).toISOString().split("T")[0];
+
+      // Get rep's org to look up companies
+      const repUser = await storage.getUser(repId);
+      if (!repUser) return res.status(404).json({ error: "User not found" });
+
+      const allCompanies = await storage.getCompanies(repUser.organizationId || "");
+      const repCompanies = allCompanies.filter(c => c.salesPersonId === repId || c.assignedTo === repId);
+
+      // 1. Accounts with no meaningful touch in 30+ days (up to 3)
+      const meaningfulTouchpoints = await storage.getTouchpointsByUser(repId, thirtyDaysAgo);
+      const recentMeaningfulIds = new Set(meaningfulTouchpoints.filter(tp => tp.meaningful).map(tp => tp.companyId).filter(Boolean));
+      const overdueAccounts = repCompanies.filter(c => !recentMeaningfulIds.has(c.id)).slice(0, 3);
+      for (const co of overdueAccounts) {
+        suggestions.push({
+          type: "attention",
+          text: `${co.name} hasn't had a meaningful conversation in 30+ days — what's the current status?`,
+          account: co.name,
+        });
+      }
+
+      // 2. Approaching RFP deadlines (within 14 days)
+      const allRfps = await storage.getRfps();
+      const repCompanyIds = new Set(repCompanies.map(c => c.id));
+      const urgentRfps = allRfps
+        .filter(r => repCompanyIds.has(r.companyId || "") && r.status === "open" && r.dueDate && r.dueDate <= fourteenDaysFromNow && r.dueDate >= todayStr)
+        .slice(0, 2);
+      for (const rfp of urgentRfps) {
+        const company = repCompanies.find(c => c.id === rfp.companyId);
+        const daysLeft = rfp.dueDate ? Math.round((new Date(rfp.dueDate + "T00:00:00").getTime() - today.getTime()) / 86400000) : null;
+        suggestions.push({
+          type: "rfp",
+          text: `RFP for ${company?.name ?? "an account"} is due in ${daysLeft !== null ? `${daysLeft} day${daysLeft !== 1 ? "s" : ""}` : "soon"} — are we ready to submit?`,
+          account: company?.name,
+        });
+      }
+
+      // 3. Overdue tasks
+      const allTasks = await storage.getTasks();
+      const overdueTasks = allTasks
+        .filter(t => t.assignedTo === repId && t.status !== "completed" && t.dueDate && t.dueDate < todayStr)
+        .slice(0, 3);
+      if (overdueTasks.length > 0) {
+        suggestions.push({
+          type: "tasks",
+          text: `You have ${overdueTasks.length} overdue task${overdueTasks.length > 1 ? "s" : ""} — let's pick one to close out this week`,
+        });
+      }
+
+      res.json(suggestions);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get suggested topics" });
+    }
+  });
+
+  // ── Development Goals ──────────────────────────────────────────────────────
+
+  app.get("/api/1on1/dev-goals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { namId, amId } = req.query as { namId?: string; amId?: string };
+      if (!namId || !amId) return res.status(400).json({ error: "namId and amId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === namId || user.id === amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const record = await storage.getDevelopmentGoals(namId, amId);
+      res.json({ content: record?.content ?? "", updatedAt: record?.updatedAt ?? null });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get development goals" });
+    }
+  });
+
+  app.patch("/api/1on1/dev-goals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { namId, amId } = req.query as { namId?: string; amId?: string };
+      if (!namId || !amId) return res.status(400).json({ error: "namId and amId required" });
+      const isAdmin = user.role === "admin" || user.role === "director" || user.role === "sales_director";
+      const isInvolved = user.id === namId || user.id === amId;
+      if (!isAdmin && !isInvolved) return res.status(403).json({ error: "Access denied" });
+      const { content } = req.body;
+      if (typeof content !== "string") return res.status(400).json({ error: "Content must be a string" });
+      const record = await storage.upsertDevelopmentGoals(namId, amId, content, user.id);
+      res.json({ content: record.content, updatedAt: record.updatedAt });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save development goals" });
+    }
+  });
+
+  // ── LM Development Milestones ──────────────────────────────────────────────
+  // Stored in developmentGoals table as JSON { milestones: [...] }
+
+  app.get("/api/lm-milestones/:lmId", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Not authenticated" });
+      const { lmId } = req.params as Record<string, string>;
+      const lm = await storage.getUser(lmId);
+      if (!lm) return res.status(404).json({ error: "User not found" });
+      const managerId = lm.managerId;
+      const canAccess =
+        viewer.id === lmId ||
+        viewer.id === managerId ||
+        viewer.role === "admin" ||
+        viewer.role === "director";
+      if (!canAccess) return res.status(403).json({ error: "Access denied" });
+      if (!managerId) return res.json({ milestones: [] });
+      const row = await storage.getDevelopmentGoals(managerId, lmId);
+      if (!row) return res.json({ milestones: [] });
+      try {
+        const parsed = JSON.parse(row.content || "{}");
+        return res.json({ milestones: parsed.milestones || [] });
+      } catch {
+        return res.json({ milestones: [] });
+      }
+    } catch (error) {
+      res.status(500).json({ error: "Failed to get milestones" });
+    }
+  });
+
+  app.put("/api/lm-milestones/:lmId", requireAuth, async (req, res) => {
+    try {
+      const viewer = await getCurrentUser(req);
+      if (!viewer) return res.status(401).json({ error: "Not authenticated" });
+      const { lmId } = req.params as Record<string, string>;
+      const lm = await storage.getUser(lmId);
+      if (!lm) return res.status(404).json({ error: "User not found" });
+      const managerId = lm.managerId;
+      const canUpdate =
+        viewer.id === managerId ||
+        viewer.role === "admin" ||
+        viewer.id === lmId ||
+        viewer.role === "director";
+      if (!canUpdate) return res.status(403).json({ error: "Access denied" });
+      if (!managerId) return res.status(400).json({ error: "LM has no manager assigned" });
+      const { milestones } = req.body;
+      const content = JSON.stringify({ milestones: milestones || [] });
+      const row = await storage.upsertDevelopmentGoals(managerId, lmId, content, viewer.id);
+      const parsed = JSON.parse(row.content || "{}");
+      return res.json({ milestones: parsed.milestones || [] });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save milestones" });
+    }
+  });
+
+  // ── Financial Data ─────────────────────────────────────────────────────────
+
+  app.get("/api/historical-data", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales" && user.role !== "sales_director") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (uploads.length === 0) return res.json([]);
+
+      // Use only the latest upload — it already contains merged historical + current month rows
+      const latestHistUpload = uploads[uploads.length - 1];
+      let allRows: any[] = Array.isArray(latestHistUpload.rows) ? latestHistUpload.rows as any[] : [];
+      const histCols = resolveColumns(allRows);
+      allRows = allRows.filter((r: any) => getStatusFromRow(r, histCols) !== "void" && !isExcludedRow(r, histCols));
+
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
+        const teamNames = teamUsers.map(u => u.name.toLowerCase());
+        allRows = allRows.filter((r: any) => {
+          const op = getRepFromRow(r, histCols);
+          return teamNames.some(n => op.includes(n) || n.includes(op));
+        });
+      }
+
+      const byDestWeek = new Map<string, Map<string, number>>();
+      for (const row of allRows) {
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row, histCols);
+        if (!city && !state) continue;
+        const location = city && state ? `${city}, ${state}` : city || state;
+        const week = weekKey || "unknown";
+        if (!byDestWeek.has(location)) byDestWeek.set(location, new Map());
+        const weekMap = byDestWeek.get(location)!;
+        weekMap.set(week, (weekMap.get(week) || 0) + 1);
+      }
+
+      const summaries: { location: string; totalLoads: number; weekCount: number; avgWeeklyLoads: number; peakWeeklyLoads: number; isHotZone: boolean }[] = [];
+      for (const [location, weekMap] of byDestWeek) {
+        const weekValues = Array.from(weekMap.values());
+        const totalLoads = weekValues.reduce((a: number, b: number) => a + b, 0);
+        const weekCount = weekMap.size;
+        const avgWeeklyLoads = weekCount > 0 ? Math.round((totalLoads / weekCount) * 10) / 10 : 0;
+        const peakWeeklyLoads = Math.max(...weekValues);
+        summaries.push({
+          location,
+          totalLoads,
+          weekCount,
+          avgWeeklyLoads,
+          peakWeeklyLoads,
+          isHotZone: peakWeeklyLoads >= 5,
+        });
+      }
+
+      summaries.sort((a, b) => b.avgWeeklyLoads - a.avgWeeklyLoads);
+      res.json(summaries);
+    } catch (error) {
+      console.error("Error computing historical data:", error);
+      res.status(500).json({ error: "Failed to compute historical data" });
+    }
+  });
+
+  app.get("/api/opportunities", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (uploads.length === 0) return res.json([]);
+
+      // Use only the latest upload — it already contains merged historical + current month rows
+      const latestOppUpload = uploads[uploads.length - 1];
+      let allRows: any[] = Array.isArray(latestOppUpload.rows) ? latestOppUpload.rows as any[] : [];
+      const oppCols = resolveColumns(allRows);
+      allRows = allRows.filter((r: any) => getStatusFromRow(r, oppCols) !== "void" && !isExcludedRow(r, oppCols));
+
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
+        const teamNames = teamUsers.map(u => u.name.toLowerCase());
+        allRows = allRows.filter((r: any) => {
+          const op = getRepFromRow(r, oppCols);
+          return teamNames.some(n => op.includes(n) || n.includes(op));
+        });
+      } else if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
+        const userName = user.name.toLowerCase();
+        allRows = allRows.filter((r: any) => {
+          const op = getRepFromRow(r, oppCols);
+          return op.includes(userName) || userName.includes(op);
+        });
+      }
+
+      const byDestWeek = new Map<string, Map<string, number>>();
+      for (const row of allRows) {
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row, oppCols);
+        if (!city && !state) continue;
+        const location = city && state ? `${city}, ${state}` : city || state;
+        const week = weekKey || "unknown";
+        if (!byDestWeek.has(location)) byDestWeek.set(location, new Map());
+        const weekMap = byDestWeek.get(location)!;
+        weekMap.set(week, (weekMap.get(week) || 0) + 1);
+      }
+
+      const hotDestinations: { location: string; peakWeekly: number; avgWeekly: number }[] = [];
+      for (const [location, weekMap] of byDestWeek) {
+        const weekValues = Array.from(weekMap.values());
+        const totalLoads = weekValues.reduce((a: number, b: number) => a + b, 0);
+        const weekCount = weekMap.size;
+        const avgWeekly = weekCount > 0 ? totalLoads / weekCount : 0;
+        const peakWeekly = Math.max(...weekValues);
+        if (peakWeekly >= 5) {
+          hotDestinations.push({
+            location,
+            peakWeekly,
+            avgWeekly: Math.round(avgWeekly * 10) / 10,
+          });
+        }
+      }
+
+      hotDestinations.sort((a, b) => b.peakWeekly - a.peakWeekly);
+
+      if (hotDestinations.length === 0) {
+        return res.json([]);
+      }
+
+      const visibleIds = await getVisibleCompanyIds(user);
+      let allRfps = await storage.getRfps();
+      if (visibleIds !== null) {
+        allRfps = allRfps.filter(r => visibleIds.includes(r.companyId));
+      }
+      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+      const companyMap = new Map(allCompanies.map(c => [c.id, c]));
+
+      const hotLocationSet = new Map<string, { peakWeekly: number; avgWeekly: number }>();
+      for (const hd of hotDestinations) {
+        hotLocationSet.set(hd.location.toLowerCase(), { peakWeekly: hd.peakWeekly, avgWeekly: hd.avgWeekly });
+      }
+
+      const results: {
+        destination: string;
+        weeklyLoadCount: number;
+        avgWeeklyLoadCount: number;
+        matches: {
+          companyId: string;
+          companyName: string;
+          rfpId: string;
+          rfpTitle: string;
+          lane: string;
+          volume: number;
+          rate: string;
+          equipment: string;
+        }[];
+      }[] = [];
+
+      const destMatchMap = new Map<string, typeof results[0]>();
+
+      for (const rfp of allRfps) {
+        const fileData = rfp.fileData as any;
+        if (!fileData || !Array.isArray(fileData.highVolumeLanes)) continue;
+
+        const company = companyMap.get(rfp.companyId);
+        const companyName = company?.name || "Unknown";
+
+        for (const lane of fileData.highVolumeLanes) {
+          const originCity = (lane.origin || "").trim();
+          const originState = (lane.originState || "").trim();
+          if (!originCity && !originState) continue;
+
+          const originLocation = originCity && originState
+            ? `${originCity}, ${originState}`
+            : originCity || originState;
+
+          const stats = hotLocationSet.get(originLocation.toLowerCase());
+          if (!stats) continue;
+
+          if (!destMatchMap.has(originLocation.toLowerCase())) {
+            const entry = {
+              destination: originLocation,
+              weeklyLoadCount: stats.peakWeekly,
+              avgWeeklyLoadCount: stats.avgWeekly,
+              matches: [] as typeof results[0]["matches"],
+            };
+            destMatchMap.set(originLocation.toLowerCase(), entry);
+          }
+
+          const entry = destMatchMap.get(originLocation.toLowerCase())!;
+          entry.matches.push({
+            companyId: rfp.companyId,
+            companyName,
+            rfpId: rfp.id,
+            rfpTitle: rfp.title,
+            lane: lane.lane || `${originCity}, ${originState} → ${lane.destination || ""}${lane.destinationState ? `, ${lane.destinationState}` : ""}`,
+            volume: lane.volume || 0,
+            rate: lane.rate || "",
+            equipment: lane.equipment || "",
+          });
+        }
+      }
+
+      const finalResults = Array.from(destMatchMap.values());
+      finalResults.sort((a, b) => b.weeklyLoadCount - a.weeklyLoadCount);
+
+      // Filter out dismissed companies
+      const { rows: dismissalRows } = await storage.pool.query(
+        `SELECT company_id FROM opportunity_dismissals WHERE org_id = $1`,
+        [req.session.organizationId]
+      );
+      const dismissedIds = new Set(dismissalRows.map((r: any) => r.company_id));
+      const filtered = finalResults.map(opp => ({
+        ...opp,
+        matches: opp.matches.filter((m: any) => !dismissedIds.has(m.companyId)),
+      })).filter(opp => opp.matches.length > 0);
+
+      res.json(filtered);
+    } catch (error) {
+      console.error("Error computing opportunities:", error);
+      res.status(500).json({ error: "Failed to compute opportunities" });
+    }
+  });
+
+  app.get("/api/opportunities/dismissals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const { rows } = await storage.pool.query(
+        `SELECT d.company_id, d.dismissed_by, d.dismissed_at, c.name as company_name
+         FROM opportunity_dismissals d
+         LEFT JOIN companies c ON c.id = d.company_id
+         WHERE d.org_id = $1 ORDER BY d.dismissed_at DESC`,
+        [req.session.organizationId]
+      );
+      res.json(rows);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch dismissals" });
+    }
+  });
+
+  app.post("/api/opportunities/dismiss/:companyId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await storage.pool.query(
+        `INSERT INTO opportunity_dismissals (company_id, org_id, dismissed_by, dismissed_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (company_id, org_id) DO UPDATE SET dismissed_by = $3, dismissed_at = $4`,
+        [req.params.companyId, req.session.organizationId, user.id, new Date().toISOString()]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to dismiss opportunity" });
+    }
+  });
+
+  app.delete("/api/opportunities/dismiss/:companyId", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (!["admin", "director", "national_account_manager", "sales_director"].includes(user.role)) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await storage.pool.query(
+        `DELETE FROM opportunity_dismissals WHERE company_id = $1 AND org_id = $2`,
+        [req.params.companyId, req.session.organizationId]
+      );
+      res.json({ success: true });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to restore opportunity" });
+    }
+  });
+
+  app.get("/api/financials", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || (user.role !== "admin" && user.role !== "director" && user.role !== "national_account_manager" && user.role !== "sales" && user.role !== "sales_director")) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const upload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      if (!upload) return res.json(null);
+
+      const rawRows: any[] = (upload.rows as any[]) || [];
+      const finCols = resolveColumns(rawRows);
+      let rows = rawRows.filter((r: any) => getStatusFromRow(r, finCols) !== "void" && !isExcludedRow(r, finCols));
+
+      if (user.role === "director" || user.role === "national_account_manager" || user.role === "sales" || user.role === "sales_director") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        const teamUsers = (await storage.getUsers(req.session.organizationId!)).filter(u => teamIds.includes(u.id));
+        const teamNames = teamUsers.map(u => u.name.toLowerCase());
+        rows = rows.filter((r: any) => {
+          const op = getRepFromRow(r, finCols);
+          return teamNames.some(n => op.includes(n) || n.includes(op));
+        });
+      }
+
+      res.json({ ...upload, rows });
+    } catch (error) {
+      console.error("Error fetching financials:", error);
+      res.status(500).json({ error: "Failed to fetch financials" });
+    }
+  });
+
+  app.get("/api/financials/uploads", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      res.json(uploads.map(u => ({ id: u.id, fileName: u.fileName, uploadedAt: u.uploadedAt, rowCount: u.rowCount })));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch uploads" });
+    }
+  });
+
+  app.get("/api/financials/uploads/:id/download", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      const upload = uploads.find(u => u.id === (req.params.id as string));
+      if (!upload) return res.status(404).json({ error: "Upload not found" });
+
+      const wb = XLSX.utils.book_new();
+      const rows = Array.isArray(upload.rows) ? upload.rows as any[] : [];
+      const summaryRows = Array.isArray(upload.summaryRows) ? upload.summaryRows as any[] : [];
+
+      if (rows.length > 0) {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        XLSX.utils.book_append_sheet(wb, ws, "Data");
+      }
+      if (summaryRows.length > 0) {
+        const ws2 = XLSX.utils.json_to_sheet(summaryRows);
+        XLSX.utils.book_append_sheet(wb, ws2, "Summary");
+      }
+      if (rows.length === 0 && summaryRows.length === 0) {
+        const ws = XLSX.utils.aoa_to_sheet([["No data available"]]);
+        XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+      }
+
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      const safeFileName = upload.fileName.replace(/[^\w\-. ]/g, "_");
+      const downloadName = safeFileName.endsWith(".xlsx") ? safeFileName : `${safeFileName}.xlsx`;
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${downloadName}"`);
+      res.send(buf);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to generate download" });
+    }
+  });
+
+  /**
+   * Reads transaction rows and updates companies.sales_person_id based on the
+   * "Salesperson" column (col AB).  Only users with role "sales" or "sales_director"
+   * are candidates.  Matching uses financialRepId first, then normalised name.
+   */
+  async function linkSalespersonsFromRows(rows: any[], organizationId: string) {
+    if (!rows || rows.length === 0) return;
+    const cols = resolveColumns(rows);
+
+    // Build map: normalized customer name → tally of salesperson strings
+    const customerSalesMap = new Map<string, Map<string, number>>();
+    for (const row of rows) {
+      if (isExcludedRow(row, cols)) continue;
+      const customer = getCustomerFromRow(row, cols);
+      const salesperson = getSalespersonFromRow(row, cols);
+      if (!customer || !salesperson) continue;
+      const key = customer.toLowerCase().trim();
+      if (!customerSalesMap.has(key)) customerSalesMap.set(key, new Map());
+      const tally = customerSalesMap.get(key)!;
+      tally.set(salesperson, (tally.get(salesperson) || 0) + 1);
+    }
+    if (customerSalesMap.size === 0) return;
+
+    // Load sales users
+    const allUsers = await storage.getUsers(organizationId);
+    const salesUsers = allUsers.filter(u => u.role === "sales" || u.role === "sales_director");
+    if (salesUsers.length === 0) return;
+
+    // Helper: find best matching sales user for a salesperson string
+    const normalize = (s: string) => s.toLowerCase().replace(/[\s._\-]+/g, " ").trim();
+    function matchUser(spName: string) {
+      const norm = normalize(spName);
+      // 1. Exact financialRepId match
+      const byRepId = salesUsers.find(u => u.financialRepId && normalize(u.financialRepId) === norm);
+      if (byRepId) return byRepId;
+      // 2. Normalized name match
+      const byName = salesUsers.find(u => normalize(u.name) === norm);
+      if (byName) return byName;
+      // 3. Partial match (name contains spName or vice-versa)
+      const partial = salesUsers.find(u => normalize(u.name).includes(norm) || norm.includes(normalize(u.name)));
+      return partial || null;
+    }
+
+    // Load companies
+    const allCompanies = await storage.getCompanies(organizationId);
+
+    for (const company of allCompanies) {
+      const aliases = company.financialAlias
+        ? company.financialAlias.split(',').map((a: string) => a.trim().toLowerCase()).filter(Boolean)
+        : [];
+      const cname = company.name.toLowerCase().trim();
+
+      // Try exact match first across all aliases, then substring match
+      let tally = customerSalesMap.get(cname);
+      for (const alias of aliases) {
+        if (tally) break;
+        tally = customerSalesMap.get(alias);
+      }
+      if (!tally) {
+        for (const alias of (aliases.length ? aliases : [cname])) {
+          if (tally) break;
+          if (alias.length >= 5) {
+            for (const [mapKey, mapVal] of customerSalesMap) {
+              if (mapKey.includes(alias) || alias.includes(mapKey)) { tally = mapVal; break; }
+            }
+          }
+        }
+      }
+      if (!tally && cname.length >= 5) {
+        for (const [mapKey, mapVal] of customerSalesMap) {
+          if (mapKey.includes(cname) || cname.includes(mapKey)) { tally = mapVal; break; }
+        }
+      }
+      if (!tally) continue;
+      // Pick most-common salesperson for this customer
+      let bestSp = "";
+      let bestCount = 0;
+      for (const [sp, count] of tally) {
+        if (count > bestCount) { bestCount = count; bestSp = sp; }
+      }
+      if (!bestSp) continue;
+      const matched = matchUser(bestSp);
+      if (!matched) continue;
+      // Update only if changed
+      if (company.salesPersonId !== matched.id) {
+        await storage.updateCompany(company.id, organizationId, { salesPersonId: matched.id });
+        console.log(`[salesperson-link] ${company.name} → ${matched.name} (${bestSp})`);
+      }
+    }
   }
 
-  registerFinancialRoutes(app);
-  registerLoadFactRoutes(app);
-  registerCarrierIntelligenceScoringRoutes(app);
-  registerHeroSliceAdminRoutes(app);
-  registerAdminEmailDerivedCompaniesRoutes(app);
-  registerCarrierIntelligencePrefsRoutes(app);
+  app.post("/api/financials/upload", requireAuth, upload.single("file"), async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+      const workbook = XLSX.read(req.file.buffer, { type: "buffer", cellDates: true });
+      const sheets = extractSheetsFromWorkbook(workbook);
+
+      // Only read "March Replit" summary sheet if it exists by exact name — never fall back to another sheet
+      const exactSummarySheetName = workbook.SheetNames.find(
+        s => s.trim().toLowerCase() === "march replit"
+      );
+      let summaryRows: any[] = [];
+      if (exactSummarySheetName) {
+        const summarySheet = workbook.Sheets[exactSummarySheetName];
+        const parsed: any[] = XLSX.utils.sheet_to_json(summarySheet, { defval: "" });
+        // Validate: real summary rows have a customer name and numeric load counts
+        const looksLikeSummary = parsed.some((r: any) => {
+          const keys = Object.keys(r);
+          return keys.some(k => k.toLowerCase().includes("customer")) ||
+                 (String(r["__EMPTY"] || "").trim().length > 0 && Number(r["__EMPTY_1"]) > 0);
+        });
+        if (looksLikeSummary) summaryRows = parsed;
+      }
+
+      const upload = await storage.createFinancialUpload({
+        fileName: req.file.originalname,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: user.id,
+        rowCount: sheets.rows.length,
+        rows: sheets.rows,
+        summaryRows,
+        bestDealDaysSpot: sheets.bestDealDaysSpot,
+        bestDealDaysAll: sheets.bestDealDaysAll,
+        trendAnalysis: sheets.trendAnalysis,
+        averagesData: sheets.averagesData,
+        dailyAcquisition: sheets.dailyAcquisition,
+      });
+
+      await storage.setSetting("monthly_sync_failed", "");
+      await storage.setSetting("monthly_sync_failed_error", "");
+
+      // Auto-link companies to salesperson users based on col AB
+      linkSalespersonsFromRows(sheets.rows, req.session.organizationId!).catch(err =>
+        console.error("[salesperson-link] auto-link error:", err)
+      );
+
+      cacheInvalidatePrefix(`margin-metrics:`);
+      cacheInvalidatePrefix(`account-summary:`);
+      cacheInvalidatePrefix(`dispatcher-summary:`);
+      res.json({ id: upload.id, fileName: upload.fileName, rowCount: upload.rowCount });
+    } catch (error) {
+      console.error("Error uploading financials:", error);
+      const message = error instanceof Error ? error.message : "Failed to upload financials";
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.delete("/api/financials/uploads/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await storage.deleteFinancialUpload(req.params.id as string);
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete upload" });
+    }
+  });
+
+  app.get("/api/financials/sheets", requireAuth, async (req, res) => {
+    try {
+      const latest = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      if (!latest) return res.json({ bestDealDaysSpot: [], bestDealDaysAll: [], trendAnalysis: [], averagesData: [], dailyAcquisition: [] });
+      res.json({
+        bestDealDaysSpot: (latest.bestDealDaysSpot as any[]) || [],
+        bestDealDaysAll: (latest.bestDealDaysAll as any[]) || [],
+        trendAnalysis: (latest.trendAnalysis as any[]) || [],
+        averagesData: (latest.averagesData as any[]) || [],
+        dailyAcquisition: (latest.dailyAcquisition as any[]) || [],
+      });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch sheets" });
+    }
+  });
+
+  app.get("/api/financials/customer-names", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      const names = new Set<string>();
+      for (const upload of uploads) {
+        const rows: any[] = Array.isArray(upload.rows) ? upload.rows as any[] : [];
+        const rowsCols = resolveColumns(rows);
+        for (const row of rows) {
+          if (isExcludedRow(row, rowsCols)) continue;
+          const name = String(row["Customer"] || "").trim();
+          if (name) names.add(name);
+        }
+      }
+      res.json([...names].sort());
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch customer names" });
+    }
+  });
+
+  app.get("/api/financials/account-summary", requireAuth, async (req, res) => {
+    try {
+      const asCacheKey = `account-summary:${req.session.organizationId}:${req.query.period || "current"}`;
+      const asCached = cacheGet(asCacheKey);
+      if (asCached) return res.json(asCached);
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json([]);
+      const latest = uploads[uploads.length - 1];
+      const raw = (latest.summaryRows as any[]) || [];
+
+      // Determine which month keys are valid for the requested period
+      const period = String(req.query.period || "current");
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth(); // 0-indexed
+      function mk(y: number, m: number) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+      let allowedMonths: Set<string> | null = null; // null = all months
+      if (period === "current") {
+        allowedMonths = new Set([mk(curYear, curMonth)]);
+      } else if (period === "last") {
+        const lm = curMonth === 0 ? 11 : curMonth - 1;
+        const ly = curMonth === 0 ? curYear - 1 : curYear;
+        allowedMonths = new Set([mk(ly, lm)]);
+      } else if (period === "ytd") {
+        const keys = new Set<string>();
+        for (let m = 0; m <= curMonth; m++) keys.add(mk(curYear, m));
+        allowedMonths = keys;
+      }
+
+      // If no summary sheet OR summary data looks like documentation, compute from transaction rows
+      if (isBadSummaryData(raw)) {
+        const txRows: any[] = (latest.rows as any[]) || [];
+        const sumCols = resolveColumns(txRows);
+        type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+        type CustomerRepEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number; repName: string; byMonth: Record<string, MonthBucket> };
+        // Key by "customerName|repName" so each (customer, opsUser) pair is independent.
+        // This lets two reps (e.g. Jason Allen + Alex Shumway) both get full credit for
+        // their own loads on a shared account like CTSIMIGA, with no winner-takes-all logic.
+        const byCustomerRep: Record<string, CustomerRepEntry> = {};
+        for (const row of txRows) {
+          if (isExcludedRow(row, sumCols)) continue;
+          const customerName = getCustomerFromRow(row, sumCols);
+          if (!customerName) continue;
+          const revenue = Number(row[sumCols.revenue] || row[sumCols.totalCharges] || 0);
+          if (revenue === 0) continue;
+          const { monthKey, margin } = parseHistoricalRow(row, sumCols);
+          if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
+          const rep = getRepFromRow(row, sumCols);
+          if (!rep) continue; // skip rows with no opsUser — can't attribute them
+          const orderType = String(row[sumCols.orderType] || "").toLowerCase();
+          const isSpot = orderType.includes("spot");
+          const key = `${customerName}|${rep}`;
+          if (!byCustomerRep[key]) byCustomerRep[key] = { customerName, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0, repName: rep, byMonth: {} };
+          byCustomerRep[key].totalLoads++;
+          byCustomerRep[key].totalMargin += margin;
+          byCustomerRep[key].totalRevenue += revenue;
+          if (isSpot) byCustomerRep[key].spotLoads++;
+          if (monthKey) {
+            if (!byCustomerRep[key].byMonth[monthKey]) byCustomerRep[key].byMonth[monthKey] = { totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
+            byCustomerRep[key].byMonth[monthKey].totalLoads++;
+            byCustomerRep[key].byMonth[monthKey].totalMargin += margin;
+            byCustomerRep[key].byMonth[monthKey].totalRevenue += revenue;
+            if (isSpot) byCustomerRep[key].byMonth[monthKey].spotLoads++;
+          }
+        }
+        const result = Object.values(byCustomerRep);
+        cacheSet(asCacheKey, result, 15 * 60 * 1000);
+        return res.json(result);
+      }
+
+      // Detect whether rows use named headers or __EMPTY keys (non-standard header layout)
+      const firstRow = raw[0] || {};
+      const usesEmptyKeys = "__EMPTY" in firstRow;
+
+      let rows = raw;
+      if (usesEmptyKeys) {
+        // First row is a header row — skip it; skip any "TOTAL" footer row
+        rows = raw.filter((r: any) => {
+          const name = String(r["__EMPTY"] || "").trim();
+          return name && name !== "Customer Name" && name !== "TOTAL" && name !== "Customer code";
+        });
+      }
+
+      const result = rows.map((r: any) => {
+        let customerName: string, totalLoads: number, spotLoads: number, totalMargin: number, repName: string;
+        if (usesEmptyKeys) {
+          customerName = String(r["__EMPTY"] || "").trim();
+          totalLoads   = Number(r["__EMPTY_1"] ?? 0);
+          spotLoads    = Number(r["__EMPTY_2"] ?? 0);
+          totalMargin  = Number(r["__EMPTY_3"] ?? 0);
+          repName      = String(r["__EMPTY_6"] || "").trim();
+        } else {
+          customerName = String(r["Customer Name"] || r["customer name"] || r["CUSTOMER NAME"] || "").trim();
+          totalLoads   = Number(r["Total Loads"] || r["total loads"] || r["TOTAL LOADS"] || 0);
+          spotLoads    = Number(r["SPOT Loads"] || r["Spot Loads"] || r["spot loads"] || r["SPOT LOADS"] || 0);
+          totalMargin  = Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0);
+          repName      = String(r["Rep Name"] || r["Rep"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim();
+        }
+        return { customerName, totalLoads, spotLoads, totalMargin, repName };
+      }).filter((r: any) => r.customerName);
+
+      cacheSet(`account-summary:${req.session.organizationId}:${req.query.period || "current"}`, result, 15 * 60 * 1000);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch account summary" });
+    }
+  });
+
+  // ── Dispatcher summary (for Logistics Managers) ────────────────────────────
+  app.get("/api/financials/dispatcher-summary", requireAuth, async (req, res) => {
+    try {
+      const dsCacheKey = `dispatcher-summary:${req.session.organizationId}:${req.query.period || "current"}`;
+      const dsCached = cacheGet(dsCacheKey);
+      if (dsCached) return res.json(dsCached);
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json([]);
+      const latest = uploads[uploads.length - 1];
+
+      const period = String(req.query.period || "current");
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth();
+      function mk(y: number, m: number) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+      let allowedMonths: Set<string> | null = null;
+      if (period === "current") {
+        allowedMonths = new Set([mk(curYear, curMonth)]);
+      } else if (period === "last") {
+        const lm = curMonth === 0 ? 11 : curMonth - 1;
+        const ly = curMonth === 0 ? curYear - 1 : curYear;
+        allowedMonths = new Set([mk(ly, lm)]);
+      } else if (period === "ytd") {
+        const keys = new Set<string>();
+        for (let m = 0; m <= curMonth; m++) keys.add(mk(curYear, m));
+        allowedMonths = keys;
+      }
+
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const cols = resolveColumns(txRows);
+
+      type DispEntry = { dispatcherName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+      const byDispatcher: Record<string, DispEntry> = {};
+
+      for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
+        const dispatcher = getDispatcherFromRow(row, cols);
+        if (!dispatcher) continue;
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || row["Total charges"] || 0);
+        if (revenue === 0) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, cols);
+        if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
+        const orderType = String(row[cols.orderType] || "").toLowerCase();
+        const isSpot = orderType.includes("spot");
+        const key = dispatcher.toLowerCase().trim();
+        if (!byDispatcher[key]) byDispatcher[key] = { dispatcherName: dispatcher, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
+        byDispatcher[key].totalLoads++;
+        byDispatcher[key].totalMargin += margin;
+        byDispatcher[key].totalRevenue += revenue;
+        if (isSpot) byDispatcher[key].spotLoads++;
+      }
+
+      const dsResult = Object.values(byDispatcher);
+      cacheSet(`dispatcher-summary:${req.session.organizationId}:${req.query.period || "current"}`, dsResult, 15 * 60 * 1000);
+      return res.json(dsResult);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch dispatcher summary" });
+    }
+  });
+
+  // ── Repeat Carrier metric (for Logistics Managers) ─────────────────────────
+  app.get("/api/financials/repeat-carriers", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json([]);
+      const latest = uploads[uploads.length - 1];
+
+      const period = String(req.query.period || "current");
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth();
+      function mk(y: number, m: number) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+      let allowedMonths: Set<string> | null = null;
+      if (period === "current") {
+        allowedMonths = new Set([mk(curYear, curMonth)]);
+      } else if (period === "last") {
+        const lm = curMonth === 0 ? 11 : curMonth - 1;
+        const ly = curMonth === 0 ? curYear - 1 : curYear;
+        allowedMonths = new Set([mk(ly, lm)]);
+      } else if (period === "ytd") {
+        const keys = new Set<string>();
+        for (let m = 0; m <= curMonth; m++) keys.add(mk(curYear, m));
+        allowedMonths = keys;
+      }
+
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const cols = resolveColumns(txRows);
+
+      type DispData = {
+        dispatcherName: string;
+        totalLoads: number;
+        laneCarrierCounts: Map<string, number>;
+      };
+      const byDispatcher: Record<string, DispData> = {};
+
+      for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
+        const dispatcher = getDispatcherFromRow(row, cols);
+        if (!dispatcher) continue;
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || row["Total charges"] || 0);
+        if (revenue === 0) continue;
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
+
+        const carrier = String(row[cols.carrier] || "").trim().toLowerCase();
+        const origin = String(row[cols.shipperCity] || row[cols.origin] || "").trim().toLowerCase();
+        const dest = String(row[cols.consigneeCity] || row[cols.destination] || "").trim().toLowerCase();
+        const laneCarrierKey = `${origin}|${dest}||${carrier}`;
+
+        const key = dispatcher.toLowerCase().trim();
+        if (!byDispatcher[key]) byDispatcher[key] = { dispatcherName: dispatcher, totalLoads: 0, laneCarrierCounts: new Map() };
+        byDispatcher[key].totalLoads++;
+        byDispatcher[key].laneCarrierCounts.set(laneCarrierKey, (byDispatcher[key].laneCarrierCounts.get(laneCarrierKey) || 0) + 1);
+      }
+
+      const result = Object.values(byDispatcher).map(d => {
+        let repeatCarrierLoads = 0;
+        for (const count of d.laneCarrierCounts.values()) {
+          if (count > 1) repeatCarrierLoads += count - 1;
+        }
+        return {
+          dispatcherName: d.dispatcherName,
+          totalLoads: d.totalLoads,
+          repeatCarrierLoads,
+          repeatCarrierPct: d.totalLoads > 0 ? Math.round((repeatCarrierLoads / d.totalLoads) * 100) : 0,
+        };
+      });
+
+      return res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch repeat carrier data" });
+    }
+  });
+
+  // ── Salesperson summary (for Sales roles) ──────────────────────────────────
+  app.get("/api/financials/salesperson-summary", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json([]);
+      const latest = uploads[uploads.length - 1];
+
+      const period = String(req.query.period || "current");
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth();
+      function mk(y: number, m: number) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+      let allowedMonths: Set<string> | null = null;
+      if (period === "current") {
+        allowedMonths = new Set([mk(curYear, curMonth)]);
+      } else if (period === "last") {
+        const lm = curMonth === 0 ? 11 : curMonth - 1;
+        const ly = curMonth === 0 ? curYear - 1 : curYear;
+        allowedMonths = new Set([mk(ly, lm)]);
+      } else if (period === "ytd") {
+        const keys = new Set<string>();
+        for (let m = 0; m <= curMonth; m++) keys.add(mk(curYear, m));
+        allowedMonths = keys;
+      }
+
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const cols = resolveColumns(txRows);
+
+      type SpEntry = { salespersonName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+      const bySalesperson: Record<string, SpEntry> = {};
+
+      for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
+        const salesperson = getSalespersonFromRow(row, cols);
+        if (!salesperson) continue;
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || row["Total charges"] || 0);
+        if (revenue === 0) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, cols);
+        if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
+        const orderType = String(row[cols.orderType] || "").toLowerCase();
+        const isSpot = orderType.includes("spot");
+        const key = salesperson.toLowerCase().trim();
+        if (!bySalesperson[key]) bySalesperson[key] = { salespersonName: salesperson, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
+        bySalesperson[key].totalLoads++;
+        bySalesperson[key].totalMargin += margin;
+        bySalesperson[key].totalRevenue += revenue;
+        if (isSpot) bySalesperson[key].spotLoads++;
+      }
+
+      return res.json(Object.values(bySalesperson));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch salesperson summary" });
+    }
+  });
+
+  // ── Last Upload Info ─────────────────────────────────────────────────────────
+  app.get("/api/financials/last-upload-info", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json({ uploadedAt: null, fileName: null });
+      const latest = uploads[uploads.length - 1];
+      res.json({ uploadedAt: latest.uploadedAt, fileName: (latest as any).fileName || null });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch upload info" });
+    }
+  });
+
+  // ── Attribution Gaps ──────────────────────────────────────────────────────────
+  app.get("/api/financials/attribution-gaps", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json({ opsUserGaps: [], dispatcherGaps: [], salespersonGaps: [], usersMissingId: [] });
+      const latest = uploads[uploads.length - 1];
+
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const cols = resolveColumns(txRows);
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+
+      function backendMatchRep(excelName: string, userName: string): boolean {
+        const a = excelName.toLowerCase().trim();
+        const b = userName.toLowerCase().trim();
+        if (a === b) return true;
+        const aParts = a.split(/\s+/);
+        const bParts = b.split(/\s+/);
+        if (aParts.length === 1 && aParts[0].length > 1) {
+          return bParts.some(p => p.startsWith(aParts[0]) || aParts[0].startsWith(p));
+        }
+        return aParts.some(p => p.length > 1 && bParts.includes(p));
+      }
+
+      function matchesAnyUser(name: string): boolean {
+        const nameLower = name.toLowerCase().trim();
+        return allUsers.some(u => {
+          const frid = (u as any).financialRepId;
+          if (frid && frid.toLowerCase() === nameLower) return true;
+          return backendMatchRep(name, u.name);
+        });
+      }
+
+      const opsUserCounts: Record<string, number> = {};
+      const dispatcherCounts: Record<string, number> = {};
+      const salespersonCounts: Record<string, number> = {};
+
+      for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || 0);
+        if (revenue === 0) continue;
+        const opsUser = getRepFromRow(row, cols);
+        if (opsUser) opsUserCounts[opsUser] = (opsUserCounts[opsUser] || 0) + 1;
+        const dispatcher = getDispatcherFromRow(row, cols);
+        if (dispatcher) dispatcherCounts[dispatcher] = (dispatcherCounts[dispatcher] || 0) + 1;
+        const salesperson = getSalespersonFromRow(row, cols);
+        if (salesperson) salespersonCounts[salesperson] = (salespersonCounts[salesperson] || 0) + 1;
+      }
+
+      const opsUserGaps = Object.entries(opsUserCounts)
+        .filter(([name]) => !matchesAnyUser(name))
+        .map(([name, loads]) => ({ name, loads, column: "OpsUser" }))
+        .sort((a, b) => b.loads - a.loads);
+
+      const dispatcherGaps = Object.entries(dispatcherCounts)
+        .filter(([name]) => !matchesAnyUser(name))
+        .map(([name, loads]) => ({ name, loads, column: "Dispatcher" }))
+        .sort((a, b) => b.loads - a.loads);
+
+      const salespersonGaps = Object.entries(salespersonCounts)
+        .filter(([name]) => !matchesAnyUser(name))
+        .map(([name, loads]) => ({ name, loads, column: "Salesperson" }))
+        .sort((a, b) => b.loads - a.loads);
+
+      const usersMissingId = allUsers
+        .filter(u => !(u as any).financialRepId)
+        .map(u => ({ id: u.id, name: u.name, role: u.role }));
+
+      res.json({ opsUserGaps, dispatcherGaps, salespersonGaps, usersMissingId });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch attribution gaps" });
+    }
+  });
+
+  // ── Salesperson Accounts ──────────────────────────────────────────────────────
+  app.get("/api/financials/salesperson-accounts", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json([]);
+      const latest = uploads[uploads.length - 1];
+
+      const period = String(req.query.period || "current");
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth();
+      function mk(y: number, m: number) { return `${y}-${String(m + 1).padStart(2, "0")}`; }
+      let allowedMonths: Set<string> | null = null;
+      if (period === "current") {
+        allowedMonths = new Set([mk(curYear, curMonth)]);
+      } else if (period === "last") {
+        const lm = curMonth === 0 ? 11 : curMonth - 1;
+        const ly = curMonth === 0 ? curYear - 1 : curYear;
+        allowedMonths = new Set([mk(ly, lm)]);
+      } else if (period === "ytd") {
+        const keys = new Set<string>();
+        for (let m = 0; m <= curMonth; m++) keys.add(mk(curYear, m));
+        allowedMonths = keys;
+      }
+
+      const repId = String(req.query.repId || "").toLowerCase().trim();
+      const repName = String(req.query.repName || "").toLowerCase().trim();
+
+      function backendMatchRep2(excelName: string, targetName: string): boolean {
+        const a = excelName.toLowerCase().trim();
+        const b = targetName.toLowerCase().trim();
+        if (a === b) return true;
+        const aParts = a.split(/\s+/);
+        const bParts = b.split(/\s+/);
+        if (aParts.length === 1 && aParts[0].length > 1) {
+          return bParts.some(p => p.startsWith(aParts[0]) || aParts[0].startsWith(p));
+        }
+        return aParts.some(p => p.length > 1 && bParts.includes(p));
+      }
+
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const cols = resolveColumns(txRows);
+
+      type AcctEntry = { customerName: string; totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue: number };
+      const byCustomer: Record<string, AcctEntry> = {};
+
+      for (const row of txRows) {
+        if (isExcludedRow(row, cols)) continue;
+        const salesperson = getSalespersonFromRow(row, cols);
+        if (!salesperson) continue;
+        const spLower = salesperson.toLowerCase().trim();
+        const isMatch = (repId && repId === spLower) || (repName && backendMatchRep2(salesperson, repName));
+        if (!isMatch) continue;
+
+        const revenue = Number(row[cols.revenue] || row[cols.totalCharges] || row["Total charges"] || 0);
+        if (revenue === 0) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, cols);
+        if (allowedMonths && monthKey && !allowedMonths.has(monthKey)) continue;
+
+        const customer = String(row[cols.customer] || "Unknown").trim();
+        const orderType = String(row[cols.orderType] || "").toLowerCase();
+        const isSpot = orderType.includes("spot");
+        const key = customer.toLowerCase();
+        if (!byCustomer[key]) byCustomer[key] = { customerName: customer, totalLoads: 0, spotLoads: 0, totalMargin: 0, totalRevenue: 0 };
+        byCustomer[key].totalLoads++;
+        byCustomer[key].totalMargin += margin;
+        byCustomer[key].totalRevenue += revenue;
+        if (isSpot) byCustomer[key].spotLoads++;
+      }
+
+      res.json(Object.values(byCustomer).sort((a, b) => b.totalLoads - a.totalLoads));
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch salesperson accounts" });
+    }
+  });
+
+  // ── OneDrive Sync & Settings ────────────────────────────────────────────────
+
+  app.get("/api/settings/onedrive-url", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales")) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const url = await storage.getSetting("onedrive_url");
+      res.json({ url: url || "" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch setting" });
+    }
+  });
+
+  app.patch("/api/settings/onedrive-url", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const { url } = req.body;
+      if (typeof url !== "string") return res.status(400).json({ error: "url is required" });
+      await storage.setSetting("onedrive_url", url.trim());
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to save setting" });
+    }
+  });
+
+  // Admin-only endpoint to import financial rows in chunks (for DB cloning)
+  app.post("/api/admin/import-financial-rows", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
+      const { uploadId, rows } = req.body;
+      if (!uploadId || !Array.isArray(rows)) return res.status(400).json({ error: "uploadId and rows required" });
+      await storage.appendFinancialRows(uploadId, rows);
+      res.json({ ok: true, added: rows.length });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/financials/sync-onedrive", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || (user.role !== "admin" && user.role !== "national_account_manager" && user.role !== "sales")) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+
+      const result = await performOneDriveSync(user.id);
+
+      await storage.setSetting("monthly_sync_failed", "");
+      await storage.setSetting("monthly_sync_failed_error", "");
+
+      // Auto-link companies to salesperson users from synced data
+      const orgId = req.session.organizationId!;
+      storage.getFinancialUploadsForOrg(orgId).then(uploads => {
+        if (uploads.length === 0) return;
+        const latest = uploads[uploads.length - 1];
+        linkSalespersonsFromRows((latest.rows as any[]) || [], orgId).catch(err =>
+          console.error("[salesperson-link] sync auto-link error:", err)
+        );
+      }).catch(() => {});
+
+      res.json(result);
+    } catch (error: any) {
+      console.error("Error syncing from OneDrive:", error);
+      const message = error?.message || "Failed to sync from OneDrive. Please check the share link and try again.";
+      res.status(500).json({ error: message });
+    }
+  });
+
+  app.get("/api/sync-alert", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.json({ failed: false });
+      }
+      const failedMonth = await storage.getSetting("monthly_sync_failed");
+      if (!failedMonth) {
+        return res.json({ failed: false });
+      }
+      const errorMessage = await storage.getSetting("monthly_sync_failed_error") || "Unknown error";
+      res.json({ failed: true, month: failedMonth, error: errorMessage });
+    } catch (error) {
+      res.json({ failed: false });
+    }
+  });
+
+  app.post("/api/sync-alert/dismiss", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user || user.role !== "admin") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      await storage.setSetting("monthly_sync_failed", "");
+      await storage.setSetting("monthly_sync_failed_error", "");
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to dismiss alert" });
+    }
+  });
+
+  // ── Historical Data & Opportunities ─────────────────────────────────────────
+
+  function getWeekKey(date: Date): string {
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+    return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+  }
+
+  app.get("/api/historical-data-summary", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      const rawHdsSrc = uploads.flatMap(u => (u.rows as any[]) || []);
+      const hdsCols = resolveColumns(rawHdsSrc);
+      const allRows = rawHdsSrc.filter((r: any) => getStatusFromRow(r, hdsCols) !== "void" && !isExcludedRow(r, hdsCols));
+      const destWeekly: Record<string, Record<string, number>> = {};
+      const destMeta: Record<string, { city: string; state: string }> = {};
+      for (const row of allRows) {
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row, hdsCols);
+        if (!city || !state) continue;
+        const key = `${city.toLowerCase()}||${state.toLowerCase()}`;
+        if (!destWeekly[key]) { destWeekly[key] = {}; destMeta[key] = { city, state }; }
+        if (weekKey) {
+          destWeekly[key][weekKey] = (destWeekly[key][weekKey] || 0) + 1;
+        }
+      }
+      const summary = Object.entries(destWeekly).map(([key, weeks]) => {
+        const counts = Object.values(weeks);
+        const totalLoads = counts.reduce((a, b) => a + b, 0);
+        const avgWeekly = counts.length > 0 ? totalLoads / counts.length : 0;
+        const maxWeekly = counts.length > 0 ? Math.max(...counts) : 0;
+        const { city, state } = destMeta[key];
+        return {
+          destination: `${city}, ${state}`,
+          city, state, totalLoads,
+          avgWeekly: Math.round(avgWeekly * 10) / 10,
+          maxWeekly,
+          weekCount: counts.length,
+          isHotZone: maxWeekly >= 5,
+        };
+      }).sort((a, b) => b.avgWeekly - a.avgWeekly);
+      res.json({ summary, totalRows: allRows.length, uploadCount: uploads.length });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to compute historical summary" });
+    }
+  });
+
+  app.get("/api/opportunities", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      const rawOppSrc2 = uploads.flatMap(u => (u.rows as any[]) || []);
+      const opp2Cols = resolveColumns(rawOppSrc2);
+      const allRows = rawOppSrc2.filter((r: any) => getStatusFromRow(r, opp2Cols) !== "void");
+      const destWeekly: Record<string, Record<string, number>> = {};
+      const destMeta: Record<string, { city: string; state: string }> = {};
+      for (const row of allRows) {
+        const { destCity: city, destState: state, weekKey } = parseHistoricalRow(row, opp2Cols);
+        if (!city || !state) continue;
+        const key = `${city.toLowerCase()}||${state.toLowerCase()}`;
+        if (!destWeekly[key]) { destWeekly[key] = {}; destMeta[key] = { city, state }; }
+        if (weekKey) {
+          destWeekly[key][weekKey] = (destWeekly[key][weekKey] || 0) + 1;
+        }
+      }
+      const hotDests = Object.entries(destWeekly).map(([key, weeks]) => {
+        const counts = Object.values(weeks);
+        const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+        const max = Math.max(...counts);
+        return { key, ...destMeta[key], avgWeekly: avg, maxWeekly: max };
+      }).filter(d => d.maxWeekly >= 5).sort((a, b) => b.avgWeekly - a.avgWeekly);
+      const allRfps = await storage.getRfps();
+      const visibleIds = await getVisibleCompanyIds(currentUser);
+      const visibleRfps = visibleIds === null ? allRfps : allRfps.filter(r => r.companyId && visibleIds.includes(r.companyId));
+      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+      const visibleCompanies = visibleIds === null ? allCompanies : allCompanies.filter(c => visibleIds.includes(c.id));
+      const companyMap = new Map(visibleCompanies.map(c => [c.id, c.name]));
+      const opportunities: any[] = [];
+      for (const hot of hotDests) {
+        const matches: any[] = [];
+        for (const rfp of visibleRfps) {
+          const fileData = rfp.fileData as any;
+          if (!fileData?.highVolumeLanes?.length) continue;
+          for (const lane of fileData.highVolumeLanes) {
+            const laneOrigin = String(lane.origin || "").trim().toLowerCase();
+            const laneState = String(lane.originState || "").trim().toLowerCase();
+            const hotCity = hot.city.toLowerCase();
+            const hotState = hot.state.toLowerCase();
+            if (!laneOrigin) continue;
+            const cityMatch = laneOrigin.includes(hotCity) || hotCity.includes(laneOrigin);
+            const stateMatch = !laneState || !hotState || laneState === hotState || laneState.startsWith(hotState.slice(0, 2)) || hotState.startsWith(laneState.slice(0, 2));
+            if (cityMatch && stateMatch) {
+              const rawRow = (lane as any).rawRow || {};
+              const dStateRaw = lane.destinationState ||
+                (Object.entries(rawRow).find(([k]) => /destination.?state/i.test(k))?.[1] as string || "");
+              const oStateRaw = lane.originState ||
+                (Object.entries(rawRow).find(([k]) => /origin.?state/i.test(k))?.[1] as string || "");
+              matches.push({
+                companyId: rfp.companyId,
+                companyName: companyMap.get(rfp.companyId || "") || "Unknown",
+                rfpId: rfp.id,
+                rfpTitle: rfp.title,
+                lane: `${lane.origin || ""}${oStateRaw ? ", " + oStateRaw : ""} → ${lane.destination || ""}${dStateRaw ? ", " + dStateRaw : ""}`,
+                volume: lane.volume,
+                rate: lane.rate,
+                equipment: lane.equipment,
+              });
+            }
+          }
+        }
+        if (matches.length > 0) {
+          opportunities.push({
+            destination: `${hot.city}, ${hot.state}`,
+            city: hot.city, state: hot.state,
+            weeklyLoadCount: Math.round(hot.avgWeekly * 10) / 10,
+            maxWeekly: hot.maxWeekly,
+            matches,
+          });
+        }
+      }
+      res.json(opportunities);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to compute opportunities" });
+    }
+  });
+
+  // ── Lane Corridors ────────────────────────────────────────────────────────────
+  app.get("/api/historical-lane-corridors", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      const corridorMap: Record<string, { origin: string; destination: string; originCity: string; originState: string; destCity: string; destState: string; loads: number }> = {};
+      if (uploads.length > 0) {
+        const latestCorr = uploads[uploads.length - 1];
+        const rawCorrRows: any[] = (latestCorr as any).rows ?? [];
+        const corrCols = resolveColumns(rawCorrRows);
+        const rows: any[] = rawCorrRows.filter((r: any) => getStatusFromRow(r, corrCols) !== "void");
+        for (const row of rows) {
+          const { origCity: oc, origState: os, destCity: dc, destState: ds } = parseHistoricalRow(row, corrCols);
+          if (!oc || !dc) continue;
+          const key = `${oc}|${os}→${dc}|${ds}`;
+          if (!corridorMap[key]) {
+            corridorMap[key] = { origin: `${oc}, ${os}`, destination: `${dc}, ${ds}`, originCity: oc, originState: os, destCity: dc, destState: ds, loads: 0 };
+          }
+          corridorMap[key].loads++;
+        }
+      }
+      const corridors = Object.values(corridorMap).sort((a, b) => b.loads - a.loads).slice(0, 200);
+      res.json(corridors);
+    } catch (err) {
+      console.error("Lane corridors error:", err);
+      res.status(500).json({ error: "Failed to compute lane corridors" });
+    }
+  });
+
+  // ── Heatmap Data ─────────────────────────────────────────────────────────────
+  app.get("/api/historical-heatmap", requireAuth, async (req, res) => {
+    try {
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      console.log(`[heatmap] ${uploads.length} upload(s) found`);
+      const deliveries: Record<string, { city: string; state: string; count: number }> = {};
+      const pickups: Record<string, { city: string; state: string; count: number }> = {};
+      let totalRows = 0;
+      if (uploads.length > 0) {
+        const latestHeat = uploads[uploads.length - 1];
+        const rawHeatRows: any[] = Array.isArray((latestHeat as any).rows) ? (latestHeat as any).rows : [];
+        const heatCols = resolveColumns(rawHeatRows);
+        const rows: any[] = rawHeatRows.filter((r: any) => getStatusFromRow(r, heatCols) !== "void");
+        totalRows += rows.length;
+        for (const row of rows) {
+          const { destCity: dc, destState: ds, origCity: oc, origState: os } = parseHistoricalRow(row, heatCols);
+          if (dc) { const k = `${dc}|${ds}`; if (!deliveries[k]) deliveries[k] = { city: dc, state: ds, count: 0 }; deliveries[k].count++; }
+          if (oc) { const k = `${oc}|${os}`; if (!pickups[k]) pickups[k] = { city: oc, state: os, count: 0 }; pickups[k].count++; }
+        }
+      }
+      console.log(`[heatmap] processed ${totalRows} rows → ${Object.keys(deliveries).length} delivery cities, ${Object.keys(pickups).length} pickup cities`);
+      const geocode = (items: Record<string, { city: string; state: string; count: number }>) =>
+        Object.values(items).map(i => {
+          const coords = geocodeCity(i.city, i.state);
+          if (!coords) return null;
+          return { city: i.city, state: i.state, lat: coords[0], lng: coords[1], count: i.count };
+        }).filter(Boolean).sort((a: any, b: any) => b.count - a.count).slice(0, 300);
+      const result = { deliveries: geocode(deliveries), pickups: geocode(pickups) };
+      console.log(`[heatmap] geocoded → ${result.deliveries.length} delivery pts, ${result.pickups.length} pickup pts`);
+      res.json(result);
+    } catch (err) {
+      console.error("Heatmap error:", err);
+      res.status(500).json({ error: "Failed to compute heatmap" });
+    }
+  });
+
   // ── Company Historical Trends ─────────────────────────────────────────────
   app.get("/api/companies/:id/historical-trends", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
@@ -2824,7 +5176,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   app.get("/api/proximity-matches", requireAuth, async (req, res) => {
     try {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      const rfps = await storage.getRfpsByOrg(req.session.organizationId!);
+      const rfps = await storage.getRfps();
       const companies = await storage.getCompanies(req.session.organizationId!);
       const users = await storage.getUsers(req.session.organizationId!);
 
@@ -2906,9 +5258,9 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   // ── Lane Matching (company-specific: our history vs their RFP lanes) ─────────
   app.get("/api/companies/:id/lane-matching", requireAuth, async (req, res) => {
     try {
-      const companyId = (pStr(req.params.id));
+      const companyId = (req.params.id as string);
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
-      const allRfps = await storage.getRfpsByCompanyId(companyId);
+      const allRfps = await storage.getRfps();
 
       // Build geocoded frequency maps for our deliveries (consignee) and pickups (shipper)
       const ourDeliveryMap: Record<string, { city: string; state: string; count: number; lat: number; lng: number }> = {};
@@ -3045,7 +5397,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   async function canAccessPairing(user: { id: string; role: string; managerId: string | null }, namId: string, amId: string): Promise<boolean> {
-    if (isAdmin(user)) return true;
+    if (user.role === "admin") return true;
     if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") {
       return user.id === amId && user.managerId === namId;
     }
@@ -3079,11 +5431,16 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const amLikeRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
       if (amLikeRoles.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
-      } else if (isAdmin(user)) {
-        // All manager-report pairs in the entire org (admin→direct + all below)
-        const allReports = allUsers.filter(u => u.managerId && !isAdmin(u));
-        for (const report of allReports) {
-          pairs.push({ namId: report.managerId!, amId: report.id });
+      } else if (user.role === "admin") {
+        const ams = allUsers.filter(u => amLikeRoles.includes(u.role) && u.managerId);
+        // NAM↔AM pairings (deduplicated — only one loop)
+        for (const am of ams) {
+          pairs.push({ namId: am.managerId!, amId: am.id });
+        }
+        // Admin↔NAM direct pairings
+        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
+        for (const nam of nams) {
+          pairs.push({ namId: user.id, amId: nam.id });
         }
       } else {
         // NAM/Director: downward (ALL direct reports) + upward (their manager)
@@ -3116,12 +5473,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const amLikeRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
       if (amLikeRoles.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
-      } else if (isAdmin(user)) {
-        // All manager-report pairs in the entire org (admin→direct + all below)
-        const allReports = allUsers.filter(u => u.managerId && !isAdmin(u));
-        for (const report of allReports) {
-          pairs.push({ namId: report.managerId!, amId: report.id });
-        }
+      } else if (user.role === "admin") {
+        const ams = allUsers.filter(u => amLikeRoles.includes(u.role) && u.managerId);
+        for (const am of ams) pairs.push({ namId: am.managerId!, amId: am.id });
+        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
+        for (const nam of nams) pairs.push({ namId: user.id, amId: nam.id });
       } else {
         const reports = allUsers.filter(u => u.managerId === user.id);
         for (const am of reports) pairs.push({ namId: user.id, amId: am.id });
@@ -3177,12 +5533,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
       const amLikeRoles2 = ["account_manager", "logistics_manager", "logistics_coordinator"];
       if (amLikeRoles2.includes(user.role)) {
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
-      } else if (isAdmin(user)) {
-        // All manager-report pairs in the entire org (admin→direct + all below)
-        const allReports = allUsers.filter(u => u.managerId && !isAdmin(u));
-        for (const report of allReports) {
-          pairs.push({ namId: report.managerId!, amId: report.id });
-        }
+      } else if (user.role === "admin") {
+        const ams = allUsers.filter(u => amLikeRoles2.includes(u.role) && u.managerId);
+        for (const am of ams) pairs.push({ namId: am.managerId!, amId: am.id });
+        const nams = allUsers.filter(u => u.managerId === user.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
+        for (const nam of nams) pairs.push({ namId: user.id, amId: nam.id });
       } else {
         // NAM/Director: downward (ALL direct reports) + upward (their manager)
         const reports = allUsers.filter(u => u.managerId === user.id);
@@ -3203,7 +5558,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/one-on-one/session", requireAuth, async (req, res) => {
+  app.get("/api/one-on-one/session", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3220,7 +5575,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.get("/api/one-on-one/pairings", requireAuth, async (req, res) => {
+  app.get("/api/one-on-one/pairings", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3252,19 +5607,20 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         return res.json(result);
       }
 
-      if (isAdmin(currentUser)) {
+      if (currentUser.role === "admin") {
         const result: { namId: string; amId: string; namName: string; amName: string; section: string; groupLabel?: string }[] = [];
-        const directReports = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
-        // Admin→Director/NAM direct pairings first
-        for (const dr of directReports) {
-          result.push({ namId: currentUser.id, amId: dr.id, namName: currentUser.name, amName: dr.name, section: "my_nams", groupLabel: dr.name });
+        const nams = safeUsers.filter(u => u.managerId === currentUser.id && (u.role === "national_account_manager" || u.role === "director" || u.role === "sales" || u.role === "sales_director"));
+        // Admin→NAM direct pairings first
+        for (const nam of nams) {
+          result.push({ namId: currentUser.id, amId: nam.id, namName: currentUser.name, amName: nam.name, section: "my_nams", groupLabel: nam.name });
         }
-        // ALL manager-report pairs below admin level (Director→NAM, NAM→AM, Director→AM, etc.)
-        const allSubReports = safeUsers.filter(u => u.managerId && u.managerId !== currentUser.id && u.role !== "admin");
-        for (const report of allSubReports) {
-          const manager = safeUsers.find(u => u.id === report.managerId);
-          if (manager) {
-            result.push({ namId: manager.id, amId: report.id, namName: manager.name, amName: report.name, section: "team", groupLabel: manager.name });
+        // NAM→AM pairings grouped by NAM
+        const amRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+        const ams = safeUsers.filter(u => amRoles.includes(u.role) && u.managerId);
+        for (const am of ams) {
+          const nam = safeUsers.find(u => u.id === am.managerId);
+          if (nam) {
+            result.push({ namId: nam.id, amId: am.id, namName: nam.name, amName: am.name, section: "team", groupLabel: nam.name });
           }
         }
         return res.json(result);
@@ -3276,7 +5632,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/one-on-one/topics", requireAuth, async (req, res) => {
+  app.post("/api/one-on-one/topics", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3319,16 +5675,16 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.patch("/api/one-on-one/topics/:id/toggle", requireAuth, async (req, res) => {
+  app.patch("/api/one-on-one/topics/:id/toggle", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTopic((pStr(req.params.id)));
+      const existing = await storage.getTopic((req.params.id as string));
       if (!existing) return res.status(404).json({ error: "Topic not found" });
       if (!(await canAccessSession(currentUser, existing.sessionId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const topic = await storage.toggleTopicStatus((pStr(req.params.id)));
+      const topic = await storage.toggleTopicStatus((req.params.id as string));
       if (!topic) return res.status(404).json({ error: "Topic not found" });
       res.json(topic);
     } catch (error) {
@@ -3336,16 +5692,16 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/one-on-one/topics/:id", requireAuth, async (req, res) => {
+  app.delete("/api/one-on-one/topics/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getTopic((pStr(req.params.id)));
+      const existing = await storage.getTopic((req.params.id as string));
       if (!existing) return res.status(404).json({ error: "Topic not found" });
       if (!(await canAccessSession(currentUser, existing.sessionId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteTopic((pStr(req.params.id)));
+      const deleted = await storage.deleteTopic((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Topic not found" });
       res.status(204).send();
     } catch (error) {
@@ -3354,29 +5710,29 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   });
 
   // Topic replies — threaded dialogue within a 1:1 topic
-  app.get("/api/one-on-one/topics/:id/replies", requireAuth, async (req, res) => {
+  app.get("/api/one-on-one/topics/:id/replies", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const topic = await storage.getTopic((pStr(req.params.id)));
+      const topic = await storage.getTopic((req.params.id as string));
       if (!topic) return res.status(404).json({ error: "Topic not found" });
-      const replies = await storage.getTopicReplies((pStr(req.params.id)));
+      const replies = await storage.getTopicReplies((req.params.id as string));
       res.json(replies);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch replies" });
     }
   });
 
-  app.post("/api/one-on-one/topics/:id/replies", requireAuth, async (req, res) => {
+  app.post("/api/one-on-one/topics/:id/replies", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const topic = await storage.getTopic((pStr(req.params.id)));
+      const topic = await storage.getTopic((req.params.id as string));
       if (!topic) return res.status(404).json({ error: "Topic not found" });
       const { text } = req.body;
       if (!text?.trim()) return res.status(400).json({ error: "Text required" });
       const reply = await storage.addTopicReply({
-        topicId: (pStr(req.params.id)),
+        topicId: (req.params.id as string),
         authorId: currentUser.id,
         text: text.trim(),
         createdAt: new Date().toISOString(),
@@ -3403,11 +5759,11 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.delete("/api/one-on-one/topic-replies/:id", requireAuth, async (req, res) => {
+  app.delete("/api/one-on-one/topic-replies/:id", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const deleted = await storage.deleteTopicReply((pStr(req.params.id)));
+      const deleted = await storage.deleteTopicReply((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Reply not found" });
       res.status(204).send();
     } catch (error) {
@@ -3415,15 +5771,15 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/one-on-one/sessions/:id/close", requireAuth, async (req, res) => {
+  app.post("/api/one-on-one/sessions/:id/close", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessSession(currentUser, (pStr(req.params.id))))) {
+      if (!(await canAccessSession(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const closedSession = await storage.getSession((pStr(req.params.id)));
-      const newSession = await storage.closeSession((pStr(req.params.id)));
+      const closedSession = await storage.getSession((req.params.id as string));
+      const newSession = await storage.closeSession((req.params.id as string));
       if (!newSession) return res.status(404).json({ error: "Session not found" });
       // Notify the other party that the session was closed
       if (closedSession) {
@@ -3447,25 +5803,21 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
     }
   });
 
-  app.post("/api/one-on-one/sessions/:id/generate-summary", requireAuth, async (req, res) => {
+  app.post("/api/one-on-one/sessions/:id/generate-summary", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const session = await storage.getSession(pStr(req.params.id));
+      const session = await storage.getSession(req.params.id as string);
       if (!session) return res.status(404).json({ error: "Session not found" });
-      if (!(await canAccessSession(currentUser, pStr(req.params.id)))) {
+      if (!(await canAccessSession(currentUser, req.params.id as string))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const topics = await storage.getTopicsBySession(pStr(req.params.id));
+      const topics = await storage.getTopicsBySession(req.params.id as string);
       const discussed = topics.filter(t => t.status === "discussed");
       const pending = topics.filter(t => t.status === "pending");
       const notes = session.notes || "";
 
       const topicLines = (arr: typeof topics) => arr.map(t => `- [${t.tag?.replace(/_/g, " ") || "topic"}] ${t.text}`).join("\n");
-
-      const sessionSumCacheKey = `session-summary:${pStr(req.params.id)}:${discussed.length}:${pending.length}`;
-      const cachedSessionSum = cacheGet<string>(sessionSumCacheKey);
-      if (cachedSessionSum) return res.json({ summary: cachedSessionSum });
 
       const prompt = `You are summarizing a 1:1 meeting between a manager and a sales rep.
 
@@ -3481,17 +5833,13 @@ ${notes || "None"}
 Write a concise 2–4 sentence summary capturing: key takeaways, any decisions made, and the most important action items. Write in plain prose, no bullet points. Keep it under 100 words.`;
 
       const OpenAI = (await import("openai")).default;
-      const openai = new OpenAI({
-        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-      });
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
       const completion = await openai.chat.completions.create({
         model: "gpt-4o-mini",
         messages: [{ role: "user", content: prompt }],
         max_tokens: 200,
       });
       const summary = completion.choices[0]?.message?.content?.trim() || "";
-      cacheSet(sessionSumCacheKey, summary, 60 * 60 * 1000);
       res.json({ summary });
     } catch (error) {
       console.error("Error generating session summary:", error);
@@ -3499,7 +5847,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
-  app.get("/api/one-on-one/archived", requireAuth, async (req, res) => {
+  app.get("/api/one-on-one/archived", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
@@ -3521,12 +5869,104 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
+  // ── Notifications ─────────────────────────────────────────────────────────
+  app.get("/api/notifications", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const notifs = await storage.getNotifications(user.id);
+      res.json(notifs);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch notifications" });
+    }
+  });
+
+  app.patch("/api/notifications/:id/read", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      await storage.markNotificationRead((req.params.id as string));
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to mark notification read" });
+    }
+  });
+
+  app.patch("/api/notifications/read-all", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { types, ids } = req.body as { types?: string[]; ids?: string[] };
+      if (ids && Array.isArray(ids) && ids.length > 0) {
+        await storage.markNotificationsReadByIds(user.id, ids);
+      } else if (types && Array.isArray(types) && types.length > 0) {
+        await storage.markNotificationsReadByTypes(user.id, types);
+      } else {
+        await storage.markAllNotificationsRead(user.id);
+      }
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to mark all notifications read" });
+    }
+  });
+
+  // ── Personal Alerts ──────────────────────────────────────────────────────
+  app.get("/api/alerts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      await storage.fireDueAlerts(user.id);
+      const alerts = await storage.getPersonalAlerts(user.id);
+      res.json(alerts);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch alerts" });
+    }
+  });
+
+  app.post("/api/alerts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const { title, notes, scheduledDate, companyId } = req.body;
+      if (!title || !scheduledDate) {
+        return res.status(400).json({ error: "Title and scheduled date are required" });
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate) || isNaN(new Date(scheduledDate + "T00:00:00").getTime())) {
+        return res.status(400).json({ error: "Invalid date format. Use YYYY-MM-DD." });
+      }
+      const alert = await storage.createPersonalAlert({
+        userId: user.id,
+        title,
+        notes: notes || null,
+        scheduledDate,
+        companyId: companyId || null,
+        fired: false,
+        createdAt: new Date().toISOString(),
+      });
+      res.status(201).json(alert);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create alert" });
+    }
+  });
+
+  app.delete("/api/alerts/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const deleted = await storage.deletePersonalAlert((req.params.id as string), user.id);
+      if (!deleted) return res.status(404).json({ error: "Alert not found" });
+      res.status(204).send();
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete alert" });
+    }
+  });
+
   // ── Company Activity Timeline ──────────────────────────────────────────────
   app.get("/api/companies/:id/activity", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const activity = await storage.getCompanyActivity((pStr(req.params.id)));
+      const activity = await storage.getCompanyActivity((req.params.id as string));
       res.json(activity);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch activity" });
@@ -3538,43 +5978,19 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      // Task #1060 — Team Performance is open to all users. Scope defaults to
-      // "mine" (the caller's reporting tree); "all" returns the full org-wide
-      // rep set (the same set the admin path used to compute by default).
-      const scope = qStr(req.query.scope) === "all" ? "all" : "mine";
-      const orgId = req.session.organizationId!;
-      const REP_ROLES = ["account_manager", "national_account_manager", "logistics_manager", "logistics_coordinator", "director", "sales_director", "sales"];
+      const amEquivRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+      if (amEquivRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
       let teamIds: string[];
-      let teamMappingMissing = false;
-      if (scope === "all") {
-        const allUsers = await storage.getUsers(orgId);
-        teamIds = allUsers.filter(u => REP_ROLES.includes(u.role)).map(u => u.id);
+      if (user.role === "admin") {
+        const allUsers = await storage.getUsers(req.session.organizationId!);
+        teamIds = allUsers.filter(u => u.role === "account_manager" || u.role === "national_account_manager" || u.role === "logistics_manager" || u.role === "logistics_coordinator" || u.role === "director" || u.role === "sales_director" || u.role === "sales").map(u => u.id);
       } else {
-        // "mine" — the caller's reporting tree (self + transitive direct reports).
         teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        // For an IC with no direct reports, also include peers under the same
-        // manager so they see their actual team rather than just themselves.
-        if (teamIds.length <= 1 && user.managerId) {
-          const allUsers = await storage.getUsers(orgId);
-          const peerIds = allUsers.filter(u => u.managerId === user.managerId).map(u => u.id);
-          const merged = new Set<string>(teamIds);
-          for (const id of peerIds) merged.add(id);
-          teamIds = Array.from(merged);
-        }
-        if (teamIds.length === 0) {
-          return res.json({ reps: [], teamMappingMissing: true });
-        }
-        // If after expansion the only resolvable member is the caller and they
-        // have no manager, surface the empty-team signal so the page can render
-        // a friendly explainer instead of a one-card grid.
-        if (teamIds.length === 1 && teamIds[0] === user.id && !user.managerId) {
-          teamMappingMissing = true;
-        }
       }
 
       const now = new Date();
       const todayStr = now.toISOString().split("T")[0];
-      const period = (qStr(req.query.period)) || "current";
+      const period = (req.query.period as string) || "current";
       let startDate: string;
       let endDate: string;
       if (period === "last") {
@@ -3624,7 +6040,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           name: u?.name || "Unknown",
           role: u?.role || "account_manager",
           managerId: u?.managerId,
-          financialRepId: u?.financialRepId ?? null,
+          financialRepId: (u as any)?.financialRepId || null,
           createdAt: u?.createdAt || null,
           prevCallTouchpoints: prev?.callTouchpoints ?? 0,
           prevTextTouchpoints: prev?.textTouchpoints ?? 0,
@@ -3632,10 +6048,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
           prevMeaningfulTouchpoints: prev?.meaningfulTouchpoints ?? 0,
         };
       });
-      // Task #1060 — wrap response in `{ reps, teamMappingMissing }` so the
-      // page can render an honest "no team mapped" empty-state for ICs whose
-      // reporting line has not been set up yet, while preserving the rep list.
-      res.json({ reps: result, teamMappingMissing });
+      res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch team performance" });
     }
@@ -3646,13 +6059,11 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      // Task #1060 — Detail drill-down inherits the open-access policy from
-      // the parent /api/team/performance endpoint so cards remain clickable
-      // for everyone. Scope is honored the same way (default "mine").
-      const detailScope = qStr(req.query.scope) === "all" ? "all" : "mine";
+      const amEquivRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
+      if (amEquivRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
 
-      const metric = pStr(req.params.metric);
-      const period = (qStr(req.query.period)) || "current";
+      const metric = req.params.metric as string;
+      const period = (req.query.period as string) || "current";
       const now = new Date();
       const todayStr = now.toISOString().split("T")[0];
       let startDate: string;
@@ -3671,18 +6082,11 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
 
       let teamIds: string[];
-      if (detailScope === "all") {
-        const allUsersForScope = await storage.getUsers(req.session.organizationId!);
-        teamIds = allUsersForScope.filter(u => ["account_manager","national_account_manager","logistics_manager","logistics_coordinator","director","sales_director","sales"].includes(u.role)).map(u => u.id);
+      if (user.role === "admin") {
+        const allUsers = await storage.getUsers(req.session.organizationId!);
+        teamIds = allUsers.filter(u => ["account_manager","national_account_manager","logistics_manager","logistics_coordinator","director","sales_director","sales"].includes(u.role)).map(u => u.id);
       } else {
         teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        if (teamIds.length <= 1 && user.managerId) {
-          const allUsersForScope = await storage.getUsers(req.session.organizationId!);
-          const peerIds = allUsersForScope.filter(u => u.managerId === user.managerId).map(u => u.id);
-          const merged = new Set<string>(teamIds);
-          for (const id of peerIds) merged.add(id);
-          teamIds = Array.from(merged);
-        }
       }
 
       const allUsers = await storage.getUsers(req.session.organizationId!);
@@ -3693,7 +6097,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const companiesById: Record<string, typeof allCompanies[0]> = {};
       for (const c of allCompanies) companiesById[c.id] = c;
 
-      const allContacts = await storage.getContactsByOrg(req.session.organizationId!);
+      const allContacts = await storage.getContacts();
       const contactsById: Record<string, typeof allContacts[0]> = {};
       for (const c of allContacts) contactsById[c.id] = c;
 
@@ -3887,54 +6291,6 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
-  // ── Cadence Accountability Alerts ─────────────────────────────────────────
-  app.get("/api/team/cadence-alerts", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const restrictedRoles = ["account_manager", "logistics_manager", "logistics_coordinator"];
-      if (restrictedRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
-      const days = parseInt((qStr(req.query.days)) || "30", 10);
-      const result = await storage.pool.query<{
-        company_id: string; company_name: string; rep_id: string; rep_name: string;
-        last_touchpoint_at: string | null; days_since: number | null;
-      }>(`
-        SELECT
-          c.id AS company_id,
-          c.name AS company_name,
-          u.id AS rep_id,
-          u.name AS rep_name,
-          MAX(t.created_at) AS last_touchpoint_at,
-          CASE
-            WHEN MAX(t.created_at) IS NULL THEN NULL
-            ELSE EXTRACT(EPOCH FROM (NOW() - MAX(t.created_at::timestamptz))) / 86400
-          END AS days_since
-        FROM companies c
-        JOIN users u ON c.assigned_to = u.id
-        LEFT JOIN touchpoints t ON t.company_id = c.id
-        WHERE c.organization_id = $1
-          AND c.archived_at IS NULL
-          AND c.assigned_to IS NOT NULL
-        GROUP BY c.id, c.name, u.id, u.name
-        HAVING MAX(t.created_at) IS NULL
-           OR MAX(t.created_at::timestamptz) < NOW() - ($2 || ' days')::interval
-        ORDER BY days_since DESC NULLS FIRST
-        LIMIT 100
-      `, [user.organizationId, days]);
-      res.json(result.rows.map(r => ({
-        companyId: r.company_id,
-        companyName: r.company_name,
-        repId: r.rep_id,
-        repName: r.rep_name,
-        lastTouchpointAt: r.last_touchpoint_at || null,
-        daysSince: r.days_since !== null ? Math.floor(r.days_since) : null,
-      })));
-    } catch (error) {
-      console.error("Error in cadence-alerts:", error);
-      res.status(500).json({ error: "Failed to fetch cadence alerts" });
-    }
-  });
-
   // ── SMTP Test ────────────────────────────────────────────────────────────
   app.post("/api/admin/smtp/test", requireAuth, async (req, res) => {
     try {
@@ -3946,8 +6302,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
       const result = await verifySmtp();
       res.json(result);
-    } catch (err) {
-      res.status(500).json({ ok: false, error: getErrorMessage(err) });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err.message });
     }
   });
 
@@ -3963,195 +6319,20 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         env: { ...process.env },
       });
       res.json({ success: true, message: "Demo org seeded successfully", output: output.toString().slice(-500) });
-    } catch (err) {
-      res.status(500).json({ success: false, error: getErrorMessage(err).slice(0, 300) });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message?.slice(0, 300) });
     }
   });
 
   // ── Rep Progress Report ───────────────────────────────────────────────────
-  // ── Outlook / Microsoft Graph Email ─────────────────────────────────────
-  app.get("/api/outlook/status", requireAuth, async (_req, res) => {
-    const { outlookEnabled } = await import("./outlookService");
-    res.json({ enabled: outlookEnabled() });
-  });
-
-  app.post("/api/outlook/send", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-
-      const { toEmail, toName, subject, body, ccEmails, isHtml, contactId } = req.body || {};
-      if (!toEmail || !subject || !body) {
-        return res.status(400).json({ error: "toEmail, subject, and body are required" });
-      }
-
-      // The "from" address is the logged-in user's username (which is their email)
-      const fromEmail = currentUser.username;
-      if (!fromEmail || !fromEmail.includes("@")) {
-        return res.status(400).json({ error: "Your account username must be a valid email address to send via Outlook" });
-      }
-
-      const { sendOutlookEmail, outlookEnabled } = await import("./outlookService");
-      if (!outlookEnabled()) {
-        return res.status(503).json({ error: "Outlook integration is not configured on this server" });
-      }
-
-      const result = await sendOutlookEmail({
-        fromEmail,
-        toEmail,
-        toName,
-        subject,
-        body,
-        ccEmails: ccEmails || [],
-        isHtml: isHtml !== false,
-        saveToSentItems: true,
-      });
-
-      if (!result.ok) {
-        return res.status(500).json({ success: false, error: result.error });
-      }
-
-      // Auto-log a touchpoint if a contactId was provided
-      let touchpoint = null;
-      if (contactId) {
-        try {
-          const contact = await storage.getContact(contactId as string);
-          if (contact) {
-            const now = new Date();
-            // Strip signature (everything after <hr>) and HTML tags, then decode entities
-            const bodyBeforeHr = body.replace(/<hr\b[^>]*>[\s\S]*/i, "");
-            const plainBody = bodyBeforeHr
-              .replace(/<br\s*\/?>/gi, "\n")
-              .replace(/<\/p>/gi, "\n")
-              .replace(/<\/div>/gi, "\n")
-              .replace(/<[^>]+>/g, "")
-              .replace(/&nbsp;/g, " ")
-              .replace(/&amp;/g, "&")
-              .replace(/&lt;/g, "<")
-              .replace(/&gt;/g, ">")
-              .replace(/&quot;/g, '"')
-              .replace(/&#39;/g, "'")
-              .replace(/\n{3,}/g, "\n\n")
-              .trim();
-            const notes = `Subject: ${subject}\n\n${plainBody}`;
-            touchpoint = await storage.createTouchpoint({
-              contactId,
-              companyId: contact.companyId,
-              type: "email",
-              date: now.toISOString().split("T")[0],
-              notes,
-              sentiment: null,
-              isMeaningful: false,
-              loggedById: currentUser.id,
-              createdAt: now.toISOString(),
-            });
-            cacheInvalidatePrefix(`cold-contacts:${currentUser.id}`);
-            if (contact.companyId) {
-              try {
-                const gs = await computeGrowthScore(contact.companyId!, currentUser.organizationId, storage);
-                await storage.upsertGrowthScore({ companyId: contact.companyId!, organizationId: currentUser.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-              } catch (gsErr) {
-                console.error("[outlook] growth score refresh failed:", gsErr);
-              }
-            }
-          }
-        } catch (tpErr) {
-          console.error("[outlook] touchpoint log failed:", tpErr);
-        }
-      }
-
-      // Email auto-logging: if no contactId provided, try to match recipient domain to a CRM company
-      let autoLinkedCompanyId: string | null = null;
-      if (!contactId && toEmail && toEmail.includes("@")) {
-        try {
-          const domain = toEmail.split("@")[1]?.toLowerCase();
-          if (domain && domain.length > 3 && !["gmail.com","yahoo.com","hotmail.com","outlook.com","icloud.com"].includes(domain)) {
-            const allCompanies = await storage.getCompanies(currentUser.organizationId);
-            const visibleIds = await getVisibleCompanyIds(currentUser);
-            const visibleCompanies = visibleIds === null
-              ? allCompanies
-              : allCompanies.filter(c => visibleIds.includes(c.id));
-            const match = visibleCompanies.find(c => {
-              if (c.archivedAt) return false;
-              const website = (c.website || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0];
-              return website && website === domain;
-            }) || visibleCompanies.find(c => {
-              if (c.archivedAt) return false;
-              const nameDomain = c.name.toLowerCase().replace(/[^a-z0-9]/g, "");
-              const emailDomainCore = domain.split(".")[0].replace(/[^a-z0-9]/g, "");
-              return emailDomainCore.length >= 4 && (nameDomain.includes(emailDomainCore) || emailDomainCore.includes(nameDomain.substring(0, 8)));
-            });
-            if (match) {
-              autoLinkedCompanyId = match.id;
-              const now = new Date();
-              const bodyBeforeHr = body.replace(/<hr\b[^>]*>[\s\S]*/i, "");
-              const plainBody = bodyBeforeHr
-                .replace(/<br\s*\/?>/gi, "\n").replace(/<\/p>/gi, "\n").replace(/<\/div>/gi, "\n")
-                .replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&")
-                .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'")
-                .replace(/\n{3,}/g, "\n\n").trim();
-              const notes = `Subject: ${subject}\nTo: ${toEmail}\n\n${plainBody}`;
-              await storage.createTouchpoint({
-                contactId: null,
-                companyId: match.id,
-                type: "email",
-                date: now.toISOString().split("T")[0],
-                notes,
-                sentiment: null,
-                isMeaningful: false,
-                loggedById: currentUser.id,
-                createdAt: now.toISOString(),
-              });
-              cacheInvalidatePrefix(`cold-contacts:${currentUser.id}`);
-              try {
-                const gs = await computeGrowthScore(match.id, currentUser.organizationId, storage);
-                await storage.upsertGrowthScore({ companyId: match.id, organizationId: currentUser.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-              } catch (gsErr) {
-                console.error("[outlook] growth score refresh (auto-link) failed:", gsErr);
-              }
-            }
-          }
-        } catch (autoErr) {
-          console.error("[outlook] auto-log email failed:", autoErr);
-        }
-      }
-
-      res.json({ success: true, message: "Email sent successfully", touchpoint, autoLinkedCompanyId });
-    } catch (error) {
-      console.error("[outlook] send error:", error);
-      res.status(500).json({ error: "Failed to send email" });
-    }
-  });
-
-  // Update a touchpoint (toggle meaningful, edit notes)
-  app.patch("/api/touchpoints/:id", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const tp = await storage.getTouchpoint(pStr(req.params.id));
-      if (!tp) return res.status(404).json({ error: "Touchpoint not found" });
-      const updates: { isMeaningful?: boolean; notes?: string } = {};
-      if (req.body.isMeaningful !== undefined) updates.isMeaningful = req.body.isMeaningful === true;
-      if (req.body.notes !== undefined) updates.notes = req.body.notes;
-      const updated = await storage.updateTouchpoint(tp.id, updates);
-      cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
-      res.json(updated);
-    } catch (error) {
-      console.error("Failed to update touchpoint:", error);
-      res.status(500).json({ error: "Failed to update touchpoint" });
-    }
-  });
-  // ── End Outlook ──────────────────────────────────────────────────────────
-
   app.post("/api/report/rep/:userId/send-email", requireAuth, async (req, res) => {
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
       const period = (req.body?.period as string) === "monthly" ? "monthly" : "weekly";
-      // Harden against ID-guessing: a Director may only email a report for a
-      // rep inside their reporting tree (Task #525). Admin can email anyone.
-      if (!(await canSeeRepUser(viewer, userId))) {
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { sendRepReportEmail } = await import("./repReportScheduler");
@@ -4161,7 +6342,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       } else {
         res.json({ success: false, message: sentTo ? "Email could not be sent — check SMTP configuration and try again." : "No username found for this user.", sentTo });
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("send-email error:", error);
       res.status(500).json({ error: "Failed to send email" });
     }
@@ -4173,7 +6354,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
       if (!managerRoles.includes(viewer.role)) return res.status(403).json({ error: "Access denied" });
 
       const allUsers = await storage.getUsers(req.session.organizationId!);
@@ -4193,12 +6374,12 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
 
       const recipients = targetIds.map(id => {
         const u = allUsers.find(u => u.id === id)!;
-        return { id: u.id, name: u.name, role: u.role, email: u.username };
+        return { id: u.id, name: u.name, role: u.role, email: (u as any).email || u.username };
       }).sort((a, b) => a.name.localeCompare(b.name));
 
       res.json({ recipients, total: recipients.length });
-    } catch (err) {
-      res.status(500).json({ error: getErrorMessage(err) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -4207,7 +6388,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
       if (!managerRoles.includes(viewer.role)) return res.status(403).json({ error: "Access denied" });
 
       const period: "weekly" | "monthly" = req.body?.period === "weekly" ? "weekly" : "monthly";
@@ -4238,8 +6419,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const sent = results.filter(r => r.ok).length;
       const failed = results.filter(r => !r.ok).length;
       res.json({ sent, failed, total: targetIds.length, results });
-    } catch (err) {
-      res.status(500).json({ error: getErrorMessage(err) });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -4248,10 +6429,9 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
-      const period = (qStr(req.query.period)) === "monthly" ? "monthly" : "weekly";
-      // Harden against ID-guessing — viewer must have rep-visibility on the
-      // requested user (own ID, or in their reporting tree). Task #525.
-      if (!(await canSeeRepUser(viewer, userId))) {
+      const period = (req.query.period as string) === "monthly" ? "monthly" : "weekly";
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
       }
       const data = await storage.getRepReport(userId, period);
@@ -4267,8 +6447,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
-      // Same per-rep visibility check as the read endpoint above (Task #525).
-      if (!(await canSeeRepUser(viewer, userId))) {
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
       }
       const period = (req.body?.period as string) === "monthly" ? "monthly" : "weekly";
@@ -4293,8 +6473,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const viewer = await getCurrentUser(req);
       if (!viewer) return res.status(401).json({ error: "Not authenticated" });
       const { userId } = req.params as Record<string, string>;
-      // Same per-rep visibility check as the read/snapshot endpoints (Task #525).
-      if (!(await canSeeRepUser(viewer, userId))) {
+      const managerRoles = ["admin", "director", "national_account_manager", "sales_director"];
+      if (viewer.id !== userId && !managerRoles.includes(viewer.role)) {
         return res.status(403).json({ error: "Access denied" });
       }
       const snapshots = await storage.getReportCardSnapshots(userId);
@@ -4305,14 +6485,633 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
-  registerGoalRoutes(app);
+  // ── Goals ─────────────────────────────────────────────────────────────────
+  app.get("/api/goals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      let goalsList;
+      if (user.role === "admin") {
+        goalsList = await storage.getGoals({});
+      } else if (user.role === "director" || user.role === "sales" || user.role === "sales_director") {
+        goalsList = await storage.getGoals({ namId: user.id });
+      } else if (user.role === "national_account_manager") {
+        const setGoals = await storage.getGoals({ namId: user.id });
+        const assignedGoals = await storage.getGoals({ amId: user.id });
+        const seen = new Set<string>();
+        goalsList = [...setGoals, ...assignedGoals].filter(g => { if (seen.has(g.id)) return false; seen.add(g.id); return true; });
+      } else if (user.role === "account_manager") {
+        // AMs see their own goals AND any goals they've set for LM reports
+        const ownGoals = await storage.getGoals({ amId: user.id });
+        const setGoals = await storage.getGoals({ namId: user.id });
+        const seen = new Set<string>();
+        goalsList = [...ownGoals, ...setGoals].filter(g => { if (seen.has(g.id)) return false; seen.add(g.id); return true; });
+      } else {
+        goalsList = await storage.getGoals({ amId: user.id });
+      }
+
+      // Enrich goals with auto-computed values so dashboard alerts use accurate data
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
+
+      const enriched = await Promise.all(goalsList.map(async (goal) => {
+        let computedValue: number | null = null;
+        if (goal.metric === "contacts_added") {
+          computedValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "touchpoints") {
+          computedValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "meaningful_touchpoints") {
+          computedValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "margin" && latestUpload) {
+          const amUser = allUsers.find(u => u.id === goal.amId);
+          const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
+          if (repKey) {
+            const repKeyLower = repKey.toLowerCase();
+            const raw = (latestUpload.summaryRows as any[]) || [];
+            let total = 0;
+            if (isBadSummaryData(raw)) {
+              const txRows: any[] = (latestUpload.rows as any[]) || [];
+              const goalTxCols = resolveColumns(txRows);
+              const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+              const byRep: Record<string, Record<string, number>> = {};
+              for (const row of txRows) {
+                if (isExcludedRow(row, goalTxCols)) continue;
+                const { monthKey, margin } = parseHistoricalRow(row, goalTxCols);
+                const rep = getRepFromRow(row, goalTxCols);
+                if (!rep) continue;
+                if (!byRep[rep]) byRep[rep] = {};
+                if (monthKey) byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
+              }
+              if (goalMonthKey) total = (byRep[repKeyLower] || {})[goalMonthKey] || 0;
+            } else {
+              const firstRow = raw[0] || {};
+              const usesEmptyKeys = "__EMPTY" in firstRow;
+              let rows = raw;
+              if (usesEmptyKeys) rows = raw.filter((r: any) => { const n = String(r["__EMPTY"] || "").trim(); return n && n !== "Customer Name" && n !== "TOTAL" && n !== "Customer code"; });
+              const sumRawCols = resolveColumns(rows);
+              for (const r of rows) {
+                let repName: string, totalMargin: number;
+                if (usesEmptyKeys) { repName = String(r["__EMPTY_6"] || "").trim(); totalMargin = Number(r["__EMPTY_3"] ?? 0); }
+                else { repName = getRepFromRow(r, sumRawCols); totalMargin = Number(r["Total Margin $"] || r["Total Margin"] || 0); }
+                if (repName.toLowerCase() === repKeyLower) total += totalMargin;
+              }
+            }
+            if (total > 0) computedValue = Math.round(total);
+          }
+        }
+        return { ...goal, computedValue };
+      }));
+
+      res.json(enriched);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch goals" });
+    }
+  });
+
+  app.get("/api/goals/monthly-check", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role === "account_manager" || user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.json([]);
+      const namId = user.role === "admin" ? undefined : user.id;
+      const missing = await storage.getAmsMissingMonthlyGoals(user.organizationId, namId);
+      res.json(missing);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to check monthly goals" });
+    }
+  });
+
+  // ── Goals Leaderboard ─────────────────────────────────────────────────────
+  app.get("/api/goals/leaderboard", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const lbCacheKey = `leaderboard:${req.session.organizationId}`;
+      const lbCached = cacheGet(lbCacheKey);
+      if (lbCached) return res.json(lbCached);
+
+      // All goals across the org (NAMs see company-wide leaderboard)
+      const allGoals = await storage.getGoals({});
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const activeGoals = allGoals.filter(g => g.startDate <= todayStr && (!g.endDate || g.endDate >= todayStr));
+
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
+
+      type GoalEntry = { metric: string; customLabel: string | null; amId: string; amName: string; currentValue: number; target: number; pct: number };
+      const goalEntries: GoalEntry[] = [];
+
+      for (const goal of activeGoals) {
+        const amUser = allUsers.find(u => u.id === goal.amId);
+        if (!amUser) continue;
+
+        let effectiveValue = parseFloat(goal.currentValue || "0");
+
+        if (goal.metric === "contacts_added") {
+          effectiveValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "touchpoints") {
+          effectiveValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "meaningful_touchpoints") {
+          effectiveValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        } else if (goal.metric === "margin" && latestUpload) {
+          const repKey = (amUser as any).financialRepId as string | null;
+          if (repKey) {
+            const raw = (latestUpload.summaryRows as any[]) || [];
+            const repKeyLower = repKey.toLowerCase();
+            let total = 0;
+            if (isBadSummaryData(raw)) {
+              const txRows: any[] = (latestUpload.rows as any[]) || [];
+              const lbTxCols = resolveColumns(txRows);
+              const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+              const byRep: Record<string, Record<string, number>> = {};
+              for (const row of txRows) {
+                if (isExcludedRow(row, lbTxCols)) continue;
+                const { monthKey, margin } = parseHistoricalRow(row, lbTxCols);
+                const rep = getRepFromRow(row, lbTxCols);
+                if (!rep) continue;
+                if (!byRep[rep]) byRep[rep] = {};
+                if (monthKey) byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
+              }
+              const repMonths = byRep[repKeyLower] || {};
+              if (goalMonthKey) total = repMonths[goalMonthKey] || 0;
+            } else {
+              const firstRow = raw[0] || {};
+              const usesEmptyKeys = "__EMPTY" in firstRow;
+              let rows = raw;
+              if (usesEmptyKeys) rows = raw.filter((r: any) => { const n = String(r["__EMPTY"] || "").trim(); return n && n !== "Customer Name" && n !== "TOTAL" && n !== "Customer code"; });
+              for (const r of rows) {
+                let repName: string, totalMargin: number;
+                if (usesEmptyKeys) { repName = String(r["__EMPTY_6"] || "").trim(); totalMargin = Number(r["__EMPTY_3"] ?? 0); }
+                else { repName = String(r["Rep Name"] || r["Rep"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim(); totalMargin = Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0); }
+                if (repName.toLowerCase() === repKeyLower) total += totalMargin;
+              }
+            }
+            if (total > 0) effectiveValue = Math.round(total);
+          }
+        }
+
+        const target = parseFloat(goal.target || "0");
+        const pct = target > 0 ? Math.min((effectiveValue / target) * 100, 999) : 0;
+        goalEntries.push({ metric: goal.metric, customLabel: goal.customLabel, amId: goal.amId, amName: amUser.name, currentValue: effectiveValue, target, pct });
+      }
+
+      // Group by metric (custom uses label as sub-key), take top 3 by pct
+      const metricGroups = new Map<string, GoalEntry[]>();
+      for (const entry of goalEntries) {
+        const key = entry.metric === "custom" ? `custom:${entry.customLabel || ""}` : entry.metric;
+        if (!metricGroups.has(key)) metricGroups.set(key, []);
+        metricGroups.get(key)!.push(entry);
+      }
+
+      const METRIC_ORDER = ["margin", "touchpoints", "contacts_added", "load_count", "custom"];
+      const leaderboard: { metric: string; customLabel: string | null; entries: { rank: number; amId: string; amName: string; currentValue: number; target: number; pct: number }[] }[] = [];
+
+      for (const [, entries] of metricGroups) {
+        const sorted = [...entries].sort((a, b) => b.pct - a.pct).slice(0, 3);
+        leaderboard.push({ metric: sorted[0].metric, customLabel: sorted[0].customLabel, entries: sorted.map((e, i) => ({ rank: i + 1, amId: e.amId, amName: e.amName, currentValue: e.currentValue, target: e.target, pct: e.pct })) });
+      }
+
+      leaderboard.sort((a, b) => METRIC_ORDER.indexOf(a.metric) - METRIC_ORDER.indexOf(b.metric));
+      cacheSet(`leaderboard:${req.session.organizationId}`, leaderboard);
+      res.json(leaderboard);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch leaderboard" });
+    }
+  });
+
+  app.post("/api/goals", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role === "logistics_manager" || user.role === "logistics_coordinator") return res.status(403).json({ error: "Only managers can create goals" });
+      // AMs can set goals for themselves or for users who report directly to them
+      if (user.role === "account_manager") {
+        const amId = req.body.amId;
+        if (amId !== user.id) {
+          const allUsers = await storage.getUsers(req.session.organizationId!);
+          const targetUser = allUsers.find(u => u.id === amId);
+          if (!targetUser || targetUser.managerId !== user.id) {
+            return res.status(403).json({ error: "You can only set goals for yourself or your direct reports" });
+          }
+        }
+      }
+      const goal = await storage.createGoal({
+        ...req.body,
+        namId: user.role === "admin" ? (req.body.namId || user.id) : user.id,
+        createdById: user.id,
+        createdAt: new Date().toISOString(),
+        currentValue: "0",
+      });
+      const isSelfGoal = goal.amId === user.id;
+      if (!isSelfGoal && goal.amId) {
+        // Notify the AM that a goal has been set for them
+        storage.createNotification({
+          userId: goal.amId,
+          type: "goal_set",
+          title: `${user.name} set a goal for you`,
+          body: goal.title,
+          link: "/goals",
+          relatedId: goal.id,
+          read: false,
+        }).catch(() => {});
+      } else if (isSelfGoal) {
+        // Self-goal: notify the user's director/manager and all admins
+        const orgUsers = await storage.getUsers(req.session.organizationId!);
+        const notifyIds = new Set<string>();
+        if (user.managerId) notifyIds.add(user.managerId);
+        orgUsers.filter(u => u.role === "admin" || u.role === "director" || u.role === "sales_director")
+          .forEach(u => { if (u.id !== user.id) notifyIds.add(u.id); });
+        for (const uid of notifyIds) {
+          storage.createNotification({
+            userId: uid,
+            type: "goal_set",
+            title: `${user.name} set a goal for themselves`,
+            body: goal.title || goal.metric.replace(/_/g, " "),
+            link: "/goals",
+            relatedId: goal.id,
+            read: false,
+          }).catch(() => {});
+        }
+      }
+      cacheInvalidatePrefix(`leaderboard:`);
+      res.status(201).json(goal);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to create goal" });
+    }
+  });
+
+  // ── Bulk Goal Creation ──────────────────────────────────────────────────────
+  app.post("/api/goals/bulk", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const namRoles = ["admin", "director", "national_account_manager"];
+      if (!namRoles.includes(user.role)) return res.status(403).json({ error: "Access denied" });
+      const { metric, period, target, startDate, endDate, notes, amIds } = req.body;
+      if (!metric || !period || !target || !startDate || !endDate || !Array.isArray(amIds) || !amIds.length) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+      const existingGoals = await storage.getGoals({ namId: user.id });
+      const created = [];
+      let skipped = 0;
+      for (const amId of amIds) {
+        const isDuplicate = existingGoals.some(g =>
+          g.amId === amId && g.metric === metric &&
+          g.startDate === startDate && g.endDate === endDate
+        );
+        if (isDuplicate) { skipped++; continue; }
+        const goal = await storage.createGoal({
+          namId: user.id,
+          amId,
+          metric,
+          period,
+          target: String(target),
+          currentValue: "0",
+          startDate,
+          endDate,
+          notes: notes || null,
+          status: "active",
+          createdAt: new Date().toISOString(),
+          createdById: user.id,
+        });
+        storage.createNotification({
+          userId: amId,
+          type: "goal_set",
+          title: `${user.name} set a goal for you`,
+          body: `${metric.replace(/_/g, " ")} — target: ${target}`,
+          link: "/goals",
+          relatedId: goal.id,
+          read: false,
+        }).catch(() => {});
+        created.push(goal);
+      }
+      res.status(201).json({ created: created.length, skipped });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to bulk create goals" });
+    }
+  });
+
+  app.patch("/api/goals/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getGoal((req.params.id as string));
+      if (!existing) return res.status(404).json({ error: "Goal not found" });
+      let canEdit = user.role === "admin" || existing.namId === user.id || existing.amId === user.id;
+      if (!canEdit && (user.role === "director" || user.role === "sales_director")) {
+        // Directors can edit margin goals for users in their own organization
+        const orgId = req.session.organizationId;
+        if (orgId && existing.metric === "margin") {
+          const orgUsers = await storage.getUsers(orgId);
+          const orgUserIds = new Set(orgUsers.map(u => u.id));
+          canEdit = (existing.namId ? orgUserIds.has(existing.namId) : false) ||
+                    (existing.amId ? orgUserIds.has(existing.amId) : false);
+        }
+      }
+      if (!canEdit) return res.status(403).json({ error: "Access denied" });
+      const updated = await storage.updateGoal((req.params.id as string), req.body);
+      // Notify the other party about goal updates
+      const isProgressUpdate = req.body.currentValue !== undefined && Object.keys(req.body).length === 1;
+      if (isProgressUpdate && existing.namId !== user.id) {
+        // AM updated their progress — notify NAM
+        storage.createNotification({
+          userId: existing.namId,
+          type: "goal_updated",
+          title: `${user.name} updated goal progress`,
+          body: existing.title,
+          link: "/goals",
+          relatedId: existing.id,
+          read: false,
+        }).catch(() => {});
+      } else if (!isProgressUpdate && existing.amId && existing.amId !== user.id) {
+        // NAM changed the goal definition — notify AM
+        storage.createNotification({
+          userId: existing.amId,
+          type: "goal_updated",
+          title: `${user.name} updated one of your goals`,
+          body: existing.title,
+          link: "/goals",
+          relatedId: existing.id,
+          read: false,
+        }).catch(() => {});
+      }
+      // Goal completion: auto-complete and notify when value crosses target
+      if (isProgressUpdate && existing.status !== "completed") {
+        const newVal = parseFloat(req.body.currentValue || "0");
+        const tgt = parseFloat(existing.target || "0");
+        if (tgt > 0 && newVal >= tgt) {
+          await storage.updateGoal((req.params.id as string), { status: "completed" }).catch(() => {});
+          const goalTitle = existing.title || `${existing.metric.replace(/_/g, " ")} goal`;
+          if (existing.namId !== user.id) {
+            storage.createNotification({
+              userId: existing.namId,
+              type: "goal_updated",
+              title: `🎉 ${user.name} hit their goal!`,
+              body: goalTitle,
+              link: "/goals",
+              relatedId: existing.id,
+              read: false,
+            }).catch(() => {});
+          }
+          if (existing.amId && existing.amId === user.id) {
+            storage.createNotification({
+              userId: user.id,
+              type: "goal_updated",
+              title: "🎉 Goal achieved!",
+              body: goalTitle,
+              link: "/goals",
+              relatedId: existing.id,
+              read: false,
+            }).catch(() => {});
+          }
+        }
+      }
+      cacheInvalidatePrefix(`leaderboard:`);
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to update goal" });
+    }
+  });
+
+  app.delete("/api/goals/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const existing = await storage.getGoal((req.params.id as string));
+      if (!existing) return res.status(404).json({ error: "Goal not found" });
+      if (user.role !== "admin" && existing.namId !== user.id) return res.status(403).json({ error: "Access denied" });
+      await storage.deleteGoal((req.params.id as string));
+      cacheInvalidatePrefix(`leaderboard:`);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete goal" });
+    }
+  });
+
+  app.get("/api/goals/:id/comments", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const comments = await storage.getGoalComments((req.params.id as string));
+      res.json(comments);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch comments" });
+    }
+  });
+
+  app.post("/api/goals/:id/comments", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const goal = await storage.getGoal((req.params.id as string));
+      if (!goal) return res.status(404).json({ error: "Goal not found" });
+      const canComment = user.role === "admin" || goal.namId === user.id || goal.amId === user.id;
+      if (!canComment) return res.status(403).json({ error: "Access denied" });
+      const body = (req.body.body || req.body.text || "").trim();
+      if (!body) return res.status(400).json({ error: "Comment body is required" });
+      const comment = await storage.createGoalComment({
+        goalId: (req.params.id as string),
+        authorId: user.id,
+        body,
+        createdAt: new Date().toISOString(),
+      });
+      // Notify both NAM and AM about the goal comment (skip the commenter)
+      const goalNotifyIds = [goal.namId, goal.amId].filter(
+        (id): id is string => !!id && id !== user.id
+      );
+      for (const uid of goalNotifyIds) {
+        storage.createNotification({
+          userId: uid,
+          type: "goal_comment",
+          title: `${user.name} commented on a goal`,
+          body: goal.title,
+          link: "/goals",
+          relatedId: goal.id,
+          read: false,
+        }).catch(() => {});
+      }
+      res.status(201).json(comment);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to post comment" });
+    }
+  });
+
+  app.delete("/api/goal-comments/:id", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const comment = await storage.getGoalComment((req.params.id as string));
+      if (!comment) return res.status(404).json({ error: "Comment not found" });
+      if (user.role !== "admin" && comment.authorId !== user.id) return res.status(403).json({ error: "Access denied" });
+      await storage.deleteGoalComment((req.params.id as string));
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete comment" });
+    }
+  });
+
+  app.get("/api/goals/:id/progress", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const goal = await storage.getGoal((req.params.id as string));
+      if (!goal) return res.status(404).json({ error: "Goal not found" });
+      let autoValue: number | null = null;
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      const targetUser = allUsers.find(u => u.id === goal.amId);
+      const isLMGoal = targetUser?.role === "logistics_manager" || targetUser?.role === "logistics_coordinator";
+
+      if (goal.metric === "contacts_added") {
+        // LMs/LCs don't own companies via assignedTo — skip auto-compute so manual update is available
+        if (!isLMGoal) {
+          autoValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+        }
+      } else if (goal.metric === "touchpoints") {
+        if (!isLMGoal) {
+          autoValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        }
+      } else if (goal.metric === "meaningful_touchpoints") {
+        if (!isLMGoal) {
+          autoValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+        }
+      } else if (goal.metric === "loads_booked" || goal.metric === "margin_pct" || (goal.metric === "margin" && isLMGoal)) {
+        // LM metrics — computed from the Dispatcher column in transaction rows
+        const repKey = targetUser ? (targetUser as any).financialRepId as string | null : null;
+        if (repKey) {
+          const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+          if (uploads.length) {
+            const latest = uploads[uploads.length - 1];
+            const txRows: any[] = (latest.rows as any[]) || [];
+            const cols = resolveColumns(txRows);
+            const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+            const repKeyLower = repKey.toLowerCase();
+            let count = 0;
+            let totalMargin = 0;
+            let totalCharges = 0;
+            for (const row of txRows) {
+              if (isExcludedRow(row, cols)) continue;
+              const disp = getDispatcherFromRow(row, cols).toLowerCase();
+              if (disp !== repKeyLower) continue;
+              if (goalMonthKey) {
+                const { monthKey } = parseHistoricalRow(row, cols);
+                if (monthKey !== goalMonthKey) continue;
+              }
+              count++;
+              totalMargin += Number(row[cols.marginDollar] || row["Margin $"] || 0);
+              totalCharges += Number(row[cols.totalCharges] || row["Total charges"] || 0);
+            }
+            if (goal.metric === "loads_booked") autoValue = count;
+            else if (goal.metric === "margin_pct") autoValue = totalCharges > 0 ? Math.round((totalMargin / totalCharges) * 1000) / 10 : 0;
+            else autoValue = Math.round(totalMargin); // margin for LM
+          }
+        }
+      } else if (goal.metric === "margin") {
+        if (targetUser) {
+          const repKey = (targetUser as any).financialRepId as string | null;
+          if (repKey) {
+            const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+            if (uploads.length) {
+              const latest = uploads[uploads.length - 1];
+              const raw = (latest.summaryRows as any[]) || [];
+              const repKeyLower = repKey.toLowerCase();
+              let total = 0;
+              if (isBadSummaryData(raw)) {
+                const txRows: any[] = (latest.rows as any[]) || [];
+                const progTxCols = resolveColumns(txRows);
+                const goalMonthKey = goal.startDate ? goal.startDate.slice(0, 7) : null;
+                const byRep: Record<string, Record<string, number>> = {};
+                for (const row of txRows) {
+                  if (isExcludedRow(row, progTxCols)) continue;
+                  const { monthKey, margin } = parseHistoricalRow(row, progTxCols);
+                  const rep = getRepFromRow(row, progTxCols);
+                  if (!rep) continue;
+                  if (!byRep[rep]) byRep[rep] = {};
+                  if (monthKey) byRep[rep][monthKey] = (byRep[rep][monthKey] || 0) + margin;
+                }
+                const repMonths = byRep[repKeyLower] || {};
+                if (goalMonthKey) total = repMonths[goalMonthKey] || 0;
+              } else {
+                const firstRow = raw[0] || {};
+                const usesEmptyKeys = "__EMPTY" in firstRow;
+                let rows = raw;
+                if (usesEmptyKeys) {
+                  rows = raw.filter((r: any) => {
+                    const name = String(r["__EMPTY"] || "").trim();
+                    return name && name !== "Customer Name" && name !== "TOTAL" && name !== "Customer code";
+                  });
+                }
+                for (const r of rows) {
+                  let repName: string, totalMargin: number;
+                  if (usesEmptyKeys) {
+                    repName = String(r["__EMPTY_6"] || "").trim();
+                    totalMargin = Number(r["__EMPTY_3"] ?? 0);
+                  } else {
+                    repName = String(r["Rep Name"] || r["Rep"] || r["rep name"] || r["REP"] || r["Sales Rep"] || "").trim();
+                    totalMargin = Number(r["Total Margin $"] || r["total margin $"] || r["TOTAL MARGIN $"] || r["Total Margin"] || 0);
+                  }
+                  if (repName.toLowerCase() === repKeyLower) total += totalMargin;
+                }
+              }
+              autoValue = Math.round(total);
+            }
+          }
+        }
+      }
+      res.json({ autoValue, currentValue: parseFloat(goal.currentValue || "0") });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch progress" });
+    }
+  });
+
+  // Margin trend: last 6 months of actual margin for the rep tied to a goal
+  app.get("/api/goals/:id/margin-trend", requireAuth, async (req, res) => {
+    try {
+      const goal = await storage.getGoal((req.params.id as string));
+      if (!goal) return res.status(404).json({ error: "Goal not found" });
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      const amUser = allUsers.find(u => u.id === goal.amId);
+      const repKey = amUser ? (amUser as any).financialRepId as string | null : null;
+      if (!repKey) return res.json({ months: [] });
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json({ months: [] });
+      const latest = uploads[uploads.length - 1];
+      const txRows: any[] = (latest.rows as any[]) || [];
+      const trendCols = resolveColumns(txRows);
+      const repKeyLower = repKey.toLowerCase();
+      const byMonth: Record<string, number> = {};
+      for (const row of txRows) {
+        if (isExcludedRow(row, trendCols)) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, trendCols);
+        if (!monthKey) continue;
+        const rep = getRepFromRow(row, trendCols);
+        if (rep !== repKeyLower) continue;
+        byMonth[monthKey] = (byMonth[monthKey] || 0) + margin;
+      }
+      // Build last 6 months relative to goal startDate
+      const anchor = new Date(goal.startDate + "T00:00:00");
+      const months = [];
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(anchor.getFullYear(), anchor.getMonth() - i, 1);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+        const label = d.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+        months.push({ key, label, margin: Math.round(byMonth[key] || 0) });
+      }
+      res.json({ months, repKey });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch margin trend" });
+    }
+  });
 
   app.get("/api/contacts/:id/lane-intel", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const contact = await storage.getContact(pStr(req.params.id));
+      const contact = await storage.getContact(req.params.id as string);
       if (!contact) return res.status(404).json({ error: "Contact not found" });
 
       // --- Build geography fingerprint from this contact ---
@@ -4370,7 +7169,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       }
 
       // --- Get company RFPs and extract lane rows from fileData ---
-      const companyRfps = await storage.getRfpsByCompanyId(contact.companyId);
+      const allRfpsForIntel = await storage.getRfps();
+      const companyRfps = allRfpsForIntel.filter(r => r.companyId === contact.companyId);
       type ExtractedLane = { lane: string; origin: string; originState: string; destination: string; destState: string; volume: number; rfpTitle: string; rfpId: string };
       const allExtractedLanes: ExtractedLane[] = [];
 
@@ -4461,70 +7261,11 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
-  app.get("/api/touchpoints/history", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-
-      const [allTps, allCompanies, allUsers] = await Promise.all([
-        storage.getTouchpointsByOrg(user.organizationId),
-        storage.getCompanies(user.organizationId),
-        storage.getUsers(user.organizationId),
-      ]);
-      const companyIds = allCompanies.map(c => c.id);
-      const allContacts = companyIds.length > 0 ? await storage.getContactsByCompanyIds(companyIds) : [];
-
-      const companyMap = new Map(allCompanies.map(c => [c.id, c]));
-      const contactMap = new Map(allContacts.map(c => [c.id, c]));
-      const userMap = new Map(allUsers.map(u => [u.id, u]));
-
-      // Single source of truth for "which reps' touchpoints am I allowed to
-      // see?" — admin sees everyone, all other managerial roles (director,
-      // sales_director, NAM, sales, LM) get their recursive reporting tree,
-      // everyone else sees just themselves. Replaces a long ad-hoc switch
-      // that accidentally let directors see the entire org (Task #525).
-      const visibleRepIds = await getVisibleRepUserIds(user);
-      const allowedUserIds: Set<string> | null =
-        visibleRepIds === null ? null : new Set(visibleRepIds);
-
-      let filtered = allTps;
-      if (allowedUserIds !== null) {
-        filtered = filtered.filter(tp => allowedUserIds.has(tp.loggedById));
-      }
-
-      const enriched = filtered.map(tp => {
-        const company = companyMap.get(tp.companyId);
-        const contact = tp.contactId ? contactMap.get(tp.contactId) : undefined;
-        const loggedBy = userMap.get(tp.loggedById);
-        return {
-          id: tp.id,
-          date: tp.date,
-          type: tp.type,
-          notes: tp.notes,
-          sentiment: tp.sentiment,
-          isMeaningful: tp.isMeaningful,
-          createdAt: tp.createdAt,
-          contactId: tp.contactId,
-          contactName: contact?.name ?? null,
-          companyId: tp.companyId,
-          companyName: company?.name ?? "Unknown",
-          loggedById: tp.loggedById,
-          loggedByName: loggedBy?.name ?? "Unknown",
-        };
-      });
-
-      res.json(enriched);
-    } catch (error) {
-      console.error("Failed to fetch touchpoint history:", error);
-      res.status(500).json({ error: "Failed to fetch touchpoint history" });
-    }
-  });
-
   app.get("/api/contacts/:id/touchpoints", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const tps = await storage.getTouchpointsByContact((pStr(req.params.id)));
+      const tps = await storage.getTouchpointsByContact((req.params.id as string));
       res.json(tps);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch touchpoints" });
@@ -4535,12 +7276,12 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const contact = await storage.getContact((pStr(req.params.id)));
+      const contact = await storage.getContact((req.params.id as string));
       if (!contact) return res.status(404).json({ error: "Contact not found" });
       const now = new Date();
       const notes: string | null = req.body.notes || null;
       const tp = await storage.createTouchpoint({
-        contactId: (pStr(req.params.id)),
+        contactId: (req.params.id as string),
         companyId: contact.companyId,
         type: req.body.type || "call",
         date: req.body.date || now.toISOString().split("T")[0],
@@ -4548,55 +7289,22 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
         sentiment: req.body.sentiment || null,
         isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true" ? true : false,
         loggedById: user.id,
-        playLabel: typeof req.body.playLabel === "string" ? req.body.playLabel || null : null,
         createdAt: now.toISOString(),
       });
-      // Respond immediately with the saved touchpoint. AI enrichment, growth
-      // score recompute, cache busting, and live-sync broadcast all happen in
-      // a detached async block below so the dialog can close right away.
-      res.json(tp);
-
-      const userId = user.id;
-      const orgId = user.organizationId;
-      const contactCompanyId = contact.companyId;
-      const contactName = contact.name;
-      const contactId = contact.id;
-      setImmediate(async () => {
+      const company = contact.companyId ? await storage.getCompanyInOrg(contact.companyId, user.organizationId) : null;
+      const aiInsights = await analyzeTouchpointNote(notes || "", contact.name, company?.name).catch(() => null);
+      let autoTask = null;
+      if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
         try {
-          const company = contactCompanyId ? await storage.getCompanyInOrg(contactCompanyId, orgId).catch((err: unknown) => {
-            console.error("[contact-touchpoint] getCompanyInOrg failed for company", contactCompanyId, "—", err instanceof Error ? err.stack : err);
-            return null;
-          }) : null;
-          const aiInsights = await analyzeTouchpointNote(notes || "", contactName, company?.name).catch((err: unknown) => {
-            console.error("[contact-touchpoint] analyzeTouchpointNote failed for contact", contactId, "—", err instanceof Error ? err.stack : err);
-            return null;
-          });
-          if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
-            try {
-              const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-              await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: userId, assignedBy: userId, companyId: contactCompanyId || null, contactId, createdAt: now.toISOString() });
-            } catch (taskError) {
-              console.error("[contact-touchpoint] auto follow-up task failed:", taskError instanceof Error ? taskError.stack : taskError);
-            }
-          }
-          cacheInvalidatePrefix(`cold-contacts:${userId}`);
-          cacheInvalidatePrefix(`meaningful-overdue:${userId}`);
-          if (contactCompanyId) {
-            _nbaCache.delete(`nba:${contactCompanyId}`);
-            try {
-              const gs = await computeGrowthScore(contactCompanyId, orgId, storage);
-              await storage.upsertGrowthScore({ companyId: contactCompanyId, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-            } catch (gsErr) {
-              console.error("[contact-touchpoint] growth score refresh failed for company", contactCompanyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
-            }
-          }
-          // Logging a touchpoint changes recency / NBA signals — broadcast so any
-          // open Today's Priorities tabs refresh and the cache busts in lockstep.
-          publishLiveSync(orgId, "daily_workspace", contactCompanyId ?? undefined);
-        } catch (bgErr) {
-          console.error("[contact-touchpoint] background enrichment failed:", bgErr instanceof Error ? bgErr.stack : bgErr);
+          const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: contact.companyId || null, contactId: contact.id, createdAt: now.toISOString() });
+        } catch (taskError) {
+          console.error("Failed to create auto follow-up task for contact touchpoint:", taskError);
         }
-      });
+      }
+      cacheInvalidatePrefix(`cold-contacts:${user.id}`);
+      cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
+      res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to create touchpoint:", error);
       res.status(500).json({ error: "Failed to create touchpoint" });
@@ -4607,11 +7315,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const allowedRoles = ["admin", "director"];
-      if (!allowedRoles.includes(user.role)) {
-        return res.status(403).json({ error: "Only admins and directors can delete touchpoints" });
-      }
-      await storage.deleteTouchpoint((pStr(req.params.id)));
+      await storage.deleteTouchpoint((req.params.id as string));
       cacheInvalidatePrefix(`cold-contacts:${user.id}`);
       cacheInvalidatePrefix(`meaningful-overdue:${user.id}`);
       res.json({ ok: true });
@@ -4626,11 +7330,11 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const [company, touchpoints, contacts, allRfps, allAwards, uploads] = await Promise.all([
-        storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId),
-        storage.getTouchpointsByCompany((pStr(req.params.id))),
-        storage.getContactsByCompany((pStr(req.params.id))),
-        storage.getRfpsByCompanyId((pStr(req.params.id))),
-        storage.getAwardsByCompanyId((pStr(req.params.id))),
+        storage.getCompanyInOrg((req.params.id as string), user.organizationId),
+        storage.getTouchpointsByCompany((req.params.id as string)),
+        storage.getContactsByCompany((req.params.id as string)),
+        storage.getRfps(),
+        storage.getAwards(),
         storage.getFinancialUploadsForOrg(req.session.organizationId!),
       ]);
 
@@ -4674,8 +7378,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       else if (contactCount === 1) contactScore = 5;
 
       // Factor 4: Active RFP or Award (15 pts)
-      const companyRfps = allRfps.filter(r => r.companyId === (pStr(req.params.id)));
-      const companyAwards = allAwards.filter(a => a.companyId === (pStr(req.params.id)));
+      const companyRfps = allRfps.filter(r => r.companyId === (req.params.id as string));
+      const companyAwards = allAwards.filter(a => a.companyId === (req.params.id as string));
       const activeRfp = companyRfps.find(r => r.status === "open" || r.status === "pending");
       const hasAward = companyAwards.length > 0;
       const rfpScore = activeRfp ? 10 : 0;
@@ -4715,7 +7419,7 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
       const sixtyDaysAgo = new Date(now); sixtyDaysAgo.setDate(now.getDate() - 60);
       const sixtyDaysStr = sixtyDaysAgo.toISOString().slice(0, 10);
       const prevPeriodCount = touchpoints.filter(t => t.date >= sixtyDaysStr && t.date < thirtyDaysStr).length;
-      const meaningfulRecent = touchpoints.filter(t => t.date >= thirtyDaysStr && t.isMeaningful).length;
+      const meaningfulRecent = touchpoints.filter(t => t.date >= thirtyDaysStr && (t as any).isMeaningful).length;
 
       let momentum: "up" | "flat" | "down";
       let momentumLabel: string;
@@ -4756,263 +7460,6 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
     }
   });
 
-  // ── Account Growth Score (per account) ─────────────────────────────────────
-  // Returns cached score if <30min old, otherwise recomputes and persists.
-  app.get("/api/companies/:id/growth-score", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-
-      const companyId = pStr(req.params.id);
-      const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString().slice(0, 16);
-
-      const cached = await storage.getGrowthScore(companyId);
-      if (cached && cached.calculatedAt >= thirtyMinAgo) {
-        return res.json(cached);
-      }
-
-      const result = await computeGrowthScore(companyId, user.organizationId, storage);
-      const saved = await storage.upsertGrowthScore({
-        companyId,
-        organizationId: user.organizationId,
-        score: result.score,
-        band: result.band,
-        drivers: result.drivers,
-        calculatedAt: new Date().toISOString().slice(0, 16),
-      });
-
-      checkAndFireMomentumDropNotification(companyId, result.band, saved.previousBand, storage).catch(() => {});
-
-      // Always include breakdown and bandLabel/bandColor from the freshly computed result
-      res.json({ ...saved, bandLabel: result.bandLabel, bandColor: result.bandColor, breakdown: result.breakdown });
-    } catch (error) {
-      console.error("Error computing growth score:", error);
-      res.status(500).json({ error: "Failed to compute growth score" });
-    }
-  });
-
-  // ── Account Growth Scores (bulk — all visible companies) ───────────────────
-  // Used by dashboard portlet and company list. Returns cached scores only;
-  // per-account requests trigger fresh computation.
-  app.get("/api/growth-scores", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-
-      const rawIds = await getVisibleCompanyIds(user);
-      // null means admin / all-access — resolve to all active company IDs for the org.
-      const visibleIds: string[] = rawIds !== null
-        ? rawIds
-        : (await storage.getCompanies(user.organizationId)).filter(c => !c.archivedAt).map(c => c.id);
-      if (visibleIds.length === 0) return res.json([]);
-
-      const cached = await storage.getGrowthScoresByOrg(user.organizationId, visibleIds);
-
-      // Enrich with band labels / colors
-      const BAND_LABELS: Record<string, string> = {
-        high_expansion: "Primed to Grow",
-        growth_ready:   "Growth Ready",
-        stable:         "Stable",
-        at_risk:        "At Risk",
-      };
-      const BAND_COLORS: Record<string, string> = {
-        high_expansion: "green",
-        growth_ready:   "blue",
-        stable:         "amber",
-        at_risk:        "red",
-      };
-
-      const enriched = cached.map(s => ({
-        ...s,
-        bandLabel: BAND_LABELS[s.band] ?? s.band,
-        bandColor: BAND_COLORS[s.band] ?? "amber",
-      }));
-
-      // Background: recompute growth scores for:
-      //   (a) visible companies with NO cached score yet (newly visible accounts)
-      //   (b) visible companies with a STALE cached score (older than 30 minutes)
-      // This ensures stale "No touchpoints on record" scores are corrected
-      // without requiring a rep to visit each company page individually.
-      const THIRTY_MIN_MS = 30 * 60 * 1000;
-      const staleCutoff = new Date(Date.now() - THIRTY_MIN_MS).toISOString();
-      const cachedIds = new Set(cached.map(s => s.companyId));
-      const unscoredIds = visibleIds.filter(id => !cachedIds.has(id));
-      const staleIds = cached
-        .filter(s => !s.calculatedAt || s.calculatedAt < staleCutoff)
-        .map(s => s.companyId);
-      // No cap on unscored companies — every company that has never had a score must
-      // be seeded so the Customers page can show a badge. Stale (but already-scored)
-      // companies are capped at 30 per request to bound background work.
-      const toRecompute = [...new Set([...unscoredIds, ...staleIds.slice(0, 30)])];
-      if (toRecompute.length > 0) {
-        (async () => {
-          for (const cid of toRecompute) {
-            try {
-              const gs = await computeGrowthScore(cid, user.organizationId, storage);
-              const saved = await storage.upsertGrowthScore({ companyId: cid, organizationId: user.organizationId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-              checkAndFireMomentumDropNotification(cid, gs.band, saved.previousBand, storage).catch(() => {});
-            } catch (_) { /* skip individual failures */ }
-          }
-        })();
-      }
-
-      res.json(enriched);
-    } catch (error) {
-      console.error("Error fetching growth scores:", error);
-      res.status(500).json({ error: "Failed to fetch growth scores" });
-    }
-  });
-
-  // ── Next Best Action (per account) ────────────────────────────────────────
-  // Calls the NBA engine with all account signals and returns a single
-  // prioritised recommendation.  Results are cached in-process for 30 minutes
-  // to avoid redundant recomputation on rapid page refreshes.
-  //
-  // Cache key: `nba:<companyId>` — deleted immediately when a touchpoint is
-  // logged for that company (see all three touchpoint POST routes below),
-  // and expires automatically after NBA_TTL_MS regardless.
-  app.get("/api/companies/:id/next-best-action", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-
-      const companyId = pStr(req.params.id);
-
-      // Verify company exists and belongs to this user's organisation.
-      const company = await storage.getCompanyInOrg(companyId, user.organizationId);
-      if (!company) return res.status(404).json({ error: "Company not found" });
-
-      // RBAC: only users who can access this company may fetch its NBA.
-      if (!(await canAccessCompany(user, companyId))) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      // Check in-process cache before running the engine.
-      const cacheKey = `nba:${companyId}`;
-      const cached = _nbaCache.get(cacheKey);
-      if (cached && cached.expiresAt > Date.now()) {
-        return res.json(cached.result);
-      }
-
-      // Run the engine — may throw; caught below.
-      const nba = await computeNextBestAction(companyId, user.organizationId, storage);
-
-      // Store result in cache.
-      _nbaCache.set(cacheKey, { result: nba, expiresAt: Date.now() + NBA_TTL_MS });
-
-      return res.json(nba);
-    } catch (error) {
-      console.error("Error computing next-best-action:", error);
-      // Graceful fallback — return a valid no-action shape so the UI never hard-errors.
-      return res.status(500).json({
-        error: "Failed to compute next best action",
-        fallback: {
-          ruleId: "R13",
-          urgency: "none",
-          headline: "No Action Required",
-          reason: "Unable to evaluate account signals at this time.",
-          ctaLabel: null,
-          ctaHint: "none",
-          owner: "rep",
-          signals: null,
-        },
-      });
-    }
-  });
-
-  // ── Next Best Actions — batch endpoint for dashboard portlet ─────────────
-  // Returns the top actionable accounts for the current user, sorted by
-  // urgency. Uses the shared _nbaCache so results computed by the per-account
-  // route are re-used here and vice-versa.
-  //
-  // Strategy: cap the engine run at MAX_BATCH accounts, prioritising
-  // at-risk / poorly-scored companies first so the most urgent accounts
-  // always appear in the result, even for large orgs.
-  app.get("/api/next-best-actions", requireAuth, async (req, res) => {
-    const MAX_BATCH  = 30; // max companies to evaluate per request
-    const MAX_RESULT = 10; // max rows returned to the frontend
-
-    const URGENCY_RANK: Record<string, number> = {
-      critical: 0,
-      high:     1,
-      moderate: 2,
-      none:     3,
-    };
-
-    // Band priority — at_risk accounts evaluated first.
-    const BAND_RANK: Record<string, number> = {
-      at_risk:        0,
-      stable:         1,
-      growth_ready:   2,
-      high_expansion: 3,
-    };
-
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-
-      // Fetch all org companies once — used for both name lookup and admin visibility.
-      // Exclude archived companies so they never appear in NBA recommendations.
-      const allCompanies = (await storage.getCompanies(user.organizationId)).filter(c => !c.archivedAt);
-      const nameMap = new Map(allCompanies.map(c => [c.id, c.name]));
-
-      // null means admin / all-access; otherwise filter to RBAC-visible IDs.
-      // In both cases, intersect with active (non-archived) company IDs.
-      const rawIds = await getVisibleCompanyIds(user);
-      const activeIds = new Set(allCompanies.map(c => c.id));
-      const visibleIds: string[] = (rawIds ?? [...activeIds]).filter(id => activeIds.has(id));
-      if (visibleIds.length === 0) return res.json({ items: [], totalEvaluated: 0 });
-
-      // Pull cached growth scores to order evaluations (at_risk first).
-      const scores = await storage.getGrowthScoresByOrg(user.organizationId, visibleIds);
-      const scoreMap = new Map(scores.map(s => [s.companyId, s.band]));
-
-      const prioritised = [...visibleIds].sort((a, b) => {
-        const ra = BAND_RANK[scoreMap.get(a) ?? ""] ?? 4;
-        const rb = BAND_RANK[scoreMap.get(b) ?? ""] ?? 4;
-        return ra - rb;
-      }).slice(0, MAX_BATCH);
-
-      // Run engine for each company — use cache when available.
-      const now = Date.now();
-      type EnrichedNba = import("./nextBestActionEngine").NextBestAction & {
-        companyId:   string;
-        companyName: string;
-      };
-
-      const results = await Promise.allSettled(
-        prioritised.map(async (companyId): Promise<EnrichedNba> => {
-          const cacheKey = `nba:${companyId}`;
-          const hit = _nbaCache.get(cacheKey);
-          const nba = (hit && hit.expiresAt > now)
-            ? hit.result as import("./nextBestActionEngine").NextBestAction
-            : await computeNextBestAction(companyId, user.organizationId, storage);
-          if (!hit || hit.expiresAt <= now) {
-            _nbaCache.set(cacheKey, { result: nba, expiresAt: now + NBA_TTL_MS });
-          }
-          return { ...nba, companyId, companyName: nameMap.get(companyId) ?? "Unknown" };
-        })
-      );
-
-      // Collect fulfilled results, drop R13 (urgency = none), sort by urgency.
-      const actionable = results
-        .filter((r): r is PromiseFulfilledResult<EnrichedNba> =>
-          r.status === "fulfilled" && r.value.urgency !== "none"
-        )
-        .map(r => r.value)
-        .sort((a, b) => (URGENCY_RANK[a.urgency] ?? 3) - (URGENCY_RANK[b.urgency] ?? 3))
-        .slice(0, MAX_RESULT);
-
-      return res.json({
-        items:          actionable,
-        totalEvaluated: prioritised.length,
-      });
-    } catch (error) {
-      console.error("Error computing next-best-actions batch:", error);
-      return res.status(500).json({ error: "Failed to compute next best actions" });
-    }
-  });
-
   // Personalized chatbot nudges — alerts + smarter suggestions for the greeting card
   app.get("/api/chatbot/nudges", requireAuth, async (req, res) => {
     try {
@@ -5026,11 +7473,11 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
 
       const [allCompanies, allContacts, allTouchpoints, openRfps, openTasks, activeGoals] = await Promise.all([
         storage.getCompanies(user.organizationId),
-        storage.getContactsByOrg(user.organizationId),
+        storage.getContacts(),
         storage.getTouchpoints(),
-        storage.getRfpsByOrg(user.organizationId),
+        storage.getRfps(),
         storage.getTasks(),
-        storage.getGoals({ amId: user.id }),
+        storage.getGoals(),
       ]);
 
       const myCompanies = allCompanies.filter((c: any) => c.assignedTo === user.id);
@@ -5129,12 +7576,8 @@ Write a concise 2–4 sentence summary capturing: key takeaways, any decisions m
 
       if (!factors?.length) return res.status(400).json({ error: "Factors required" });
 
-      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       const companyName = company?.name || "this account";
-
-      const narrativeCacheKey = `health-narrative:${pStr(req.params.id)}:${score}:${grade}`;
-      const cachedNarrative = cacheGet<string>(narrativeCacheKey);
-      if (cachedNarrative) return res.json({ narrative: cachedNarrative });
 
       const { default: OpenAI } = await import("openai");
       const openai = new OpenAI({
@@ -5162,7 +7605,6 @@ Write exactly 2 sentences explaining WHY this score is ${score}/100. Be specific
       });
 
       const narrative = resp.choices[0]?.message?.content?.trim() || "";
-      cacheSet(narrativeCacheKey, narrative, 5 * 60 * 1000);
       res.json({ narrative });
     } catch (err) {
       console.error("Health narrative error:", err);
@@ -5177,8 +7619,8 @@ Write exactly 2 sentences explaining WHY this score is ${score}/100. Be specific
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const [company, allTouchpoints] = await Promise.all([
-        storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId),
-        storage.getTouchpointsByCompany((pStr(req.params.id))),
+        storage.getCompanyInOrg((req.params.id as string), user.organizationId),
+        storage.getTouchpointsByCompany((req.params.id as string)),
       ]);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
@@ -5189,10 +7631,6 @@ Write exactly 2 sentences explaining WHY this score is ${score}/100. Be specific
         .slice(0, 5);
 
       if (withNotes.length === 0) return res.json({ summary: null });
-
-      const tpSumCacheKey = `tp-summary:${pStr(req.params.id)}:${withNotes[0]?.id}:${withNotes.length}`;
-      const cachedTpSummary = cacheGet<{ summary: string | null; noteCount: number }>(tpSumCacheKey);
-      if (cachedTpSummary) return res.json(cachedTpSummary);
 
       const { default: OpenAI } = await import("openai");
       const openai = new OpenAI({
@@ -5220,9 +7658,7 @@ Respond with bullet points only (no header, no intro sentence).`;
       });
 
       const summary = resp.choices[0]?.message?.content?.trim() || null;
-      const tpSumResult = { summary, noteCount: withNotes.length };
-      cacheSet(tpSumCacheKey, tpSumResult, 30 * 60 * 1000);
-      res.json(tpSumResult);
+      res.json({ summary, noteCount: withNotes.length });
     } catch (err) {
       console.error("Touchpoint summary error:", err);
       res.status(500).json({ error: "Failed to generate summary" });
@@ -5234,7 +7670,7 @@ Respond with bullet points only (no header, no intro sentence).`;
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const { corridors } = req.body as { corridors: Array<{ lane: string; totalVolume: number; originState?: string; destinationState?: string }> };
@@ -5282,7 +7718,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const tps = await storage.getTouchpointsByCompany((pStr(req.params.id)));
+      const tps = await storage.getTouchpointsByCompany((req.params.id as string));
       res.json(tps);
     } catch (error) {
       res.status(500).json({ error: "Failed to fetch company touchpoints" });
@@ -5293,10 +7729,10 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(user, (pStr(req.params.id))))) return res.status(403).json({ error: "Access denied" });
-      const tps = await storage.getTouchpointsByCompany((pStr(req.params.id)));
+      if (!(await canAccessCompany(user, (req.params.id as string)))) return res.status(403).json({ error: "Access denied" });
+      const tps = await storage.getTouchpointsByCompany((req.params.id as string));
       const allUsers = await storage.getUsers(req.session.organizationId!);
-      const contactsList = await storage.getContactsByCompany((pStr(req.params.id)));
+      const contactsList = await storage.getContactsByCompany((req.params.id as string));
       const enriched = tps.map(tp => ({
         ...tp,
         loggedByName: allUsers.find(u => u.id === tp.loggedById)?.name || "Unknown",
@@ -5315,7 +7751,6 @@ Respond with valid JSON only:
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
       const now = new Date();
-      const todayStr = now.toISOString().slice(0, 10);
       const weekAgo = new Date(now);
       weekAgo.setDate(weekAgo.getDate() - 7);
       const monthAgo = new Date(now);
@@ -5328,32 +7763,12 @@ Respond with valid JSON only:
         storage.getCompanies(user.organizationId),
       ]);
       const orgCompanyIds = new Set(orgCompanies.map(c => c.id));
-      // Scope per-company touchpoint counts to the touchpoints logged by reps
-      // the viewer is allowed to see. Without this, Directors saw counts that
-      // included reps outside their reporting tree (Task #525).
-      const visibleRepIds = await getVisibleRepUserIds(user);
-      const visibleSet: Set<string> | null =
-        visibleRepIds === null ? null : new Set(visibleRepIds);
-      const summary: Record<string, { week: number; month: number; lastType: string | null; lastDate: string | null; daysSince: number | null }> = {};
-      // Track latest tp per company (sorted by date desc)
-      const latestByCompany: Record<string, { type: string; date: string }> = {};
+      const summary: Record<string, { week: number; month: number }> = {};
       for (const tp of all) {
         if (!orgCompanyIds.has(tp.companyId)) continue;
-        if (visibleSet !== null && (!tp.loggedById || !visibleSet.has(tp.loggedById))) continue;
-        if (!summary[tp.companyId]) summary[tp.companyId] = { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
+        if (!summary[tp.companyId]) summary[tp.companyId] = { week: 0, month: 0 };
         if (tp.date >= monthStr) summary[tp.companyId].month++;
         if (tp.date >= weekStr) summary[tp.companyId].week++;
-        if (!latestByCompany[tp.companyId] || tp.date > latestByCompany[tp.companyId].date) {
-          latestByCompany[tp.companyId] = { type: tp.type, date: tp.date };
-        }
-      }
-      for (const [companyId, latest] of Object.entries(latestByCompany)) {
-        if (summary[companyId]) {
-          summary[companyId].lastType = latest.type;
-          summary[companyId].lastDate = latest.date;
-          const msAgo = new Date(todayStr).getTime() - new Date(latest.date).getTime();
-          summary[companyId].daysSince = Math.floor(msAgo / (1000 * 60 * 60 * 24));
-        }
       }
       res.json(summary);
     } catch (error) {
@@ -5366,12 +7781,7 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      // Use client-supplied local date so the window stays correct all day for
-      // users in any timezone (e.g. Mountain Time flips past midnight UTC at 5 pm,
-      // which previously zeroed out the list for the rest of the evening).
-      const todayStr = typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
-        ? req.query.date
-        : new Date().toISOString().slice(0, 10);
+      const todayStr = new Date().toISOString().slice(0, 10);
 
       const [allTodayTps, allOrgUsers, allOrgCompanies] = await Promise.all([
         storage.getTouchpointsSince(todayStr),
@@ -5386,19 +7796,25 @@ Respond with valid JSON only:
 
       const allOrgTps = allTodayTps.filter(t => t.date === todayStr && t.loggedById && orgUserIds.has(t.loggedById) && orgCompanyIds.has(t.companyId));
 
-      // Use the canonical helper so Directors only see today's touchpoints
-      // for reps in their reporting tree (Task #525). Admin still sees all.
-      const visibleRepIds = await getVisibleRepUserIds(user);
-      const visibleUserIds: Set<string> = visibleRepIds === null ? orgUserIds : new Set(visibleRepIds);
+      let visibleUserIds: Set<string>;
+      if (user.role === "admin" || user.role === "director" || user.role === "sales_director") {
+        visibleUserIds = orgUserIds;
+      } else if (user.role === "national_account_manager" || user.role === "sales") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        visibleUserIds = new Set(teamIds);
+        visibleUserIds.add(user.id);
+      } else {
+        visibleUserIds = new Set([user.id]);
+      }
 
       const filteredTps = allOrgTps.filter(t => t.loggedById && visibleUserIds.has(t.loggedById));
 
       const contactIds = [...new Set(filteredTps.map(t => t.contactId).filter(Boolean))] as string[];
       let contactMap = new Map<string, string>();
       if (contactIds.length > 0) {
-        const contactResults = await storage.getContactsByIds(contactIds);
+        const contactResults = await Promise.all(contactIds.map(id => storage.getContact(id)));
         for (const c of contactResults) {
-          contactMap.set(c.id, c.name);
+          if (c) contactMap.set(c.id, c.name);
         }
       }
 
@@ -5415,6 +7831,252 @@ Respond with valid JSON only:
     } catch (error) {
       console.error("Error fetching today's touchpoints:", error);
       res.status(500).json({ error: "Failed to fetch today's touchpoints" });
+    }
+  });
+
+  app.get("/api/dashboard/cold-contacts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const days = parseInt(req.query.days as string) || 30;
+      const cacheKey = `cold-contacts:${user.id}:${days}`;
+      const cached = cacheGet(cacheKey);
+      if (cached) return res.json(cached);
+      let results;
+      if (user.role === "admin") {
+        results = await storage.getColdContacts(null, days);
+      } else if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        results = await storage.getColdContacts(null, days, teamIds);
+      } else {
+        results = await storage.getColdContacts(user.id, days);
+      }
+      cacheSet(cacheKey, results);
+      res.json(results);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch cold contacts" });
+    }
+  });
+
+  app.get("/api/dashboard/meaningful-overdue", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const days = parseInt(req.query.days as string) || 30;
+      const cacheKey = `meaningful-overdue:${user.id}:${days}`;
+      const cached = cacheGet(cacheKey);
+      if (cached) return res.json(cached);
+      let results;
+      if (user.role === "admin") {
+        results = await storage.getMeaningfulOverdueContacts(null, days);
+      } else if (user.role === "director" || user.role === "sales_director" || user.role === "national_account_manager" || user.role === "sales") {
+        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+        results = await storage.getMeaningfulOverdueContacts(null, days, teamIds);
+      } else {
+        results = await storage.getMeaningfulOverdueContacts(user.id, days);
+      }
+      cacheSet(cacheKey, results);
+      res.json(results);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch meaningful overdue contacts" });
+    }
+  });
+
+  app.get("/api/dashboard/opportunity-leaderboard", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const { rows: dismissedRows } = await storage.pool.query(
+        `SELECT company_id FROM opportunity_dismissals WHERE org_id = $1`,
+        [req.session.organizationId!]
+      );
+      const dismissedIds = new Set(dismissedRows.map((r: any) => r.company_id));
+
+      const companies = (await storage.getCompanies(req.session.organizationId!)).filter(c => !dismissedIds.has(c.id));
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
+      const msCols = resolveColumns(allRows);
+
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      type FinSummary = { totalLoads: number; totalMargin: number; totalRevenue: number };
+      const byCustomer: Record<string, FinSummary> = {};
+      const now = new Date();
+      const ytdStart = `${now.getFullYear()}-01-01`;
+      for (const row of allRows) {
+        if (isExcludedRow(row, msCols)) continue;
+        const cust = getCustomerFromRow(row, msCols);
+        if (!cust) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, msCols);
+        if (!monthKey) continue;
+        const periodStart = monthKey + "-01";
+        if (periodStart < ytdStart) continue;
+        const revenue = Number(row[msCols.revenue] || row[msCols.totalCharges] || 0);
+        if (revenue === 0) continue;
+        const key = normalize(cust);
+        if (!byCustomer[key]) byCustomer[key] = { totalLoads: 0, totalMargin: 0, totalRevenue: 0 };
+        byCustomer[key].totalLoads++;
+        byCustomer[key].totalMargin += margin;
+        byCustomer[key].totalRevenue += revenue;
+      }
+
+      const allRfps = await storage.getRfps();
+      const rfpsByCompany: Record<string, typeof allRfps> = {};
+      for (const rfp of allRfps) {
+        if (!rfpsByCompany[rfp.companyId]) rfpsByCompany[rfp.companyId] = [];
+        rfpsByCompany[rfp.companyId].push(rfp);
+      }
+
+      const results: { companyId: string; companyName: string; potentialMargin: number; currentLoads: number; rfpVolume: number | null; hasRfp: boolean }[] = [];
+
+      for (const company of companies) {
+        const rfps = rfpsByCompany[company.id] || [];
+        const rfpVolume = rfps.length > 0
+          ? rfps.reduce((sum, r) => sum + (Number((r as any).totalVolume) || 0), 0)
+          : 0;
+        const hasRfp = rfpVolume > 0;
+
+        const aliasNorms = (company as any).financialAlias
+          ? (company as any).financialAlias.split(',').map((a: string) => normalize(a.trim())).filter(Boolean)
+          : [normalize(company.name)];
+        let fin: FinSummary | undefined;
+        for (const aliasNorm of aliasNorms) {
+          fin = byCustomer[aliasNorm] ||
+            Object.entries(byCustomer).find(([k]) => k.includes(aliasNorm) || aliasNorm.includes(k))?.[1];
+          if (fin) break;
+        }
+
+        const ytdLoads = fin?.totalLoads || 0;
+        const ytdMargin = fin?.totalMargin || 0;
+        const avgMarginPerLoad = ytdLoads > 0 ? ytdMargin / ytdLoads : 0;
+
+        let potentialMargin = 0;
+        if (hasRfp && ytdLoads > 0 && rfpVolume > ytdLoads) {
+          potentialMargin = (rfpVolume - ytdLoads) * avgMarginPerLoad;
+        } else if (!hasRfp) {
+          const estimatedSpend = parseFloat(String((company as any).estimatedFreightSpend || 0)) || 0;
+          if (estimatedSpend > 0 && avgMarginPerLoad > 0) {
+            const avgRevPerLoad = ytdLoads > 0 ? (fin?.totalRevenue || 0) / ytdLoads : 0;
+            if (avgRevPerLoad > 0) {
+              const estimatedLoads = estimatedSpend / avgRevPerLoad;
+              potentialMargin = (estimatedLoads - ytdLoads) * avgMarginPerLoad;
+            }
+          }
+        }
+
+        if (potentialMargin > 0) {
+          results.push({
+            companyId: company.id,
+            companyName: company.name,
+            potentialMargin,
+            currentLoads: ytdLoads,
+            rfpVolume: hasRfp ? rfpVolume : null,
+            hasRfp,
+          });
+        }
+      }
+
+      results.sort((a, b) => b.potentialMargin - a.potentialMargin);
+      res.json(results.slice(0, 5));
+    } catch (error) {
+      console.error("Error computing opportunity leaderboard:", error);
+      res.status(500).json({ error: "Failed to compute opportunity leaderboard" });
+    }
+  });
+
+  // Churn risk — companies whose load count dropped >20% current vs prior month
+  app.get("/api/dashboard/churn-risk", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
+      if (!uploads.length) return res.json([]);
+
+      const allRows: any[] = uploads.flatMap(u => (u.rows as any[]) || []);
+      const cols = resolveColumns(allRows);
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      const now = new Date();
+      const curYear = now.getFullYear();
+      const curMonth = now.getMonth(); // 0-indexed
+      const mk = (y: number, m: number) => `${y}-${String(m + 1).padStart(2, "0")}`;
+      const curKey = mk(curYear, curMonth);
+      const priorKey = curMonth === 0 ? mk(curYear - 1, 11) : mk(curYear, curMonth - 1);
+
+      type MonthLoads = Record<string, number>;
+      const byCustomer: Record<string, MonthLoads> = {};
+
+      for (const row of allRows) {
+        if (isExcludedRow(row, cols)) continue;
+        const cust = getCustomerFromRow(row, cols);
+        if (!cust) continue;
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (!monthKey || (monthKey !== curKey && monthKey !== priorKey)) continue;
+        const key = normalize(cust);
+        if (!byCustomer[key]) byCustomer[key] = {};
+        byCustomer[key][monthKey] = (byCustomer[key][monthKey] || 0) + 1;
+      }
+
+      const companies = await storage.getCompanies(req.session.organizationId!);
+
+      // Scope by role
+      let visibleCompanyIds: Set<string> | null = null;
+      if (user.role === "account_manager") {
+        const ids = await getVisibleCompanyIds(user);
+        visibleCompanyIds = new Set(ids);
+      } else if (user.role === "national_account_manager") {
+        const ids = await getVisibleCompanyIds(user);
+        visibleCompanyIds = new Set(ids);
+      }
+
+      const results: { companyId: string; companyName: string; repName: string | null; curLoads: number; priorLoads: number; dropPct: number }[] = [];
+
+      for (const company of companies) {
+        if (visibleCompanyIds && !visibleCompanyIds.has(company.id)) continue;
+        if ((company as any).archivedAt) continue;
+
+        const aliasNorms = (company as any).financialAlias
+          ? (company as any).financialAlias.split(",").map((a: string) => normalize(a.trim())).filter(Boolean)
+          : [normalize(company.name)];
+
+        let curLoads = 0, priorLoads = 0;
+        for (const alias of aliasNorms) {
+          const direct = byCustomer[alias];
+          if (direct) {
+            curLoads += direct[curKey] || 0;
+            priorLoads += direct[priorKey] || 0;
+          } else {
+            for (const [k, v] of Object.entries(byCustomer)) {
+              if (k.includes(alias) || alias.includes(k)) {
+                curLoads += v[curKey] || 0;
+                priorLoads += v[priorKey] || 0;
+                break;
+              }
+            }
+          }
+        }
+
+        if (priorLoads < 5) continue; // ignore low-volume accounts — noise
+        const dropPct = (priorLoads - curLoads) / priorLoads;
+        if (dropPct < 0.20) continue; // only show >20% drops
+
+        let repName: string | null = null;
+        const repId = (company as any).salesPersonId || (company as any).assignedTo;
+        if (repId) {
+          const rep = (await storage.getUsers(req.session.organizationId!)).find(u => u.id === repId);
+          repName = rep ? `${rep.firstName} ${rep.lastName}` : null;
+        }
+
+        results.push({ companyId: company.id, companyName: company.name, repName, curLoads, priorLoads, dropPct });
+      }
+
+      results.sort((a, b) => b.dropPct - a.dropPct);
+      res.json(results.slice(0, 8));
+    } catch (error) {
+      console.error("Churn risk error:", error);
+      res.status(500).json({ error: "Failed to compute churn risk" });
     }
   });
 
@@ -5437,7 +8099,7 @@ Respond with valid JSON only:
       const orgUserIds = new Set(allUsers.map(u => u.id));
       const thisWeek = thisWeekAll.filter(t => t.loggedById && orgUserIds.has(t.loggedById));
 
-      const teamIds: string[] | null = isLeadership(user)
+      const teamIds: string[] | null = (user.role === "admin" || user.role === "director" || user.role === "sales_director")
         ? null
         : await storage.getTeamMemberIds(user.id, user.organizationId);
 
@@ -5455,7 +8117,7 @@ Respond with valid JSON only:
         byUser[tp.loggedById].total++;
         const t = tp.type as "call" | "email" | "text" | "site_visit";
         if (t in byUser[tp.loggedById]) byUser[tp.loggedById][t]++;
-        if (tp.isMeaningful) byUser[tp.loggedById].meaningful++;
+        if ((tp as any).isMeaningful) byUser[tp.loggedById].meaningful++;
       }
 
       const results = Object.values(byUser).sort((a, b) => b.total - a.total);
@@ -5465,27 +8127,6 @@ Respond with valid JSON only:
       res.status(500).json({ error: "Failed to compute weekly leaderboard" });
     }
   });
-
-  async function getVisibleFeedAuthorIds(user: { id: string; role: string; managerId: string | null; organizationId: string }): Promise<string[]> {
-    if (user.role === "admin") {
-      const orgUsers = await storage.getUsers(user.organizationId);
-      return orgUsers.map(u => u.id);
-    }
-    if (user.role === "director" || user.role === "sales_director") {
-      const ids = await storage.getTeamMemberIds(user.id, user.organizationId);
-      ids.push(user.id);
-      return ids;
-    }
-    if (user.role === "national_account_manager" || user.role === "sales") {
-      const ids = await storage.getTeamMemberIds(user.id, user.organizationId);
-      if (user.managerId) ids.push(user.managerId);
-      ids.push(user.id);
-      return ids;
-    }
-    const ids = new Set<string>([user.id]);
-    if (user.managerId) ids.add(user.managerId);
-    return Array.from(ids);
-  }
 
   async function canAccessAttachmentEntity(user: { id: string; role: string; managerId: string | null; organizationId: string }, entityType: string, entityId: string): Promise<boolean> {
     try {
@@ -5511,7 +8152,7 @@ Respond with valid JSON only:
         if (!tp.contactId) return false;
         const contact = await storage.getContact(tp.contactId);
         if (!contact) return false;
-        return canAccessCompany(user, contact.companyId);
+        return canAccessCompany(user as any, contact.companyId);
       }
       if (entityType === "one_on_one_topic") {
         const topic = await storage.getTopic(entityId);
@@ -5520,10 +8161,10 @@ Respond with valid JSON only:
       }
       if (entityType === "scorecard") {
         if (user.role === "admin") return true;
-        return canAccessCompany(user, entityId);
+        return canAccessCompany(user as any, entityId);
       }
       if (entityType === "internal_post") {
-        return isAdminOrDirector(user);
+        return user.role === "admin" || user.role === "director";
       }
       return false;
     } catch {
@@ -5585,8 +8226,8 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const entityType = qStr(req.query.entityType);
-      const entityIds = (qStr(req.query.entityIds) || "").split(",").filter(Boolean);
+      const entityType = req.query.entityType as string;
+      const entityIds = (req.query.entityIds as string || "").split(",").filter(Boolean);
       if (!entityType || entityIds.length === 0) return res.json([]);
       const authorizedIds: string[] = [];
       for (const eid of entityIds) {
@@ -5607,7 +8248,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const att = await storage.getAttachment((pStr(req.params.id)));
+      const att = await storage.getAttachment((req.params.id as string));
       if (!att) return res.status(404).json({ error: "Attachment not found" });
       if (!(await canAccessAttachmentEntity(user, att.entityType, att.entityId))) {
         return res.status(403).json({ error: "Access denied" });
@@ -5626,26 +8267,26 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const att = await storage.getAttachment((pStr(req.params.id)));
+      const att = await storage.getAttachment((req.params.id as string));
       if (!att) return res.status(404).json({ error: "Attachment not found" });
       if (!(await canAccessAttachmentEntity(user, att.entityType, att.entityId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      await storage.deleteAttachment((pStr(req.params.id)));
+      await storage.deleteAttachment((req.params.id as string));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete attachment" });
     }
   });
 
-  app.get("/api/companies/:id/vendor-routed", requireAuth, async (req, res) => {
+  app.get("/api/companies/:id/vendor-routed", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const rows = await storage.getVendorRoutedByCompany((pStr(req.params.id)));
+      const rows = await storage.getVendorRoutedByCompany((req.params.id as string));
       const keys = rows.map(r => r.rowKey);
       res.json(keys);
     } catch (error) {
@@ -5653,18 +8294,18 @@ Respond with valid JSON only:
     }
   });
 
-  app.post("/api/companies/:id/vendor-routed/toggle", requireAuth, async (req, res) => {
+  app.post("/api/companies/:id/vendor-routed/toggle", async (req, res) => {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, (pStr(req.params.id))))) {
+      if (!(await canAccessCompany(currentUser, (req.params.id as string)))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { rowKey } = req.body;
       if (!rowKey || typeof rowKey !== "string") {
         return res.status(400).json({ error: "rowKey is required" });
       }
-      const result = await storage.toggleVendorRouted((pStr(req.params.id)), rowKey);
+      const result = await storage.toggleVendorRouted((req.params.id as string), rowKey);
       res.json(result);
     } catch (error) {
       res.status(500).json({ error: "Failed to toggle vendor routed" });
@@ -5676,22 +8317,10 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      // Admins see every passoff in THEIR org. Directors / Sales Directors /
-      // NAMs see passoffs created-by or covering anyone in their reporting
-      // tree (Task #525). Everyone else only sees passoffs they created or
-      // are covering.
-      const visibleRepIds = await getVisibleRepUserIds(currentUser);
-      let passoffs;
-      if (visibleRepIds === null) {
-        passoffs = await storage.getPtoPassoffsByOrg(req.session.organizationId!);
-      } else {
-        const all = await storage.getPtoPassoffsByOrg(req.session.organizationId!);
-        const visibleSet = new Set(visibleRepIds);
-        passoffs = all.filter(p =>
-          (p.createdById && visibleSet.has(p.createdById)) ||
-          (p.coveringUserId && visibleSet.has(p.coveringUserId))
-        );
-      }
+      const isAdminOrDirector = currentUser.role === "admin" || currentUser.role === "director" || currentUser.role === "sales_director";
+      const passoffs = isAdminOrDirector
+        ? await storage.getPtoPassoffs({ all: true })
+        : await storage.getPtoPassoffs({ createdById: currentUser.id, coveringUserId: currentUser.id });
       const allItems = await Promise.all(passoffs.map(p => storage.getPtoPassoffItems(p.id)));
       // Collect all unique companyIds across all items to batch-fetch names
       const allCompanyIds = [...new Set(allItems.flat().map(i => i.companyId).filter(Boolean) as string[])];
@@ -5747,12 +8376,12 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
-      if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
+      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
       }
-      const updated = await storage.updatePtoPassoff((pStr(req.params.id)), req.body);
+      const updated = await storage.updatePtoPassoff((req.params.id as string), req.body);
       // Notify new covering person if coveringUserId changed
       const newCovering = req.body.coveringUserId;
       if (newCovering && newCovering !== passoff.coveringUserId && newCovering !== currentUser.id) {
@@ -5790,12 +8419,12 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
-      if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
+      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
       }
-      await storage.deletePtoPassoff((pStr(req.params.id)));
+      await storage.deletePtoPassoff((req.params.id as string));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete PTO passoff" });
@@ -5806,19 +8435,13 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
-      if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
+      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
       }
-      // Cross-tenant guard on optional companyId — if a passoff item references
-      // a company, that company must belong to the caller's org.
-      if (req.body.companyId) {
-        const owning = await storage.getCompanyInOrg(req.body.companyId, currentUser.organizationId);
-        if (!owning) return res.status(404).json({ error: "Company not found" });
-      }
       const item = await storage.createPtoPassoffItem({
-        passoffId: (pStr(req.params.id)),
+        passoffId: (req.params.id as string),
         companyId: req.body.companyId || null,
         priority: req.body.priority || "medium",
         spotFreightHandler: req.body.spotFreightHandler || null,
@@ -5838,30 +8461,23 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
       const isCovering = passoff.coveringUserId === currentUser.id;
       const isOwner = passoff.createdById === currentUser.id;
-      const isCallerAdmin = isAdmin(currentUser);
-      if (!isOwner && !isCovering && !isCallerAdmin) return res.status(403).json({ error: "Access denied" });
-      // Cross-record guard: itemId must actually belong to this passoff —
-      // otherwise a user authorized on passoff A could mutate items owned
-      // by passoff B (different rep, possibly different org) by guessing
-      // an itemId.
-      const items = await storage.getPtoPassoffItems(pStr(req.params.id));
-      const targetItem = items.find(i => i.id === (pStr(req.params.itemId)));
-      if (!targetItem) return res.status(404).json({ error: "Item not found" });
+      const isAdmin = currentUser.role === "admin";
+      if (!isOwner && !isCovering && !isAdmin) return res.status(403).json({ error: "Access denied" });
       // Covering user can update acknowledged + coveringNotes; owner/admin can update all
-      const allowedFields = isOwner || isCallerAdmin
+      const allowedFields = isOwner || isAdmin
         ? req.body
         : { acknowledged: req.body.acknowledged, coveringNotes: req.body.coveringNotes };
-      const updated = await storage.updatePtoPassoffItem((pStr(req.params.itemId)), allowedFields);
+      const updated = await storage.updatePtoPassoffItem((req.params.itemId as string), allowedFields);
       // Notify passoff owner when covering person acknowledges an account
       const justAcknowledged = req.body.acknowledged === true && isCovering && !isOwner;
       if (justAcknowledged && passoff.createdById !== currentUser.id) {
         (async () => {
-          const items = await storage.getPtoPassoffItems((pStr(req.params.id)));
-          const item = items.find(i => i.id === (pStr(req.params.itemId)));
+          const items = await storage.getPtoPassoffItems((req.params.id as string));
+          const item = items.find(i => i.id === (req.params.itemId as string));
           let body = "Account acknowledged in your passoff";
           if (item?.companyId) {
             const company = await storage.getCompanyInOrg(item.companyId, currentUser.organizationId);
@@ -5888,18 +8504,12 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
-      if (passoff.createdById !== currentUser.id && !isAdmin(currentUser)) {
+      if (passoff.createdById !== currentUser.id && currentUser.role !== "admin") {
         return res.status(403).json({ error: "Access denied" });
       }
-      // Cross-record guard: itemId must belong to this passoff. Same
-      // rationale as the PATCH handler above.
-      const items = await storage.getPtoPassoffItems(pStr(req.params.id));
-      if (!items.some(i => i.id === (pStr(req.params.itemId)))) {
-        return res.status(404).json({ error: "Item not found" });
-      }
-      await storage.deletePtoPassoffItem((pStr(req.params.itemId)));
+      await storage.deletePtoPassoffItem((req.params.itemId as string));
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete passoff item" });
@@ -5911,13 +8521,12 @@ Respond with valid JSON only:
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const passoff = await storage.getPtoPassoffInOrg(pStr(req.params.id), currentUser.organizationId);
+      const passoff = await storage.getPtoPassoff((req.params.id as string));
       if (!passoff) return res.status(404).json({ error: "Not found" });
       const isCovering = passoff.coveringUserId === currentUser.id;
       const isOwner = passoff.createdById === currentUser.id;
-      // NOTE: includes director — historically broader than the mutating routes.
-      const isLeader = isAdmin(currentUser) || currentUser.role === "director";
-      if (!isCovering && !isOwner && !isLeader) return res.status(403).json({ error: "Access denied" });
+      const isAdmin = currentUser.role === "admin" || currentUser.role === "director";
+      if (!isCovering && !isOwner && !isAdmin) return res.status(403).json({ error: "Access denied" });
       const allTasks = await storage.getTasks();
       const openTasks = allTasks.filter(t =>
         t.assignedTo === passoff.createdById && t.status !== "completed"
@@ -5977,39 +8586,13 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!["admin", "director", "national_account_manager", "sales", "sales_director"].includes(user.role)) return res.status(403).json({ error: "Not authorized" });
+      if (!["admin", "director", "national_account_manager"].includes(user.role)) return res.status(403).json({ error: "Not authorized" });
       const { goal } = req.body;
       if (!goal || goal < 1 || goal > 50) return res.status(400).json({ error: "Goal must be between 1 and 50" });
       await storage.setSetting("streak_goal", String(goal));
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: "Failed to update streak goal" });
-    }
-  });
-
-  // ZoomInfo field mapping settings (org-scoped)
-  app.get("/api/settings/zoominfo-mapping", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const val = await storage.getSetting(`zoominfo_field_mapping_${user.organizationId}`);
-      res.json({ mapping: val ? JSON.parse(val) : {} });
-    } catch (err) {
-      res.status(500).json({ error: "Failed to fetch ZoomInfo mapping" });
-    }
-  });
-
-  app.put("/api/settings/zoominfo-mapping", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Not authorized" });
-      const { mapping } = req.body;
-      if (!mapping || typeof mapping !== "object") return res.status(400).json({ error: "mapping must be an object" });
-      await storage.setSetting(`zoominfo_field_mapping_${user.organizationId}`, JSON.stringify(mapping));
-      res.json({ success: true });
-    } catch (err) {
-      res.status(500).json({ error: "Failed to save ZoomInfo mapping" });
     }
   });
 
@@ -6038,7 +8621,825 @@ Respond with valid JSON only:
     }
   });
 
-  registerDashboardRoutes(app);
+  // ─── Director/Admin Dashboard Portlet Endpoints ───────────────────────────
+
+  const DIRECTOR_ROLES = ["admin", "director", "sales_director"] as const;
+  const NAM_ROLES = ["national_account_manager", "sales"] as const;
+
+  // Helper: normalize string for fuzzy matching
+  const normAlias = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  // Helper: get set of normalized company aliases for a list of companies
+  function buildAliasSet(companies: any[]): Set<string> {
+    const s = new Set<string>();
+    for (const c of companies) {
+      s.add(normAlias(c.name));
+      if (c.financialAlias) {
+        for (const a of c.financialAlias.split(',').map((x: string) => x.trim()).filter(Boolean)) {
+          s.add(normAlias(a));
+        }
+      }
+    }
+    return s;
+  }
+
+  // Check if a company belongs to a given set of user IDs — considers BOTH salesPersonId AND assignedTo
+  // so that a company isn't excluded just because salesPersonId points to a different person
+  function companyBelongsToAny(c: any, idSet: Set<string>): boolean {
+    return (c.salesPersonId && idSet.has(c.salesPersonId)) || (c.assignedTo && idSet.has(c.assignedTo));
+  }
+
+  function getNamTeamCompanies(namId: string, allUsers: any[], allCompanies: any[]): any[] {
+    const directReportIds = new Set(allUsers.filter((u: any) => u.managerId === namId).map((u: any) => u.id));
+    directReportIds.add(namId); // include companies directly assigned to the NAM
+    return allCompanies.filter((c: any) => companyBelongsToAny(c, directReportIds));
+  }
+
+  // Helper: get companies owned by a specific AM (checks both salesPersonId and assignedTo)
+  function getAmCompanies(amId: string, allCompanies: any[]): any[] {
+    const idSet = new Set([amId]);
+    return allCompanies.filter((c: any) => companyBelongsToAny(c, idSet));
+  }
+
+  // Helper: get all companies within a director's vertical (director → NAMs → AMs → companies)
+  function getDirectorTeamCompanies(directorId: string, allUsers: any[], allCompanies: any[]): any[] {
+    // Direct reports of the director (NAMs and any direct AMs)
+    const directReportIds = new Set(allUsers.filter((u: any) => u.managerId === directorId).map((u: any) => u.id));
+    // Collect all AM-level users under those direct reports (NAMs' direct reports)
+    const allScopedRepIds = new Set<string>(directReportIds);
+    for (const namId of directReportIds) {
+      for (const u of allUsers) {
+        if (u.managerId === namId) allScopedRepIds.add(u.id);
+      }
+    }
+    return allCompanies.filter((c: any) => companyBelongsToAny(c, allScopedRepIds));
+  }
+
+  // Trending accounts — top 5 up, top 5 down by margin delta vs 3-month average
+  // Roles: director/admin (org-wide), NAM (team-scoped), AM (own accounts)
+  app.get("/api/dashboard/trending-accounts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      const isAmRole = user.role === "account_manager";
+      if (!isDirectorRole && !isNamRole && !isAmRole) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const orgId = req.session.organizationId!;
+      const upload = await storage.getLatestFinancialUploadForOrg(orgId);
+      if (!upload || !upload.rows) return res.json({ up: [], down: [] });
+
+      const rows: any[] = upload.rows as any[];
+      const cols = resolveColumns(rows);
+
+      // Compute margin by company alias, grouped by month
+      const byCustomerMonth: Record<string, Record<string, number>> = {};
+      // Fallback display name for aliases not matched to a CRM company
+      // Strips the "ALIAS - " prefix to show a friendlier name
+      const aliasFallbackName: Record<string, string> = {};
+      const allMonthKeys = new Set<string>();
+      for (const row of rows) {
+        if (isExcludedRow(row, cols)) continue;
+        const cust = getCustomerFromRow(row, cols);
+        if (!cust) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, cols);
+        if (!monthKey) continue;
+        allMonthKeys.add(monthKey);
+        const key = normAlias(cust);
+        if (!byCustomerMonth[key]) byCustomerMonth[key] = {};
+        byCustomerMonth[key][monthKey] = (byCustomerMonth[key][monthKey] || 0) + margin;
+        // Store friendly display name: strip leading "CODE - " prefix if present
+        if (!aliasFallbackName[key]) {
+          const dashIdx = cust.indexOf(' - ');
+          aliasFallbackName[key] = dashIdx !== -1 ? cust.slice(dashIdx + 3).trim() : cust;
+        }
+      }
+
+      // Determine current month and the 3 prior months from the data, not calendar month
+      const sortedMonthKeys = Array.from(allMonthKeys).sort();
+      const curMonthKey = sortedMonthKeys.length > 0 ? sortedMonthKeys[sortedMonthKeys.length - 1] : toMonthKey(new Date());
+      const curIdx = sortedMonthKeys.indexOf(curMonthKey);
+      // Up to 3 months before the current month (all available in the upload)
+      const priorMonthKeys = sortedMonthKeys.slice(Math.max(0, curIdx - 3), curIdx);
+
+      // Compute pace fraction: how far through the current month are we?
+      const today = new Date();
+      const calendarCurKey = toMonthKey(today);
+      let monthFraction = 1.0;
+      let isPartialMonth = false;
+      if (curMonthKey === calendarCurKey) {
+        const [yr, mo] = curMonthKey.split("-").map(Number);
+        const daysInMonth = new Date(yr, mo, 0).getDate();
+        monthFraction = Math.min(today.getDate() / daysInMonth, 1);
+        isPartialMonth = true;
+      }
+      const [cmYr, cmMo] = curMonthKey.split("-").map(Number);
+      const curMonthLabel = new Date(cmYr, cmMo - 1, 1).toLocaleString("en-US", { month: "long" });
+
+      // Build delta list using prorated pace comparison vs 3-month average
+      // New customers (no prior month data) are included with avgPrior = 0 and flagged isNew = true
+      const deltas: { alias: string; delta: number; curMargin: number; priorMargin: number; isNew: boolean }[] = [];
+      for (const [alias, monthMap] of Object.entries(byCustomerMonth)) {
+        const cur = monthMap[curMonthKey] ?? null;
+        if (cur === null) continue;
+        // Average margin across up to 3 prior months (only months where account has data)
+        const priorValues = priorMonthKeys.map(m => monthMap[m]).filter((v): v is number => v !== undefined);
+        const isNew = priorValues.length === 0;
+        const avgPrior = isNew ? 0 : priorValues.reduce((a, b) => a + b, 0) / priorValues.length;
+        const paceExpected = avgPrior * monthFraction;
+        deltas.push({ alias, delta: cur - paceExpected, curMargin: cur, priorMargin: avgPrior, isNew });
+      }
+
+      // Match to company names — optionally scoped
+      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+      const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
+      const allUsers = isDirectorOnlyRole || isNamRole || isAmRole || (isDirectorRole && req.query.directorId) ? await storage.getUsers(req.session.organizationId!) : [];
+
+      // Build scoped alias filter for Director (non-admin) / NAM / AM
+      // Admins can also filter by a specific director via ?directorId=<userId>
+      let scopedAliases: Set<string> | null = null;
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+      if (directorIdParam) {
+        const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, allCompanies);
+        scopedAliases = buildAliasSet(teamCompanies);
+      } else if (isDirectorOnlyRole) {
+        const teamCompanies = getDirectorTeamCompanies(user.id, allUsers, allCompanies);
+        scopedAliases = buildAliasSet(teamCompanies);
+      } else if (isNamRole) {
+        const teamCompanies = getNamTeamCompanies(user.id, allUsers, allCompanies);
+        scopedAliases = buildAliasSet(teamCompanies);
+      } else if (isAmRole) {
+        const myCompanies = getAmCompanies(user.id, allCompanies);
+        scopedAliases = buildAliasSet(myCompanies);
+      }
+
+      const resolveCompany = (alias: string): { name: string; companyId?: string } => {
+        const norm = normAlias(alias);
+        const match = allCompanies.find(c => {
+          const cns = c.financialAlias
+            ? c.financialAlias.split(',').map((a: string) => normAlias(a.trim())).filter(Boolean)
+            : [normAlias(c.name)];
+          return cns.some((cn: string) => cn === norm || cn.includes(norm) || norm.includes(cn));
+        });
+        // Fall back to the friendly display name (alias prefix stripped) if not in CRM
+        return { name: match?.name || aliasFallbackName[norm] || alias, companyId: match?.id };
+      };
+
+      // Filter deltas by scope if applicable
+      const filteredDeltas = scopedAliases
+        ? deltas.filter(d => {
+            if (scopedAliases!.has(d.alias)) return true;
+            // fuzzy: check if any scoped alias contains or is contained by this alias
+            for (const sa of scopedAliases!) {
+              if (sa.includes(d.alias) || d.alias.includes(sa)) return true;
+            }
+            return false;
+          })
+        : deltas;
+
+      filteredDeltas.sort((a, b) => b.delta - a.delta);
+      const up = filteredDeltas.filter(d => d.delta > 0).map(d => {
+        const { name, companyId } = resolveCompany(d.alias);
+        return { name, delta: d.delta, isNew: d.isNew, companyId };
+      });
+      const down = [...filteredDeltas].sort((a, b) => a.delta - b.delta).filter(d => d.delta < 0).map(d => {
+        const { name, companyId } = resolveCompany(d.alias);
+        return { name, delta: d.delta, isNew: d.isNew, companyId };
+      });
+
+      res.json({ up, down, monthFraction, isPartialMonth, curMonthLabel });
+    } catch (err) {
+      console.error("Error computing trending accounts:", err);
+      res.status(500).json({ error: "Failed to compute trending accounts" });
+    }
+  });
+
+  // Stale accounts — companies with no touchpoint in 21+ days, scoped to the current rep/NAM
+  app.get("/api/dashboard/stale-accounts", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const isAmRole = user.role === "account_manager";
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      if (!isAmRole && !isNamRole) return res.json({ stale: [] });
+
+      const STALE_DAYS = 21;
+      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+
+      let myCompanies: any[];
+      if (isAmRole) {
+        myCompanies = getAmCompanies(user.id, allCompanies).filter((c: any) => !c.archivedAt);
+      } else {
+        const allUsers = await storage.getUsers(req.session.organizationId!);
+        myCompanies = getNamTeamCompanies(user.id, allUsers, allCompanies).filter((c: any) => !c.archivedAt);
+      }
+
+      if (myCompanies.length === 0) return res.json({ stale: [] });
+
+      // Get all touchpoints in the last 90 days — one query, then filter in memory
+      const since90 = new Date();
+      since90.setDate(since90.getDate() - 90);
+      const recentTps = await storage.getTouchpointsSince(since90.toISOString().slice(0, 10));
+
+      // Build map: companyId → latest touchpoint date
+      const latestByCompany: Record<string, string> = {};
+      for (const tp of recentTps) {
+        if (!tp.companyId) continue;
+        if (!latestByCompany[tp.companyId] || tp.date > latestByCompany[tp.companyId]) {
+          latestByCompany[tp.companyId] = tp.date;
+        }
+      }
+
+      const today = new Date();
+      const stale: { id: string; name: string; daysSince: number }[] = [];
+      for (const company of myCompanies) {
+        const latestDate = latestByCompany[company.id];
+        let daySinceTouch: number;
+        if (!latestDate) {
+          daySinceTouch = 90;
+        } else {
+          const d = new Date(latestDate + "T12:00:00");
+          daySinceTouch = Math.floor((today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+        }
+        if (daySinceTouch >= STALE_DAYS) {
+          stale.push({ id: company.id, name: company.name, daysSince: daySinceTouch });
+        }
+      }
+
+      stale.sort((a, b) => b.daysSince - a.daysSince);
+      res.json({ stale });
+    } catch (err) {
+      console.error("Error computing stale accounts:", err);
+      res.status(500).json({ error: "Failed to compute stale accounts" });
+    }
+  });
+
+  // Team activity metrics — today's touches, meaningful touches, new contacts
+  // Directors: org-wide; NAMs: scoped to their team
+  app.get("/api/dashboard/team-activity", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      if (!isDirectorRole && !isNamRole) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const orgId = req.session.organizationId!;
+      const today = new Date().toISOString().slice(0, 10);
+
+      const orgCompanies = await storage.getCompanies(orgId);
+
+      // For Director (non-admin)/NAM: scope to their team's companies
+      // Admins can filter by a specific director via ?directorId=<userId>
+      const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+      let scopedCompanyIds: Set<string>;
+      if (isNamRole) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else if (directorIdParam) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else if (isDirectorOnlyRole) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getDirectorTeamCompanies(user.id, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else {
+        scopedCompanyIds = new Set(orgCompanies.map(c => c.id));
+      }
+
+      const allTouchpoints = await storage.getTouchpoints();
+      const todayTouchpoints = allTouchpoints.filter(t => t.date === today && scopedCompanyIds.has(t.companyId));
+      const touches = todayTouchpoints.length;
+      const meaningful = todayTouchpoints.filter(t => t.isMeaningful).length;
+
+      const allContacts = await storage.getContacts();
+      const newContacts = allContacts.filter(c =>
+        c.createdAt &&
+        c.createdAt.slice(0, 10) === today &&
+        scopedCompanyIds.has(c.companyId)
+      ).length;
+
+      res.json({ touches, meaningful, newContacts });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load team activity" });
+    }
+  });
+
+  // Activity detail — enriched records for portlet drill-down
+  // type = relationships | touches | meaningful | contacts
+  // personal=true scopes to current user's own companies only
+  app.get("/api/dashboard/activity-detail", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const type = String(req.query.type || "");
+      const personal = req.query.personal === "true";
+      const orgId = req.session.organizationId!;
+      const today = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
+      const orgCompanies = await storage.getCompanies(orgId);
+      const allUsers = await storage.getUsers(orgId);
+      const companyMap = new Map(orgCompanies.map(c => [c.id, c]));
+      const userMap = new Map(allUsers.map(u => [u.id, u]));
+
+      let scopedCompanyIds: Set<string>;
+      if (personal) {
+        scopedCompanyIds = new Set(orgCompanies.filter(c => c.assignedTo === user.id).map(c => c.id));
+      } else {
+        const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+        const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+        const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
+        const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+        if (isNamRole) {
+          const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
+          scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+        } else if (directorIdParam) {
+          const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, orgCompanies);
+          scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+        } else if (isDirectorOnlyRole) {
+          const teamCompanies = getDirectorTeamCompanies(user.id, allUsers, orgCompanies);
+          scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+        } else if (isDirectorRole) {
+          // admin without a directorId filter — see all companies
+          scopedCompanyIds = new Set(orgCompanies.map(c => c.id));
+        } else {
+          scopedCompanyIds = new Set(orgCompanies.filter(c => c.assignedTo === user.id).map(c => c.id));
+        }
+      }
+
+      if (type === "relationships") {
+        const allContacts = await storage.getContacts();
+        const result = allContacts
+          .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && scopedCompanyIds.has(c.companyId))
+          .sort((a, b) => (b.baseAdvancedAt || "").localeCompare(a.baseAdvancedAt || ""))
+          .map(c => {
+            const company = companyMap.get(c.companyId);
+            const rep = company?.assignedTo ? userMap.get(company.assignedTo) : null;
+            return { contactId: c.id, contactName: c.name, contactTitle: c.title || null, relationshipBase: c.relationshipBase || null, baseAdvancedAt: c.baseAdvancedAt, companyId: c.companyId, companyName: company?.name || "Unknown", repName: rep?.name || null };
+          });
+        return res.json(result);
+      }
+
+      if (type === "touches" || type === "meaningful") {
+        const allTouchpoints = await storage.getTouchpoints();
+        const allContacts = await storage.getContacts();
+        const contactMap = new Map(allContacts.map(c => [c.id, c]));
+        let tps = allTouchpoints.filter(t => t.date === today && scopedCompanyIds.has(t.companyId));
+        if (type === "meaningful") tps = tps.filter(t => t.isMeaningful);
+        const result = tps
+          .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+          .map(t => {
+            const company = companyMap.get(t.companyId);
+            const contact = t.contactId ? contactMap.get(t.contactId) : null;
+            const rep = company?.assignedTo ? userMap.get(company.assignedTo) : null;
+            return { id: t.id, type: t.type, isMeaningful: t.isMeaningful || false, notes: t.notes || null, date: t.date, companyId: t.companyId, companyName: company?.name || "Unknown", contactName: contact?.name || null, repName: rep?.name || null };
+          });
+        return res.json(result);
+      }
+
+      if (type === "contacts") {
+        const allContacts = await storage.getContacts();
+        const result = allContacts
+          .filter(c => c.createdAt && c.createdAt.slice(0, 10) === today && scopedCompanyIds.has(c.companyId))
+          .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+          .map(c => {
+            const company = companyMap.get(c.companyId);
+            const rep = company?.assignedTo ? userMap.get(company.assignedTo) : null;
+            return { contactId: c.id, contactName: c.name, contactTitle: c.title || null, companyId: c.companyId, companyName: company?.name || "Unknown", repName: rep?.name || null };
+          });
+        return res.json(result);
+      }
+
+      return res.status(400).json({ error: "Invalid type" });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load activity detail" });
+    }
+  });
+
+  // Relationships moved up — accounts with contacts that advanced this month
+  // Directors: org-wide; NAMs: their team's accounts
+  app.get("/api/dashboard/relationships-moved", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      if (!isDirectorRole && !isNamRole) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const orgId = req.session.organizationId!;
+      const now = new Date();
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
+      const orgCompanies = await storage.getCompanies(orgId);
+
+      // Admins can filter by a specific director via ?directorId=<userId>
+      const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+      let scopedCompanyIds: Set<string>;
+      if (isNamRole) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getNamTeamCompanies(user.id, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else if (directorIdParam) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getDirectorTeamCompanies(directorIdParam, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else if (isDirectorOnlyRole) {
+        const allUsers = await storage.getUsers(orgId);
+        const teamCompanies = getDirectorTeamCompanies(user.id, allUsers, orgCompanies);
+        scopedCompanyIds = new Set(teamCompanies.map(c => c.id));
+      } else {
+        scopedCompanyIds = new Set(orgCompanies.map(c => c.id));
+      }
+
+      const allContacts = await storage.getContacts();
+      const advancedCompanyIds = new Set(
+        allContacts
+          .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && scopedCompanyIds.has(c.companyId))
+          .map(c => c.companyId)
+      );
+      const count = advancedCompanyIds.size;
+
+      res.json({ count });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load relationships moved" });
+    }
+  });
+
+  // NAM/AM Margin Metrics — current month margin vs goal for each user by role
+  // Directors: org-wide; NAMs: scoped to their direct reports
+  app.get("/api/dashboard/margin-metrics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const isDirectorRole = (DIRECTOR_ROLES as readonly string[]).includes(user.role);
+      const isNamRole = (NAM_ROLES as readonly string[]).includes(user.role);
+      if (!isDirectorRole && !isNamRole) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      const mmCacheKey = `margin-metrics:${req.session.organizationId}:${user.id}`;
+      const mmCached = cacheGet(mmCacheKey);
+      if (mmCached) return res.json(mmCached);
+
+      const now = new Date();
+
+      // Get latest financial data — org-scoped to prevent cross-tenant data leakage
+      const upload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      const rows: any[] = (upload?.rows as any[]) || [];
+      const cols = resolveColumns(rows);
+      const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      // Derive the latest month from the uploaded data (not calendar month)
+      // This ensures correct results even when uploads lag behind the calendar
+      const uploadMonthKeys = new Set<string>();
+      for (const row of rows) {
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (monthKey) uploadMonthKeys.add(monthKey);
+      }
+      const sortedUploadKeys = Array.from(uploadMonthKeys).sort();
+      const curMonthKey = sortedUploadKeys.length > 0
+        ? sortedUploadKeys[sortedUploadKeys.length - 1]
+        : toMonthKey(now);
+
+      // For goal matching, we still use calendar month range for goal overlap
+      const [yr, mo] = curMonthKey.split("-").map(Number);
+      const monthStart = `${curMonthKey}-01`;
+      const monthEnd = new Date(yr, mo, 0).toISOString().slice(0, 10);
+
+      // Margin by financialRepId / customer — map by user's financialRepId
+      const byRepId: Record<string, number> = {};
+      for (const row of rows) {
+        if (isExcludedRow(row, cols)) continue;
+        const { monthKey, margin } = parseHistoricalRow(row, cols);
+        if (monthKey !== curMonthKey) continue;
+        // Use the rep field in the financial data
+        const rep = getRepFromRow(row, cols);
+        if (!rep) continue;
+        byRepId[rep] = (byRepId[rep] || 0) + margin;
+      }
+
+      const allUsers = await storage.getUsers(req.session.organizationId!);
+      // Scope goals to org users only — filter after fetching to avoid cross-tenant leakage
+      const orgUserIds = new Set(allUsers.map(u => u.id));
+      const allGoalsRaw = await storage.getGoals({});
+      const allGoals = allGoalsRaw.filter(g =>
+        (g.namId && orgUserIds.has(g.namId)) || (g.amId && orgUserIds.has(g.amId))
+      );
+
+      const namRoles = ["national_account_manager"];
+      const amRoles = ["account_manager"];
+
+      // For NAM role: only show their direct reports as AMs, not all AMs
+      // For Director (non-admin) role: only show users within their vertical (direct reports + their direct reports)
+      // Admins can filter by a specific director via ?directorId=<userId>
+      const isDirectorOnlyRole = isDirectorRole && user.role !== "admin";
+      const directorIdParam = isDirectorRole && user.role === "admin" && typeof req.query.directorId === "string" ? req.query.directorId : null;
+      let scopedUserIds: Set<string> | null = null;
+      if (isNamRole) {
+        scopedUserIds = new Set(allUsers.filter(u => u.managerId === user.id).map(u => u.id));
+      } else if (directorIdParam) {
+        const directReportIds = new Set(allUsers.filter(u => u.managerId === directorIdParam).map(u => u.id));
+        scopedUserIds = new Set<string>(directReportIds);
+        for (const namId of directReportIds) {
+          for (const u of allUsers) {
+            if (u.managerId === namId) scopedUserIds.add(u.id);
+          }
+        }
+      } else if (isDirectorOnlyRole) {
+        const directReportIds = new Set(allUsers.filter(u => u.managerId === user.id).map(u => u.id));
+        scopedUserIds = new Set<string>(directReportIds);
+        for (const namId of directReportIds) {
+          for (const u of allUsers) {
+            if (u.managerId === namId) scopedUserIds.add(u.id);
+          }
+        }
+      }
+
+      const filterByScope = (users: any[]) => scopedUserIds
+        ? users.filter(u => scopedUserIds!.has(u.id))
+        : users;
+
+      const buildMetrics = (roleFilter: string[]) => {
+        return filterByScope(allUsers.filter(u => roleFilter.includes(u.role)))
+          .map(u => {
+            // Match by financialRepId or by name normalization
+            let margin = 0;
+            if (u.financialRepId) {
+              const repKey = u.financialRepId.toLowerCase().trim();
+              margin = byRepId[repKey] || 0;
+              if (!margin) {
+                const nameNorm = normalize(u.name);
+                for (const [k, v] of Object.entries(byRepId)) {
+                  if (normalize(k).includes(nameNorm) || nameNorm.includes(normalize(k))) {
+                    margin = v;
+                    break;
+                  }
+                }
+              }
+            } else {
+              const nameNorm = normalize(u.name);
+              for (const [k, v] of Object.entries(byRepId)) {
+                if (normalize(k).includes(nameNorm) || nameNorm.includes(normalize(k))) {
+                  margin = v;
+                  break;
+                }
+              }
+            }
+
+            const marginGoal = allGoals.find(g =>
+              g.metric === "margin" &&
+              g.amId === u.id &&
+              g.startDate <= monthEnd &&
+              g.endDate >= monthStart
+            );
+
+            return {
+              userId: u.id,
+              name: u.name,
+              role: u.role,
+              margin,
+              goal: marginGoal ? { id: marginGoal.id, target: parseFloat(marginGoal.target) } : null,
+            };
+          });
+      };
+
+      const namMetrics = isNamRole ? [] : buildMetrics(namRoles);
+      const amMetrics = buildMetrics(amRoles);
+      console.log(`[margin-metrics] role=${user.role} nams=${namMetrics.length} ams=${amMetrics.length} scopedUserIds=${scopedUserIds ? scopedUserIds.size : 'null'} byRepIdKeys=${Object.keys(byRepId).length} curMonthKey=${curMonthKey}`);
+      const mmResult = { nams: namMetrics, ams: amMetrics };
+      cacheSet(`margin-metrics:${req.session.organizationId}:${user.id}`, mmResult, 15 * 60 * 1000);
+      res.json(mmResult);
+    } catch (err) {
+      console.error("Error loading margin metrics:", err);
+      res.status(500).json({ error: "Failed to load margin metrics" });
+    }
+  });
+
+  // Personal metrics — for NAM and AM: their own individual activity stats
+  // relationshipsMovedThisMonth: accounts they personally own with contacts that advanced this month
+  // meaningfulToday: meaningful touchpoints they personally logged today
+  // contactsAddedToday: contacts added today in their personally owned accounts
+  // touchesToday: all touchpoints they personally logged today
+  app.get("/api/dashboard/personal-metrics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      const today = new Date().toISOString().slice(0, 10);
+      const now = new Date();
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
+      const orgId = req.session.organizationId!;
+      const allCompanies = await storage.getCompanies(orgId);
+      // Own accounts = companies where salesPersonId === current user
+      const myCompanies = allCompanies.filter(c => c.salesPersonId === user.id);
+      const myCompanyIds = new Set(myCompanies.map(c => c.id));
+
+      // Relationships moved up this month in my accounts
+      const allContacts = await storage.getContacts();
+      const advancedCompanyIds = new Set(
+        allContacts
+          .filter(c => c.baseAdvancedAt && c.baseAdvancedAt >= monthStart && myCompanyIds.has(c.companyId))
+          .map(c => c.companyId)
+      );
+      const relationshipsMovedThisMonth = advancedCompanyIds.size;
+
+      // My own touchpoints today
+      const myTouchpointsToday = await storage.getTouchpointsByUser(user.id, today);
+      const touchesToday = myTouchpointsToday.length;
+      const meaningfulToday = myTouchpointsToday.filter(t => t.isMeaningful).length;
+
+      // New contacts added today in my accounts
+      const contactsAddedToday = allContacts.filter(c =>
+        c.createdAt &&
+        c.createdAt.slice(0, 10) === today &&
+        myCompanyIds.has(c.companyId)
+      ).length;
+
+      res.json({ relationshipsMovedThisMonth, meaningfulToday, contactsAddedToday, touchesToday });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load personal metrics" });
+    }
+  });
+
+  // LM Carrier metrics — repeat carrier rate for the logged-in LM
+  app.get("/api/dashboard/lm-carrier-metrics", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      if (user.role !== "logistics_manager" && user.role !== "logistics_coordinator") {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const repId = (user as any).financialRepId as string | null;
+      if (!repId) return res.json({ totalLoads: 0, uniqueCarriers: 0, repeatCarrierLoads: 0, repeatPct: 0, preferredCarriers: 0, topCarriers: [] });
+
+      const upload = await storage.getLatestFinancialUploadForOrg(req.session.organizationId!);
+      const allRows: any[] = (upload?.rows as any[]) || [];
+      const cols = resolveColumns(allRows);
+
+      // Determine current month from upload data
+      const monthKeys = new Set<string>();
+      for (const row of allRows) {
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (monthKey) monthKeys.add(monthKey);
+      }
+      const curMonthKey = monthKeys.size > 0
+        ? Array.from(monthKeys).sort().pop()!
+        : toMonthKey(new Date());
+
+      // Filter to this LM's dispatched loads in current month
+      const repIdLower = repId.toLowerCase().trim();
+      const myRows = allRows.filter(row => {
+        if (isExcludedRow(row, cols)) return false;
+        const { monthKey } = parseHistoricalRow(row, cols);
+        if (monthKey !== curMonthKey) return false;
+        const disp = getDispatcherFromRow(row, cols).toLowerCase();
+        return disp === repIdLower;
+      });
+
+      if (myRows.length === 0) {
+        return res.json({ totalLoads: 0, uniqueCarriers: 0, repeatCarrierLoads: 0, repeatPct: 0, preferredCarriers: 0, topCarriers: [], curMonthKey });
+      }
+
+      // Count uses per carrier
+      const carrierUses: Record<string, number> = {};
+      for (const row of myRows) {
+        const carrier = String(row[cols.carrier] || row["Carrier"] || "").trim();
+        if (!carrier) continue;
+        carrierUses[carrier] = (carrierUses[carrier] || 0) + 1;
+      }
+
+      const totalLoads = myRows.length;
+      const uniqueCarriers = Object.keys(carrierUses).length;
+      let repeatCarrierLoads = 0;
+      let preferredCarriers = 0;
+      for (const uses of Object.values(carrierUses)) {
+        if (uses >= 2) {
+          repeatCarrierLoads += uses;
+          preferredCarriers++;
+        }
+      }
+      const repeatPct = totalLoads > 0 ? Math.round((repeatCarrierLoads / totalLoads) * 1000) / 10 : 0;
+
+      // Top 10 carriers by load count
+      const topCarriers = Object.entries(carrierUses)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10)
+        .map(([carrier, loads]) => {
+          // Strip the alias prefix (e.g. "JACOINSC - JACOBS TRANS LLC" → "Jacobs Trans LLC")
+          const parts = carrier.split(" - ");
+          const displayName = parts.length > 1 ? parts.slice(1).join(" - ") : carrier;
+          return { carrier: displayName, loads, isRepeat: loads >= 2 };
+        });
+
+      res.json({ totalLoads, uniqueCarriers, repeatCarrierLoads, repeatPct, preferredCarriers, topCarriers, curMonthKey });
+    } catch (err) {
+      console.error("Error loading LM carrier metrics:", err);
+      res.status(500).json({ error: "Failed to load carrier metrics" });
+    }
+  });
+
+  // Daily briefing data
+  app.get("/api/dashboard/briefing", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+
+      // Management roles and LMs don't have individual daily touch targets — skip the banner
+      const mgmtRoles = ["director", "national_account_manager", "admin", "sales", "sales_director", "logistics_manager", "logistics_coordinator"];
+      if (mgmtRoles.includes(user.role)) {
+        return res.json({ skip: true });
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const currentMonth = today.slice(0, 7);
+
+      const [allTasks, tps, streak, goalsData] = await Promise.all([
+        storage.getTasks(),
+        storage.getTouchpointsByUser(user.id, today),
+        (async () => {
+          const goalSetting = await storage.getSetting("streak_goal");
+          const goal = parseInt(goalSetting || "5");
+          const since = new Date(); since.setDate(since.getDate() - 60);
+          const userTps = await storage.getTouchpointsByUser(user.id, since.toISOString().slice(0, 10));
+          const byDate: Record<string, number> = {};
+          for (const tp of userTps) byDate[tp.date] = (byDate[tp.date] || 0) + 1;
+          let s = 0;
+          const cur = new Date();
+          for (let i = 0; i < 60; i++) {
+            const d = cur.toISOString().slice(0, 10);
+            const count = byDate[d] || 0;
+            if (i === 0 && count < goal) { cur.setDate(cur.getDate() - 1); continue; }
+            if (count >= goal) { s++; cur.setDate(cur.getDate() - 1); }
+            else break;
+          }
+          return { streak: s, goal, todayCount: byDate[today] || 0 };
+        })(),
+        // Fetch and compute current-month goals for this rep
+        (async () => {
+          const userGoals = await storage.getGoals({ amId: user.id });
+          const activeGoals = userGoals.filter(g =>
+            g.status === "active" && g.startDate && g.startDate.startsWith(currentMonth)
+          );
+          const computed = await Promise.all(activeGoals.map(async g => {
+            let current = 0;
+            if (g.metric === "touchpoints") {
+              current = await storage.getTouchpointCountByAm(g.amId, g.startDate, g.endDate);
+            } else if (g.metric === "meaningful_touchpoints") {
+              current = await storage.getMeaningfulTouchpointCountByAm(g.amId, g.startDate, g.endDate);
+            } else if (g.metric === "contacts_added") {
+              current = await storage.getContactsAddedByAm(g.amId, g.startDate, g.endDate);
+            } else {
+              current = Number(g.currentValue) || 0;
+            }
+            const metricLabels: Record<string, string> = {
+              touchpoints: "touches",
+              meaningful_touchpoints: "meaningful touches",
+              contacts_added: "contacts added",
+              tasks_completed: "tasks completed",
+            };
+            return {
+              metric: g.metric,
+              label: g.customLabel || metricLabels[g.metric] || g.metric,
+              current,
+              target: Number(g.target),
+            };
+          }));
+          return computed;
+        })(),
+      ]);
+
+      const dueTasks = allTasks.filter(t => t.assignedTo === user.id && t.status === "open" && t.dueDate && t.dueDate <= today);
+      const todayTouchpoints = tps.length;
+
+      res.json({
+        skip: false,
+        dueTasks: dueTasks.length,
+        todayTouchpoints,
+        streak: streak.streak,
+        streakGoal: streak.goal,
+        streakToday: streak.todayCount,
+        goals: goalsData,
+      });
+    } catch (err) {
+      res.status(500).json({ error: "Failed to load briefing data" });
+    }
+  });
 
   // ─── Promotion Criteria ──────────────────────────────────────────────────────
 
@@ -6083,7 +9484,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user || user.role !== "admin") return res.status(403).json({ error: "Admin only" });
-      const deleted = await storage.deletePromotionCriteria((pStr(req.params.id)));
+      const deleted = await storage.deletePromotionCriteria((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Criteria not found" });
       res.json({ success: true });
     } catch (err) {
@@ -6147,10 +9548,10 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      if (user.id !== (pStr(req.params.nomineeId)) && !nominationAllowedRoles.includes(user.role)) {
+      if (user.id !== (req.params.nomineeId as string) && !nominationAllowedRoles.includes(user.role)) {
         return res.status(403).json({ error: "Not authorized" });
       }
-      const nominations = await storage.getNominationsByNominee((pStr(req.params.nomineeId)));
+      const nominations = await storage.getNominationsByNominee((req.params.nomineeId as string));
       res.json(nominations);
     } catch (err) {
       res.status(500).json({ error: "Failed to load nominations" });
@@ -6217,7 +9618,7 @@ Respond with valid JSON only:
         }
       })();
 
-      res.json({ ...nomination });
+      res.json(nomination);
     } catch (err) {
       res.status(500).json({ error: "Failed to create nomination" });
     }
@@ -6233,7 +9634,7 @@ Respond with valid JSON only:
       if (status && ["active", "approved", "declined"].includes(status)) allowedFields.status = status;
       if (typeof notes === "string") allowedFields.notes = notes;
       if (Object.keys(allowedFields).length === 0) return res.status(400).json({ error: "No valid fields to update" });
-      const updated = await storage.updatePromotionNomination((pStr(req.params.id)), allowedFields);
+      const updated = await storage.updatePromotionNomination((req.params.id as string), allowedFields);
       if (!updated) return res.status(404).json({ error: "Nomination not found" });
       res.json(updated);
     } catch (err) {
@@ -6246,7 +9647,7 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
       if (!nominationAllowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
-      const deleted = await storage.deletePromotionNomination((pStr(req.params.id)));
+      const deleted = await storage.deletePromotionNomination((req.params.id as string));
       if (!deleted) return res.status(404).json({ error: "Nomination not found" });
       res.json({ success: true });
     } catch (err) {
@@ -6291,7 +9692,7 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Forbidden" });
-      const link = await storage.updateToolLink((pStr(req.params.id)), req.body);
+      const link = await storage.updateToolLink((req.params.id as string), req.body);
       if (!link) return res.status(404).json({ error: "Not found" });
       res.json(link);
     } catch (error) {
@@ -6304,7 +9705,7 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
       if (!["admin", "director"].includes(user.role)) return res.status(403).json({ error: "Forbidden" });
-      await storage.deleteToolLink((pStr(req.params.id)));
+      await storage.deleteToolLink((req.params.id as string));
       res.json({ ok: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete tool link" });
@@ -6316,76 +9717,34 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg((pStr(req.params.id)), user.organizationId);
+      const company = await storage.getCompanyInOrg((req.params.id as string), user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
       const now = new Date();
       const notes: string | null = req.body.notes || null;
       const contactId = req.body.contactId || null;
       const contact = contactId ? await storage.getContact(contactId) : null;
-      // Cross-tenant guard: a contactId provided in the body MUST belong to
-      // the same company we just verified the user can access. Without this
-      // a user could attach this touchpoint (and trigger downstream growth
-      // recompute / NBA cache invalidation) to a contact from another org.
-      if (contactId) {
-        if (!contact) return res.status(404).json({ error: "Contact not found" });
-        if (contact.companyId !== (pStr(req.params.id))) {
-          return res.status(400).json({ error: "Contact does not belong to this company" });
-        }
-      }
-      const companyIdStr = pStr(req.params.id);
-      const tp = await storage.createTouchpointWithDefaults({
+      const tp = await storage.createTouchpoint({
         contactId,
-        companyId: companyIdStr,
+        companyId: (req.params.id as string),
         type: req.body.type || "call",
-        date: req.body.date || undefined,
+        date: req.body.date || now.toISOString().split("T")[0],
         notes,
         sentiment: req.body.sentiment || null,
-        isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true",
+        isMeaningful: req.body.isMeaningful === true || req.body.isMeaningful === "true" ? true : false,
         loggedById: user.id,
-        // Carry through playLabel for outcome classifier parity with /touch-logs.
-        playLabel: typeof req.body.playLabel === "string" ? req.body.playLabel || null : null,
         createdAt: now.toISOString(),
       });
-      // Respond immediately. AI enrichment, growth score recompute, momentum
-      // drop notification, NBA cache bust, and live-sync broadcast all happen
-      // in a detached async block below so the dialog can close right away.
-      res.json(tp);
-
-      const userId = user.id;
-      const orgId = user.organizationId;
-      const contactName = contact?.name;
-      const companyName = company.name;
-      setImmediate(async () => {
+      const aiInsights = await analyzeTouchpointNote(notes || "", contact?.name, company.name).catch(() => null);
+      let autoTask = null;
+      if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
         try {
-          const aiInsights = await analyzeTouchpointNote(notes || "", contactName, companyName).catch((err: unknown) => {
-            console.error("[company-touchpoint] analyzeTouchpointNote failed for company", companyIdStr, "—", err instanceof Error ? err.stack : err);
-            return null;
-          });
-          if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
-            try {
-              const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-              await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: userId, assignedBy: userId, companyId: companyIdStr, contactId: contactId || null, createdAt: now.toISOString() });
-            } catch (taskError) {
-              console.error("[company-touchpoint] auto follow-up task failed:", taskError instanceof Error ? taskError.stack : taskError);
-            }
-          }
-          _nbaCache.delete(`nba:${companyIdStr}`);
-          try {
-            const gs = await computeGrowthScore(companyIdStr, orgId, storage);
-            const savedGs = await storage.upsertGrowthScore({ companyId: companyIdStr, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-            checkAndFireMomentumDropNotification(companyIdStr, gs.band, savedGs.previousBand, storage).catch((err: unknown) => {
-              console.error("[company-touchpoint] momentum drop notification failed:", err instanceof Error ? err.stack : err);
-            });
-          } catch (gsErr) {
-            console.error("[company-touchpoint] growth score refresh failed for company", companyIdStr, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
-          }
-          // Broadcast after background work so connected clients refetch the
-          // refreshed growth score / NBA card without the user reloading.
-          publishLiveSync(orgId, "daily_workspace", companyIdStr);
-        } catch (bgErr) {
-          console.error("[company-touchpoint] background enrichment failed:", bgErr instanceof Error ? bgErr.stack : bgErr);
+          const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(notes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId: req.params.id as string, contactId: contactId || null, createdAt: now.toISOString() });
+        } catch (taskError) {
+          console.error("Failed to create auto follow-up task for company touchpoint:", taskError);
         }
-      });
+      }
+      res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touchpoint (company route):", error);
       res.status(500).json({ error: "Failed to log touchpoint" });
@@ -6396,7 +9755,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { companyId, contactId, type, isMeaningful, sentiment, notes, playLabel } = req.body;
+      const { companyId, contactId, type, isMeaningful, sentiment, notes } = req.body;
       if (!companyId) return res.status(400).json({ error: "companyId is required" });
       const validTypes = ["call", "email", "text", "site_visit"];
       const validVibes = ["great", "neutral", "cold"];
@@ -6408,78 +9767,34 @@ Respond with valid JSON only:
       const now = new Date();
       const cleanNotes: string | null = typeof notes === "string" ? notes.slice(0, 2000) || null : null;
       const contact = contactId ? await storage.getContact(contactId) : null;
-      // Cross-tenant guard: contactId, if supplied, MUST belong to the same
-      // company we just verified the user can access. Without this, a user
-      // could attach this touchpoint (and trigger downstream growth-score
-      // recompute, AI follow-up task creation, NBA invalidation) to a contact
-      // owned by another company / org. Same class of fix as the
-      // /api/companies/:id/touchpoints route.
-      if (contactId) {
-        if (!contact) return res.status(404).json({ error: "Contact not found" });
-        if (contact.companyId !== companyId) {
-          return res.status(400).json({ error: "Contact does not belong to this company" });
-        }
-      }
-      const tp = await storage.createTouchpointWithDefaults({
+      const tp = await storage.createTouchpoint({
         contactId: contactId || null,
         companyId,
         type: type || "call",
+        date: now.toISOString().split("T")[0],
         notes: cleanNotes,
         sentiment: sentiment || null,
-        isMeaningful: isMeaningful === true || isMeaningful === "true",
+        isMeaningful: isMeaningful === true || isMeaningful === "true" ? true : false,
         loggedById: user.id,
-        playLabel: typeof playLabel === "string" ? playLabel || null : null,
         createdAt: now.toISOString(),
       });
-      // Respond immediately. AI enrichment, growth score recompute, momentum
-      // drop notification, NBA cache bust, and live-sync broadcast all happen
-      // in a detached async block below so the dialog can close right away.
-      res.json(tp);
-
-      const userId = user.id;
-      const orgId = user.organizationId;
-      const contactName = contact?.name;
-      const companyName = company.name;
-      setImmediate(async () => {
+      const aiInsights = await analyzeTouchpointNote(cleanNotes || "", contact?.name, company.name).catch(() => null);
+      let autoTask = null;
+      if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
         try {
-          const aiInsights = await analyzeTouchpointNote(cleanNotes || "", contactName, companyName).catch((err: unknown) => {
-            console.error("[touch-logs] analyzeTouchpointNote failed for company", companyId, "—", err instanceof Error ? err.stack : err);
-            return null;
-          });
-          if (aiInsights?.hasFollowUp && aiInsights.followUpTitle && aiInsights.followUpDueDays != null) {
-            try {
-              const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
-              await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(cleanNotes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: userId, assignedBy: userId, companyId, contactId: contactId || null, createdAt: now.toISOString() });
-            } catch (taskError) {
-              console.error("[touch-logs] auto follow-up task failed:", taskError instanceof Error ? taskError.stack : taskError);
-            }
-          }
-          _nbaCache.delete(`nba:${companyId}`);
-          try {
-            const gs = await computeGrowthScore(companyId, orgId, storage);
-            const savedGs = await storage.upsertGrowthScore({ companyId, organizationId: orgId, score: gs.score, band: gs.band, drivers: gs.drivers, calculatedAt: new Date().toISOString() });
-            checkAndFireMomentumDropNotification(companyId, gs.band, savedGs.previousBand, storage).catch((err: unknown) => {
-              console.error("[touch-logs] momentum drop notification failed:", err instanceof Error ? err.stack : err);
-            });
-          } catch (gsErr) {
-            // Log full stack so transient failures are visible in server logs
-            console.error("[touch-logs] growth score refresh failed for company", companyId, "—", gsErr instanceof Error ? gsErr.stack : gsErr);
-          }
-          // Broadcast after background work so connected clients refetch the
-          // refreshed growth score / NBA card without the user reloading.
-          publishLiveSync(orgId, "daily_workspace", companyId);
-        } catch (bgErr) {
-          console.error("[touch-logs] background enrichment failed:", bgErr instanceof Error ? bgErr.stack : bgErr);
+          const due = new Date(now); due.setDate(due.getDate() + aiInsights.followUpDueDays);
+          autoTask = await storage.createTask({ title: aiInsights.followUpTitle, notes: `Auto-created from touchpoint note: "${(cleanNotes || "").slice(0, 200)}"`, status: "open", dueDate: due.toISOString().split("T")[0], assignedTo: user.id, assignedBy: user.id, companyId, contactId: contactId || null, createdAt: now.toISOString() });
+        } catch (taskError) {
+          console.error("Failed to create auto follow-up task for touch-log:", taskError);
         }
-      });
+      }
+      res.json({ ...tp, aiInsights, autoTask });
     } catch (error) {
       console.error("Failed to log touch:", error);
       res.status(500).json({ error: "Failed to log touch" });
     }
   });
 
-  // PUBLIC — no requireAuth. Contact/demo request form on the landing page;
-  // submitted by unauthenticated prospects.
   app.post("/api/demo-requests", async (req, res) => {
     try {
       const { insertDemoRequestSchema } = await import("@shared/schema");
@@ -6527,11 +9842,9 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Unauthorized" });
-      const chainIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-      const chainIdSet = new Set(chainIds);
       const allUsers = await storage.getUsers(user.organizationId);
       const lmDirectReports = allUsers
-        .filter(u => u.role === "logistics_manager" && chainIdSet.has(u.id) && u.id !== user.id)
+        .filter(u => u.role === "logistics_manager" && u.managerId === user.id)
         .map(({ password, ...u }) => u);
       res.json(lmDirectReports);
     } catch (error) {
@@ -6553,16 +9866,11 @@ Respond with valid JSON only:
       }
 
       // LM can see their own checks; managers (anyone in chain above) can also see
-      // Admins and directors (who oversee all org LMs) also get read access
+      const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
+      const isManagerOf = teamIds.includes(lmUserId);
       const isSelf = user.id === lmUserId;
-      const userIsAdmin = isAdmin(user);
-      const isDirectorRole = user.role === "director" || user.role === "sales_director";
-      let isManagerOf = false;
-      if (!isSelf && !userIsAdmin && !isDirectorRole) {
-        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        isManagerOf = teamIds.includes(lmUserId);
-      }
-      if (!isSelf && !isManagerOf && !userIsAdmin && !isDirectorRole) {
+      const isAdmin = user.role === "admin";
+      if (!isSelf && !isManagerOf && !isAdmin) {
         return res.status(403).json({ error: "Forbidden" });
       }
 
@@ -6591,8 +9899,8 @@ Respond with valid JSON only:
 
       // Only the LM's direct manager or admin can write
       const isDirectManager = lmUser.managerId === user.id;
-      const userIsAdmin = isAdmin(user);
-      if (!isDirectManager && !userIsAdmin) {
+      const isAdmin = user.role === "admin";
+      if (!isDirectManager && !isAdmin) {
         return res.status(403).json({ error: "Only the LM's direct manager can submit daily check-ins" });
       }
 
@@ -6614,263 +9922,17 @@ Respond with valid JSON only:
     }
   });
 
-  // ── NAM/AM → LM Daily Check-In ───────────────────────────────────────────
-
-  // GET /api/lm-checkins/pending  — which LMs need a check-in from the current user today
-  app.get("/api/lm-checkins/pending", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
-
-      // ── Timezone-aware date + active window (all CT) ────────────────────────
-      // Using Intl API (built into Node.js) — no extra packages needed.
-      // America/Chicago handles CST (UTC-6) and CDT (UTC-5) automatically.
-      const ctStr = new Date().toLocaleString("en-US", { timeZone: "America/Chicago" });
-      const ctDate = new Date(ctStr);
-      const dow = ctDate.getDay(); // 0=Sun, 6=Sat
-
-      // Weekday guard: outside Mon–Fri there is no active check-in window.
-      const isWeekday = dow >= 1 && dow <= 5;
-
-      // today's date in CT (en-CA gives YYYY-MM-DD format)
-      const today = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "America/Chicago",
-        year: "numeric", month: "2-digit", day: "2-digit",
-      }).format(new Date());
-
-      // Active window is determined server-side so all clients see the same window
-      // regardless of browser timezone.
-      // Morning:   7:00 AM – 11:59 AM CT (covers the 7:30 AM cron alert)
-      // Afternoon: 3:30 PM – 11:59 PM CT (covers the 4:00 PM cron alert)
-      function getActiveWindow(): "morning" | "afternoon" | null {
-        if (!isWeekday) return null;
-        const minutes = ctDate.getHours() * 60 + ctDate.getMinutes();
-        if (minutes >= 7 * 60 && minutes < 12 * 60) return "morning";
-        if (minutes >= 15 * 60 + 30) return "afternoon";
-        return null;
-      }
-      const activeWindow = getActiveWindow();
-
-      // Find LMs directly reporting to this user
-      const lms = await storage.pool.query<{ id: string; name: string; role: string }>(
-        `SELECT id, name, role FROM users
-         WHERE manager_id = $1 AND organization_id = $2
-           AND role IN ('logistics_manager','logistics_coordinator')
-         ORDER BY name`,
-        [user.id, user.organizationId]
-      );
-      if (lms.rows.length === 0) return res.json({ lms: [], pending: [], activeWindow });
-
-      // Find already-submitted check-ins for today (CT date)
-      const done = await storage.pool.query<{ lm_id: string; check_type: string }>(
-        `SELECT lm_id, check_type FROM nam_lm_checkins
-         WHERE reviewer_id = $1 AND check_date = $2`,
-        [user.id, today]
-      );
-      const doneSet = new Set(done.rows.map(r => `${r.lm_id}:${r.check_type}`));
-
-      // Return pending items for ALL check types (not just the active window) so
-      // the client can show history and let the server's activeWindow field drive
-      // which one is currently actionable.
-      const checkTypes = ["morning", "afternoon"] as const;
-      const pending = lms.rows.flatMap(lm =>
-        checkTypes
-          .filter(t => !doneSet.has(`${lm.id}:${t}`))
-          .map(t => ({ lmId: lm.id, lmName: lm.name, lmRole: lm.role, checkType: t }))
-      );
-
-      res.json({ lms: lms.rows, pending, activeWindow });
-    } catch (err) {
-      res.status(500).json({ error: "Server error" });
-    }
-  });
-
-  // POST /api/lm-checkins  — submit check-in responses for one or more LMs
-  app.post("/api/lm-checkins", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
-
-      const { checkType, responses } = req.body as {
-        checkType: "morning" | "afternoon";
-        responses: {
-          lmId: string;
-          checkCallsDone?: boolean;
-          boardClean?: boolean;
-          checkoutDone?: boolean;
-          notes?: string;
-        }[];
-      };
-
-      if (!checkType || !Array.isArray(responses) || responses.length === 0) {
-        return res.status(400).json({ error: "checkType and responses required" });
-      }
-
-      const today = new Date().toISOString().slice(0, 10);
-      const inserted: number[] = [];
-
-      for (const r of responses) {
-        // Verify the LM reports to this user
-        const lmRow = await storage.pool.query(
-          `SELECT 1 FROM users WHERE id = $1 AND manager_id = $2 AND organization_id = $3
-             AND role IN ('logistics_manager','logistics_coordinator')`,
-          [r.lmId, user.id, user.organizationId]
-        );
-        if ((lmRow.rowCount ?? 0) === 0) continue;
-
-        const result = await storage.pool.query<{ id: number }>(
-          `INSERT INTO nam_lm_checkins
-             (reviewer_id, lm_id, organization_id, check_date, check_type,
-              check_calls_done, board_clean, checkout_done, notes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-           ON CONFLICT (reviewer_id, lm_id, check_date, check_type)
-           DO UPDATE SET check_calls_done=$6, board_clean=$7, checkout_done=$8, notes=$9
-           RETURNING id`,
-          [user.id, r.lmId, user.organizationId, today, checkType,
-           r.checkCallsDone ?? null, r.boardClean ?? null, r.checkoutDone ?? null, r.notes ?? null]
-        );
-        if (result.rows[0]?.id) inserted.push(result.rows[0].id);
-      }
-
-      // Mark today's lm_checkin notifications as read
-      await storage.pool.query(
-        `UPDATE notifications SET read = true
-         WHERE user_id = $1 AND type = 'lm_checkin' AND read = false`,
-        [user.id]
-      );
-
-      res.json({ ok: true, inserted });
-    } catch (err) {
-      res.status(500).json({ error: "Server error" });
-    }
-  });
-
-  // GET /api/lm-checkins/lm-summary/:userId  — check-in stats for a specific LM (from their perspective)
-  app.get("/api/lm-checkins/lm-summary/:userId", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
-
-      const { userId } = req.params as { userId: string };
-      const period = (qStr(req.query.period)) || "2weeks";
-
-      const isSelf = userId === user.id;
-      const isManager = ["admin","director","national_account_manager","account_manager","sales_director"].includes(user.role);
-      if (!isSelf && !isManager) return res.status(403).json({ error: "Access denied" });
-
-      const days = period === "month" ? 30 : period === "week" ? 7 : 14;
-      const fromDate = new Date(Date.now() - days * 24 * 3600000).toISOString().slice(0, 10);
-      const toDate = new Date().toISOString().slice(0, 10);
-
-      const rows = await storage.pool.query(
-        `SELECT c.id, c.check_date, c.check_type,
-                c.check_calls_done, c.board_clean, c.checkout_done, c.notes,
-                r.name AS reviewer_name
-         FROM nam_lm_checkins c
-         JOIN users r ON r.id = c.reviewer_id
-         WHERE c.lm_id = $1 AND c.organization_id = $2
-           AND c.check_date >= $3 AND c.check_date <= $4
-         ORDER BY c.check_date DESC, c.check_type DESC
-         LIMIT 60`,
-        [userId, user.organizationId, fromDate, toDate]
-      );
-
-      const all = rows.rows;
-      const morning = all.filter((r: any) => r.check_type === "morning");
-      const afternoon = all.filter((r: any) => r.check_type === "afternoon");
-
-      const pctOf = (arr: any[], field: string) => {
-        const withData = arr.filter((r: any) => r[field] !== null);
-        if (!withData.length) return null;
-        return Math.round(withData.filter((r: any) => r[field] === true).length / withData.length * 100);
-      };
-
-      res.json({
-        totalCheckins: all.length,
-        morningCount: morning.length,
-        afternoonCount: afternoon.length,
-        checkCallsDonePct: pctOf(morning, "check_calls_done"),
-        boardCleanMorningPct: pctOf(morning, "board_clean"),
-        boardCleanAfternoonPct: pctOf(afternoon, "board_clean"),
-        checkoutDonePct: pctOf(afternoon, "checkout_done"),
-        recentCheckins: all.slice(0, 14),
-      });
-    } catch (err) {
-      res.status(500).json({ error: "Server error" });
-    }
-  });
-
-  // GET /api/lm-checkins/history  — admin/director/NAM view of check-in history
-  app.get("/api/lm-checkins/history", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Unauthorized" });
-
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (!managerRoles.includes(user.role) && user.role !== "account_manager") {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const { from, to, reviewerId, lmId } = req.query as Record<string, string>;
-      const fromDate = from || new Date(Date.now() - 30 * 24 * 3600000).toISOString().slice(0, 10);
-      const toDate = to || new Date().toISOString().slice(0, 10);
-
-      if (!user.organizationId) {
-        return res.json([]);
-      }
-
-      let reviewerFilter = "";
-      const params: (string | boolean)[] = [user.organizationId, fromDate, toDate];
-
-      if (user.role === "account_manager") {
-        // AMs can only see their own submitted check-ins
-        params.push(user.id);
-        reviewerFilter = `AND c.reviewer_id = $${params.length}`;
-      } else if (reviewerId) {
-        params.push(reviewerId);
-        reviewerFilter = `AND c.reviewer_id = $${params.length}`;
-      }
-
-      let lmFilter = "";
-      if (lmId) {
-        params.push(lmId);
-        lmFilter = `AND c.lm_id = $${params.length}`;
-      }
-
-      const rows = await storage.pool.query(
-        `SELECT
-           c.id, c.check_date, c.check_type,
-           c.check_calls_done, c.board_clean, c.checkout_done, c.notes,
-           c.created_at,
-           r.id AS reviewer_id, r.name AS reviewer_name,
-           l.id AS lm_id, l.name AS lm_name
-         FROM nam_lm_checkins c
-         JOIN users r ON r.id = c.reviewer_id
-         JOIN users l ON l.id = c.lm_id
-         WHERE c.organization_id = $1
-           AND c.check_date >= $2 AND c.check_date <= $3
-           ${reviewerFilter} ${lmFilter}
-         ORDER BY c.check_date DESC, c.check_type DESC, r.name ASC, l.name ASC
-         LIMIT 500`,
-        params
-      );
-
-      res.json(rows.rows);
-    } catch (err) {
-      res.status(500).json({ error: "Server error" });
-    }
-  });
-
   // ── ZoomInfo Contact Search ───────────────────────────────────────────────
   app.get("/api/zoominfo/search-contacts", requireAuth, async (req, res) => {
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-    const companyName = qStr(req.query.companyName);
+    const companyName = req.query.companyName as string;
     if (!companyName?.trim()) return res.status(400).json({ error: "companyName is required" });
 
     const ziConfigured = !!(
-      process.env.ZOOMINFO_CLIENT_ID && process.env.ZOOMINFO_CLIENT_SECRET
+      process.env.ZOOMINFO_CLIENT_ID &&
+      process.env.ZOOMINFO_CLIENT_SECRET
     );
     if (!ziConfigured) {
       return res.status(503).json({ error: "ZoomInfo integration not configured. ZOOMINFO_CLIENT_ID and ZOOMINFO_CLIENT_SECRET are required." });
@@ -6880,9 +9942,9 @@ Respond with valid JSON only:
       const { searchZoomInfoContacts } = await import("./zoominfo.js");
       const contacts = await searchZoomInfoContacts(companyName.trim(), 25);
       res.json({ contacts });
-    } catch (error) {
-      console.error("[zoominfo] search error:", getErrorMessage(error));
-      res.status(502).json({ error: getErrorMessage(error) || "ZoomInfo search failed" });
+    } catch (error: any) {
+      console.error("[zoominfo] search error:", error?.message);
+      res.status(502).json({ error: error?.message || "ZoomInfo search failed" });
     }
   });
 
@@ -6890,87 +9952,13 @@ Respond with valid JSON only:
     const user = await getCurrentUser(req);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
     const configured = !!(
-      process.env.ZOOMINFO_CLIENT_ID && process.env.ZOOMINFO_CLIENT_SECRET
+      process.env.ZOOMINFO_CLIENT_ID &&
+      process.env.ZOOMINFO_CLIENT_SECRET
     );
-    const missing: string[] = [];
+    const missing = [];
     if (!process.env.ZOOMINFO_CLIENT_ID) missing.push("ZOOMINFO_CLIENT_ID");
     if (!process.env.ZOOMINFO_CLIENT_SECRET) missing.push("ZOOMINFO_CLIENT_SECRET");
     res.json({ configured, missing });
-  });
-
-  // Live auth probe — performs a real OAuth client_credentials POST against
-  // ZoomInfo and returns the full raw response so the user can paste the
-  // exact error back to ZoomInfo support if it's still failing after they
-  // regenerate a secret. Admin-only, never returns the secret itself.
-  app.post("/api/zoominfo/test-auth", requireAuth, async (req, res) => {
-    const user = await getCurrentUser(req);
-    if (!user) return res.status(401).json({ error: "Not authenticated" });
-    if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
-
-    const clientId = process.env.ZOOMINFO_CLIENT_ID;
-    const clientSecret = process.env.ZOOMINFO_CLIENT_SECRET;
-    if (!clientId || !clientSecret) {
-      const missing: string[] = [];
-      if (!clientId) missing.push("ZOOMINFO_CLIENT_ID");
-      if (!clientSecret) missing.push("ZOOMINFO_CLIENT_SECRET");
-      return res.json({
-        ok: false,
-        reason: "missing_credentials",
-        missing,
-      });
-    }
-
-    const startedAt = Date.now();
-    try {
-      const form = new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: clientId,
-        client_secret: clientSecret,
-      });
-      const resp = await fetch("https://api.zoominfo.com/oauth/token", {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: form.toString(),
-      });
-      const elapsedMs = Date.now() - startedAt;
-      const rawBody = await resp.text();
-      // Try to parse as JSON for nicer display, but always include the raw text.
-      let parsed: unknown = null;
-      try { parsed = JSON.parse(rawBody); } catch { /* not JSON */ }
-      const errorCode = (parsed && typeof parsed === "object" && parsed !== null
-        && "error" in parsed && typeof (parsed as Record<string, unknown>).error === "string")
-        ? (parsed as Record<string, string>).error : null;
-      const errorDescription = (parsed && typeof parsed === "object" && parsed !== null
-        && "error_description" in parsed
-        && typeof (parsed as Record<string, unknown>).error_description === "string")
-        ? (parsed as Record<string, string>).error_description : null;
-      // Surface the LAST 4 chars of the secret only so the admin can verify
-      // they're testing the secret they just rotated to. Never the full value.
-      const secretTail = clientSecret.slice(-4);
-      return res.json({
-        ok: resp.ok,
-        httpStatus: resp.status,
-        httpStatusText: resp.statusText,
-        elapsedMs,
-        clientIdTail: clientId.slice(-6),
-        secretTail,
-        errorCode,
-        errorDescription,
-        rawBody: rawBody.slice(0, 4000),
-        parsed: parsed && typeof parsed === "object" && !("access_token" in (parsed as object))
-          ? parsed : (resp.ok ? { received_token: true } : parsed),
-        endpoint: "https://api.zoominfo.com/oauth/token",
-        sentContentType: "application/x-www-form-urlencoded",
-        grantType: "client_credentials",
-      });
-    } catch (e) {
-      return res.json({
-        ok: false,
-        reason: "network_error",
-        error: e instanceof Error ? e.message : String(e),
-        elapsedMs: Date.now() - startedAt,
-      });
-    }
   });
 
   // ── Lane Attribution Endpoints ───────────────────────────────────────────
@@ -6978,7 +9966,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const attributions = await storage.getLaneAttributionsByContact(pStr(req.params.id));
+      const attributions = await storage.getLaneAttributionsByContact(req.params.id as string);
       res.json(attributions);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -6989,11 +9977,11 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const contact = await storage.getContact(pStr(req.params.id));
+      const contact = await storage.getContact(req.params.id as string);
       if (!contact) return res.status(404).json({ error: "Contact not found" });
       const { originCity, originState, destinationCity, destinationState, source, notes } = req.body;
       const attrib = await storage.createLaneAttribution({
-        contactId: pStr(req.params.id),
+        contactId: req.params.id as string,
         companyId: contact.companyId,
         originCity: originCity?.trim() || null,
         originState: originState?.trim()?.toUpperCase() || null,
@@ -7013,7 +10001,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const ok = await storage.deleteLaneAttribution(pStr(req.params.id));
+      const ok = await storage.deleteLaneAttribution(req.params.id as string);
       if (!ok) return res.status(404).json({ error: "Attribution not found" });
       res.json({ success: true });
     } catch (e: any) {
@@ -7021,111 +10009,33 @@ Respond with valid JSON only:
     }
   });
 
-  /*
-   * ── Relationship-Freight Attribution: How it works ────────────────────────────
-   *
-   * PRIORITY RULE (within-contact, exclusive OR):
-   *   If a contact has one or more explicit lane attributions (rows in
-   *   contact_lane_attributions), those are used exclusively via
-   *   computeFreightMetrics(). The contact's free-text lane strings (lanes/regions
-   *   fields from the RFP Coverage tab) are ignored for that contact.
-   *   Lane strings are only used as a fallback when a contact has zero explicit
-   *   attributions. This prevents the same loads being counted twice for a single
-   *   contact who has both sources configured.
-   *
-   * DEDUPLICATION RULE (cross-contact, per-company aggregate rollup only):
-   *   In the global /api/relationship-freight-summary endpoint, each financial row
-   *   is counted at most once per company. A per-company Set<number> (row index
-   *   tracker) is maintained across contact iterations. If two contacts at the same
-   *   company both match the same financial row, only the first contact's iteration
-   *   claims that row for the aggregate totals. Per-contact metrics shown in the
-   *   company portlet are always computed independently (unaffected by deduplication).
-   *
-   * COMPANY MATCHING:
-   *   Customer name in the financial row is matched against the company's primary
-   *   name and all aliases in the financialAlias field (comma-separated). Matching
-   *   is fuzzy (normalized, alphanumeric-only substring match). The company alias
-   *   field must be maintained manually when a customer's name in the TMS differs
-   *   from the CRM company name.
-   *
-   * UNATTRIBUTED LOADS:
-   *   After processing all contacts for a company, any financial rows belonging to
-   *   that company that were not matched by any contact are counted as
-   *   unattributedLoads / unattributedMargin and surfaced in the API response.
-   *
-   * KNOWN LIMITATIONS:
-   *   - Single-upload snapshot only: attribution is computed against the single
-   *     latest financial upload. Historical period comparison is not supported here.
-   *   - Relationship base reflects current state, not historical: if a contact's
-   *     base level changed after freight shipped, the old loads are attributed to
-   *     the new base level.
-   *   - Company alias must be maintained manually: if the TMS customer name does
-   *     not fuzzy-match the CRM name or any alias, loads will be unattributed.
-   *   - Lane strings shorter than 4 chars that are not state abbreviations, or
-   *     strings not in directional format (X → Y / X to Y), may not parse
-   *     correctly and could produce false matches.
-   */
-
-  // Returns matched row indices in addition to metrics — required for deduplication
-  // City alias lookup: maps common abbreviations/variants to normalized full city names
-  const CITY_ALIASES: Record<string, string> = {
-    "stl": "saintlouis",
-    "saintlouispark": "saintlouis",
-    "nyc": "newyork",
-    "newyorkcity": "newyork",
-    "la": "losangeles",
-    "philly": "philadelphia",
-    "chi": "chicago",
-    "kc": "kansascity",
-    "indy": "indianapolis",
-    "cincy": "cincinnati",
-    "cle": "cleveland",
-    "pgh": "pittsburgh",
-    "atl": "atlanta",
-    "dfw": "dallas",
-    "sfbay": "sanfrancisco",
-    "sf": "sanfrancisco",
-  };
-
-  function normCity(raw: string): string {
-    const n = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
-    return CITY_ALIASES[n] ?? n;
-  }
-
+  // ── Helper: compute freight metrics for a set of lane attributions against financial rows ─
   function computeFreightMetrics(
     rows: any[],
     cols: any,
     companyNames: string[], // normalized company name + aliases
-    attributions: { originCity?: string | null; originState?: string | null; destinationCity?: string | null; destinationState?: string | null }[],
-    skipIndices?: Set<number>
-  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number; matchedIndices: Set<number> } {
+    attributions: { originCity?: string | null; originState?: string | null; destinationCity?: string | null; destinationState?: string | null }[]
+  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number } {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
     const companyNorms = companyNames.map(n => norm(n));
     let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
-    const matchedIndices = new Set<number>();
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
+    for (const row of rows) {
       const custRaw = getCustomerFromRow(row, cols);
       const custNorm = norm(custRaw);
       const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
       if (!isCompany) continue;
-      const origCity = normCity(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
+      const origCity = norm(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
       const origState = norm(String(row[cols.shipperState] || row[cols.originState] || ""));
-      const destCity = normCity(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
+      const destCity = norm(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
       const destState = norm(String(row[cols.consigneeState] || row[cols.destinationState] || ""));
       const matched = attributions.some(a => {
-        // Phase 2: exact normalized city match after alias resolution (no substring/prefix matching)
-        const normOrigCity = a.originCity ? normCity(a.originCity) : "";
-        const normDestCity = a.destinationCity ? normCity(a.destinationCity) : "";
-        const origCityOk = !a.originCity || origCity === normOrigCity;
-        const origStateOk = !a.originState || origState === norm(a.originState);
-        const destCityOk = !a.destinationCity || destCity === normDestCity;
-        const destStateOk = !a.destinationState || destState === norm(a.destinationState);
+        const origCityOk = !a.originCity || origCity.includes(norm(a.originCity)) || norm(a.originCity).includes(origCity.substring(0, 4));
+        const origStateOk = !a.originState || origState === norm(a.originState) || origCity.includes(norm(a.originState));
+        const destCityOk = !a.destinationCity || destCity.includes(norm(a.destinationCity)) || norm(a.destinationCity).includes(destCity.substring(0, 4));
+        const destStateOk = !a.destinationState || destState === norm(a.destinationState) || destCity.includes(norm(a.destinationState));
         return origCityOk && origStateOk && destCityOk && destStateOk;
       });
       if (!matched) continue;
-      matchedIndices.add(i);
-      if (skipIndices?.has(i)) continue;
       const marginK = cols.marginDollar ?? "Margin $";
       const rowMargin = parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
       const orderTypeK = cols.orderType ?? "Order Type";
@@ -7135,36 +10045,29 @@ Respond with valid JSON only:
       margin += rowMargin;
       if (isSpot) spotLoads++; else contractedLoads++;
     }
-    return { loads, margin, contractedLoads, spotLoads, matchedIndices };
+    return { loads, margin, contractedLoads, spotLoads };
   }
 
   // Compute freight from a contact's free-text lanes/regions arrays (coverage tab data)
-  // Returns matched row indices in addition to metrics — required for deduplication
-  // Phase 2 rules:
-  //   - State-only matchers (no destination, 2-3 char abbreviation) are "broad".
-  //   - Broad matchers are INCLUDED when they are the contact's sole attribution method.
-  //   - Broad matchers are EXCLUDED when more specific (non-broad) matchers also exist.
-  //   - City matching uses exact normalized name after alias resolution.
   function computeFreightFromContactLaneStrings(
     rows: any[],
     cols: any,
     companyNames: string[],
     contactLanes: string[],
-    contactRegions: string[],
-    skipIndices?: Set<number>
-  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number; matchedIndices: Set<number>; hasBroadStateOnly: boolean } {
+    contactRegions: string[]
+  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number } {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
     const companyNorms = companyNames.map(n => norm(n));
     let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
-    const matchedIndices = new Set<number>();
 
     // Convert each lane/region string into a structured matcher
-    type LaneMatcher = { originCity?: string; originState?: string; destCity?: string; destState?: string; isBroadStateOnly: boolean };
+    type LaneMatcher = { originCity?: string; originState?: string; destCity?: string; destState?: string };
     const matchers: LaneMatcher[] = [];
 
     for (const term of [...(contactLanes || []), ...(contactRegions || [])]) {
       const t = term.trim();
       if (!t) continue;
+      // Skip purely descriptive text (contains spaces and is not a direction) unless it's a city name
       const dirMatch = t.match(/^(.+?)(?:→|->|\s+to\s+)(.+)$/i);
       if (dirMatch) {
         const from = dirMatch[1].trim();
@@ -7174,58 +10077,40 @@ Respond with valid JSON only:
           originCity: from.length > 3 ? from : undefined,
           destState: to.length <= 3 && /^[a-zA-Z]+$/.test(to) ? to : undefined,
           destCity: to.length > 3 ? to : undefined,
-          isBroadStateOnly: false, // directional = specific enough
         });
         continue;
       }
-      // State abbreviation (2-3 chars, letters only) with no destination = broad
+      // State abbreviation (2-3 chars, letters only)
       if (t.length <= 3 && /^[a-zA-Z]+$/.test(t)) {
-        matchers.push({ originState: t, isBroadStateOnly: true });
+        matchers.push({ originState: t });
         continue;
       }
-      // City / region name — specific
-      matchers.push({ originCity: t, isBroadStateOnly: false });
+      // City / region name
+      matchers.push({ originCity: t });
     }
 
-    if (matchers.length === 0) return { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0, matchedIndices, hasBroadStateOnly: false };
+    if (matchers.length === 0) return { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
-    const hasNonBroad = matchers.some(m => !m.isBroadStateOnly);
-    const hasBroadStateOnly = matchers.some(m => m.isBroadStateOnly) && !hasNonBroad;
-
-    // Phase 2: use only specific matchers when both types exist.
-    // When ONLY broad matchers exist (sole attribution method), allow them.
-    const effectiveMatchers = hasNonBroad
-      ? matchers.filter(m => !m.isBroadStateOnly) // drop broad when more specific ones present
-      : matchers; // sole attribution = allow broad
-
-    if (effectiveMatchers.length === 0) return { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0, matchedIndices, hasBroadStateOnly };
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
+    for (const row of rows) {
       const custRaw = getCustomerFromRow(row, cols);
       const custNorm = norm(custRaw);
       const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
       if (!isCompany) continue;
 
-      const origCity = normCity(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
+      const origCity = norm(String(row[cols.shipperCity] || row[cols.origin] || "").split(",")[0]);
       const origState = norm(String(row[cols.shipperState] || row[cols.originState] || ""));
-      const dstCity = normCity(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
+      const dstCity = norm(String(row[cols.consigneeCity] || row[cols.destination] || "").split(",")[0]);
       const dstState = norm(String(row[cols.consigneeState] || row[cols.destinationState] || ""));
 
-      const matched = effectiveMatchers.some(m => {
-        // Phase 2: exact normalized city match after alias resolution
-        const normOrigCity = m.originCity ? normCity(m.originCity) : "";
-        const normDstCity = m.destCity ? normCity(m.destCity) : "";
-        const origCityOk = !m.originCity || origCity === normOrigCity;
+      const matched = matchers.some(m => {
+        const origCityOk = !m.originCity || origCity.includes(norm(m.originCity)) || norm(m.originCity).includes(origCity.substring(0, 4));
         const origStateOk = !m.originState || origState === norm(m.originState);
-        const destCityOk = !m.destCity || dstCity === normDstCity;
+        const destCityOk = !m.destCity || dstCity.includes(norm(m.destCity)) || norm(m.destCity).includes(dstCity.substring(0, 4));
         const destStateOk = !m.destState || dstState === norm(m.destState);
         return origCityOk && origStateOk && destCityOk && destStateOk;
       });
 
       if (!matched) continue;
-      matchedIndices.add(i);
-      if (skipIndices?.has(i)) continue;
       const marginK = cols.marginDollar ?? "Margin $";
       const rowMargin = parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
       const orderTypeK = cols.orderType ?? "Order Type";
@@ -7234,26 +10119,23 @@ Respond with valid JSON only:
       margin += rowMargin;
       if (isSpot) spotLoads++; else contractedLoads++;
     }
-    return { loads, margin, contractedLoads, spotLoads, matchedIndices, hasBroadStateOnly };
+    return { loads, margin, contractedLoads, spotLoads };
   }
 
-  // All company freight (no lane filtering) — used to compute total company row indices for unattributed calc
+  // All company freight (no lane filtering) — used when contacts have no lane attributions
   function computeCompanyFreightTotal(
     rows: any[],
     cols: any,
     companyNames: string[]
-  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number; allIndices: Set<number> } {
+  ): { loads: number; margin: number; contractedLoads: number; spotLoads: number } {
     const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
     const companyNorms = companyNames.map(n => norm(n));
     let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
-    const allIndices = new Set<number>();
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
+    for (const row of rows) {
       const custRaw = getCustomerFromRow(row, cols);
       const custNorm = norm(custRaw);
       const isCompany = companyNorms.some(cn => cn.length > 3 && (custNorm.includes(cn) || cn.includes(custNorm)));
       if (!isCompany) continue;
-      allIndices.add(i);
       const marginK = cols.marginDollar ?? "Margin $";
       const rowMargin = parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
       const orderTypeK = cols.orderType ?? "Order Type";
@@ -7262,18 +10144,7 @@ Respond with valid JSON only:
       margin += rowMargin;
       if (isSpot) spotLoads++; else contractedLoads++;
     }
-    return { loads, margin, contractedLoads, spotLoads, allIndices };
-  }
-
-  // ── Shared normBase utility used by all relationship-freight endpoints ─────
-  function normRelationshipBase(raw: string | null | undefined): string {
-    if (!raw) return "unknown";
-    const v = raw.trim().toLowerCase();
-    if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
-    if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
-    if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
-    if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
-    return "unknown";
+    return { loads, margin, contractedLoads, spotLoads };
   }
 
   // ── Relationship Freight Summary — company-level ─────────────────────────
@@ -7281,7 +10152,7 @@ Respond with valid JSON only:
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const company = await storage.getCompanyInOrg(pStr(req.params.id), user.organizationId);
+      const company = await storage.getCompanyInOrg(req.params.id as string, user.organizationId);
       if (!company) return res.status(404).json({ error: "Company not found" });
 
       const [contacts, allAttributions, upload] = await Promise.all([
@@ -7291,105 +10162,49 @@ Respond with valid JSON only:
       ]);
 
       const companyNames = [company.name, ...(company.financialAlias ? company.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
-      const rawRows: any[] = (upload?.rows ?? []) as any[];
+      const rawRows: any[] = upload?.rows ?? [];
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
 
       const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
-      // Phase 1: base rank for tie-breaking — higher rank wins (hr > 3rd > 2nd > 1st > unknown)
-      const BASE_RANK: Record<string, number> = { hr: 4, "3rd": 3, "2nd": 2, "1st": 1, unknown: 0 };
 
-      // Phase 1: sort contacts by base rank descending so highest-base contacts claim lanes first.
-      // Secondary sort by id ensures fully deterministic same-base ordering.
-      const sortedContacts = [...contacts].sort((a, b) => {
-        const rankA = BASE_RANK[normRelationshipBase(a.relationshipBase)] ?? 0;
-        const rankB = BASE_RANK[normRelationshipBase(b.relationshipBase)] ?? 0;
-        if (rankB !== rankA) return rankB - rankA;
-        // Secondary stable sort by id ensures same-base contacts always process in the same order
-        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-      });
-
-      // First pass: compute which row indices each contact MATCHES (ignoring dedup) and
-      // which indices are claimed by a higher-ranked contact — used for "shared lane" badge.
-      // Maps contactId -> Set of matched indices (pre-dedup, for unattributed calc)
-      const contactMatchedIndices: Map<string, Set<number>> = new Map();
-      const allContactsMatchedIndices = new Set<number>();
-
-      // Build per-contact match data sorted by base rank (tie-breaking: highest base claims first)
-      for (const contact of sortedContacts) {
-        const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
-        const hasAttribs = contactAttribs.length > 0;
-        const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
-        const hasNoAttribution = !hasAttribs && !hasLaneStrings;
-
-        if (rawRows.length > 0 && !hasNoAttribution) {
-          let matched: Set<number>;
-          if (hasAttribs) {
-            const f = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
-            matched = f.matchedIndices;
-          } else {
-            const f = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
-            matched = f.matchedIndices;
-          }
-          contactMatchedIndices.set(contact.id, matched);
-          matched.forEach(idx => allContactsMatchedIndices.add(idx));
-        }
+      function normalizeBase(raw: string | null | undefined): string {
+        if (!raw) return "unknown";
+        const v = raw.trim().toLowerCase();
+        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
+        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
+        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
+        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
+        return "unknown";
       }
 
-      // Second pass: build final contact results using the sorted (tie-breaking) order.
-      // Each contact's freight = matched indices NOT already claimed by a higher-rank contact.
-      const claimedByHigher = new Set<number>();
-      const contactFreightMap: Map<string, { loads: number; margin: number; contractedLoads: number; spotLoads: number; sharedLane: boolean }> = new Map();
-      for (const contact of sortedContacts) {
-        const matchedForContact = contactMatchedIndices.get(contact.id) ?? new Set<number>();
-        let loads = 0, margin = 0, contractedLoads = 0, spotLoads = 0;
-        let sharedLane = false;
-        const marginK2 = cols.marginDollar ?? "Margin $";
-        const orderTypeK = cols.orderType ?? "Order Type";
-        for (const idx of matchedForContact) {
-          if (claimedByHigher.has(idx)) {
-            sharedLane = true; // this index was won by a higher-ranked contact
-            continue;
-          }
-          const row = rawRows[idx];
-          const rowMargin = parseFloat(String(row[marginK2] || 0).replace(/[$,]/g, "")) || 0;
-          const isSpot = String(row[orderTypeK] || "").toLowerCase().includes("spot");
-          loads++;
-          margin += rowMargin;
-          if (isSpot) spotLoads++; else contractedLoads++;
-        }
-        // Mark all this contact's matched indices as claimed (so lower-rank contacts show sharedLane)
-        matchedForContact.forEach(idx => claimedByHigher.add(idx));
-        contactFreightMap.set(contact.id, { loads, margin, contractedLoads, spotLoads, sharedLane });
-      }
-
-      // seenForCompany tracks every row index claimed by any contact (for unattributed + total calc).
-      // claimedByHigher already accumulates all matched indices across all contacts by the end of
-      // the second pass — alias it here so the unattributed/total calc below can use it directly.
-      const seenForCompany = claimedByHigher;
-
-      const contactResults = sortedContacts
+      // Include contacts that have explicit lane attributions OR coverage lane strings (lanes/regions fields)
+      const contactResults = contacts
         .map(contact => {
+          if (!contact.relationshipBase || !contact.relationshipBase.trim()) return null;
           const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
           const hasAttribs = contactAttribs.length > 0;
           const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
-          const hasNoAttribution = !hasAttribs && !hasLaneStrings;
-          const attributionSource: "explicit" | "estimate" | "none" =
-            hasAttribs ? "explicit" : hasLaneStrings ? "estimate" : "none";
+          if (!hasAttribs && !hasLaneStrings) return null;
 
-          // Check broad state-only warning for fallback lane strings.
-          // Only warn if: (1) all matchers are state-only broad, AND (2) matched count > 0,
-          // AND (3) matched rows exceed 20% of the company's total freight.
-          let hasBroadLaneWarning = false;
-          if (!hasAttribs && hasLaneStrings && rawRows.length > 0) {
-            const check = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
-            if (check.hasBroadStateOnly && check.matchedIndices.size > 0) {
-              const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
-              hasBroadLaneWarning = companyTotal.allIndices.size > 0 && (check.matchedIndices.size / companyTotal.allIndices.size) > 0.2;
+          let freight = { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
+          if (rawRows.length > 0) {
+            if (hasAttribs) {
+              const f1 = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
+              freight.loads += f1.loads;
+              freight.margin += f1.margin;
+              freight.contractedLoads += f1.contractedLoads;
+              freight.spotLoads += f1.spotLoads;
+            }
+            if (hasLaneStrings) {
+              const f2 = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
+              freight.loads += f2.loads;
+              freight.margin += f2.margin;
+              freight.contractedLoads += f2.contractedLoads;
+              freight.spotLoads += f2.spotLoads;
             }
           }
 
-          const freight = contactFreightMap.get(contact.id) ?? { loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0, sharedLane: false };
-          const base = normRelationshipBase(contact.relationshipBase);
+          const base = normalizeBase(contact.relationshipBase);
           const marginPerLoad = freight.loads > 0 ? Math.round((freight.margin / freight.loads) * 100) / 100 : null;
           const contractedPct = freight.loads > 0 ? Math.round(freight.contractedLoads / freight.loads * 1000) / 10 : null;
           const spotPct = freight.loads > 0 ? Math.round(freight.spotLoads / freight.loads * 1000) / 10 : null;
@@ -7401,15 +10216,8 @@ Respond with valid JSON only:
             baseLabel: BASE_LABELS[base] || base,
             attributionCount: contactAttribs.length,
             coverageLaneCount: (contact.lanes?.length || 0) + (contact.regions?.length || 0),
-            hasNoAttribution,
-            attributionSource,
-            hasBroadLaneWarning,
-            sharedLane: freight.sharedLane,
             attributions: contactAttribs,
-            loads: freight.loads,
-            margin: freight.margin,
-            contractedLoads: freight.contractedLoads,
-            spotLoads: freight.spotLoads,
+            ...freight,
             marginPerLoad,
             contractedPct,
             spotPct,
@@ -7417,31 +10225,7 @@ Respond with valid JSON only:
         })
         .filter(Boolean);
 
-      // Compute deduplicated totals + unattributed loads (company rows not matched by any contact).
-      // seenForCompany now tracks exactly which rows were claimed (priority-ordered), so the
-      // sum of per-contact claimed loads equals totalLoads and unattributed is accurate.
-      let unattributedLoads = 0;
-      let unattributedMargin = 0;
-      let totalLoads = 0;
-      let totalMargin = 0;
-      if (rawRows.length > 0) {
-        const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
-        const marginK = cols.marginDollar ?? "Margin $";
-        for (const idx of companyTotal.allIndices) {
-          if (!seenForCompany.has(idx)) {
-            unattributedLoads++;
-            unattributedMargin += parseFloat(String(rawRows[idx][marginK] || 0).replace(/[$,]/g, "")) || 0;
-          }
-        }
-        // Deduplicated total: rows claimed by at least one contact
-        for (const idx of seenForCompany) {
-          const marginK2 = cols.marginDollar ?? "Margin $";
-          totalLoads++;
-          totalMargin += parseFloat(String(rawRows[idx][marginK2] || 0).replace(/[$,]/g, "")) || 0;
-        }
-      }
-
-      res.json({ contacts: contactResults, companyId: company.id, unattributedLoads, unattributedMargin, totalLoads, totalMargin });
+      res.json({ contacts: contactResults, companyId: company.id });
     } catch (e: any) {
       console.error("[relationship-freight-summary/company]", e);
       res.status(500).json({ error: e.message });
@@ -7454,12 +10238,12 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const userIsAdmin = isAdmin(user);
+      const isAdmin = user.role === "admin";
       const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
 
       // Get visible company IDs based on role
       let visibleCompanyIds: string[] = [];
-      if (userIsAdmin) {
+      if (isAdmin) {
         const allCompanies = await storage.getCompanies(user.organizationId);
         visibleCompanyIds = allCompanies.map(c => c.id);
       } else if (isDirector) {
@@ -7487,137 +10271,61 @@ Respond with valid JSON only:
         companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
       }
 
-      // Bulk load contacts + lane attributions (single queries, no N+1)
+      // Load contacts + lane attributions for all visible companies (bulk queries)
       const allContacts = await storage.getContactsByCompanyIds(visibleCompanyIds);
-      const allAttributionsList = await storage.getLaneAttributionsByCompanyIds(visibleCompanyIds);
+      const allAttributionsList = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
 
-      const rawRows: any[] = (upload?.rows ?? []) as any[];
+      const rawRows: any[] = upload?.rows ?? [];
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
-      const marginK = cols.marginDollar ?? "Margin $";
 
-      const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
+      const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "home": "Home Run" };
       const BASE_ORDER = ["1st", "2nd", "3rd", "hr"];
 
-      // ── Classify companies as "worked" vs "unworked" ────────────────────────
-      // A company is "worked" if at least one of its contacts has a relationship base set.
-      // "Unworked" companies have freight but no mapped relationship base at all.
-      const workedCompanyIds = new Set<string>(
-        allContacts.filter(c => c.relationshipBase && c.relationshipBase.trim()).map(c => c.companyId)
-      );
-      const unworkedCompanyIds = visibleCompanyIds.filter(id => !workedCompanyIds.has(id));
-
-      // ── Group by relationship base (worked companies only) ───────────────────
+      // Group by relationship base
       const grouped: Record<string, { contacts: number; loads: number; margin: number; contractedLoads: number; spotLoads: number }> = {};
       for (const base of BASE_ORDER) grouped[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
       grouped["unknown"] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
-      // Phase 1: base rank for tie-breaking — higher rank wins (hr > 3rd > 2nd > 1st > unknown)
-      const DASH_BASE_RANK: Record<string, number> = { hr: 4, "3rd": 3, "2nd": 2, "1st": 1, unknown: 0 };
-
-      // Phase 1: sort contacts by base rank descending (per company) so highest-rank contacts
-      // claim shared lanes first — makes attribution deterministic and consistent with company portlet.
-      const sortedAllContacts = [...allContacts].sort((a, b) => {
-        const rankA = DASH_BASE_RANK[normRelationshipBase(a.relationshipBase)] ?? 0;
-        const rankB = DASH_BASE_RANK[normRelationshipBase(b.relationshipBase)] ?? 0;
-        if (rankB !== rankA) return rankB - rankA;
-        // Secondary stable sort by id for fully deterministic same-base ordering
-        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-      });
-
-      // Per-company deduplication set: tracks row indices already counted for each company's aggregate
-      const companySeenIndices: Record<string, Set<number>> = {};
-
-      // Count contacts per base first (independent of freight)
-      for (const contact of allContacts) {
-        if (!workedCompanyIds.has(contact.companyId)) continue;
-        const base = normRelationshipBase(contact.relationshipBase);
-        grouped[base].contacts++;
+      function normBase(raw: string | null | undefined): string {
+        if (!raw) return "unknown";
+        const v = raw.trim().toLowerCase();
+        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
+        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
+        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
+        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
+        return "unknown";
       }
 
-      // Worked companies: attribute freight to each contact's relationship base (sorted by rank)
-
-      for (const contact of sortedAllContacts) {
-        if (!workedCompanyIds.has(contact.companyId)) continue; // skip unworked company contacts
-
+      for (const contact of allContacts) {
+        if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
         const contactAttribs = allAttributionsList.filter(a => a.contactId === contact.id);
         const hasAttribs = contactAttribs.length > 0;
         const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
+        if (!hasAttribs && !hasLaneStrings) continue;
 
-        const base = normRelationshipBase(contact.relationshipBase);
+        const base = normBase(contact.relationshipBase);
+        grouped[base].contacts++;
 
-        if (rawRows.length > 0 && (hasAttribs || hasLaneStrings)) {
+        if (rawRows.length > 0) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
-          if (!companySeenIndices[contact.companyId]) companySeenIndices[contact.companyId] = new Set<number>();
-          const seenForCompany = companySeenIndices[contact.companyId];
-
-          // PRIORITY RULE: explicit attributions take precedence; lane strings are only a fallback
           if (hasAttribs) {
-            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs, seenForCompany);
+            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
             grouped[base].loads += m.loads;
             grouped[base].margin += m.margin;
             grouped[base].contractedLoads += m.contractedLoads;
             grouped[base].spotLoads += m.spotLoads;
-            m.matchedIndices.forEach(idx => seenForCompany.add(idx));
-          } else {
-            // Phase 2: broad state-only lane strings are INCLUDED when they are the contact's sole
-            // attribution method; they are excluded only when more specific matchers also exist.
-            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || [], seenForCompany);
+          }
+          if (hasLaneStrings) {
+            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
             grouped[base].loads += m.loads;
             grouped[base].margin += m.margin;
             grouped[base].contractedLoads += m.contractedLoads;
             grouped[base].spotLoads += m.spotLoads;
-            m.matchedIndices.forEach(idx => seenForCompany.add(idx));
           }
         }
       }
 
-      // ── Unassigned contacts (worked company, has lanes, but no base set) ─────
-      let totalUnassignedContacts = 0;
-      for (const contact of allContacts) {
-        if (!workedCompanyIds.has(contact.companyId)) continue;
-        const base = normRelationshipBase(contact.relationshipBase);
-        const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
-        const hasAttribs = allAttributionsList.some(a => a.contactId === contact.id);
-        if (base === "unknown" && (hasLaneStrings || hasAttribs)) totalUnassignedContacts++;
-      }
-
-      // ── Unworked Accounts freight ────────────────────────────────────────────
-      // Compute ALL freight for unworked companies (no lane filtering needed — entire company is uncovered)
-      let unworkedLoads = 0;
-      let unworkedMargin = 0;
-      const unworkedCompanyCount = unworkedCompanyIds.length;
-      if (rawRows.length > 0) {
-        for (const companyId of unworkedCompanyIds) {
-          const companyNames = companyNameMap[companyId] ?? [];
-          if (companyNames.length === 0) continue;
-          const total = computeCompanyFreightTotal(rawRows, cols, companyNames);
-          unworkedLoads += total.loads;
-          unworkedMargin += total.margin; // reuse already-computed margin (avoids double parsing)
-        }
-      }
-
-      // ── Unattributed loads (worked companies, lanes not covered by any contact) ──
-      let totalUnattributedLoads = 0;
-      let totalUnattributedMargin = 0;
-      if (rawRows.length > 0) {
-        for (const companyId of visibleCompanyIds) {
-          if (!workedCompanyIds.has(companyId)) continue; // unworked companies are handled separately
-          const companyNames = companyNameMap[companyId] ?? [];
-          if (companyNames.length === 0) continue;
-          const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
-          const seen = companySeenIndices[companyId] ?? new Set<number>();
-          for (const idx of companyTotal.allIndices) {
-            if (!seen.has(idx)) {
-              totalUnattributedLoads++;
-              totalUnattributedMargin += parseFloat(String(rawRows[idx][marginK] || 0).replace(/[$,]/g, "")) || 0;
-            }
-          }
-        }
-      }
-
-      // ── Build summary rows ───────────────────────────────────────────────────
-      const summaryBases = [...BASE_ORDER, ...(grouped["unknown"].contacts > 0 ? ["unknown"] : [])];
-      const summary = summaryBases.map(base => ({
+      const summary = [...BASE_ORDER, ...(grouped["unknown"].contacts > 0 ? ["unknown"] : [])].map(base => ({
         base,
         label: BASE_LABELS[base] || "Unassigned",
         ...grouped[base],
@@ -7636,375 +10344,9 @@ Respond with valid JSON only:
       const totalMargin = summary.reduce((s, r) => s + r.margin, 0);
       const totalContacts = summary.reduce((s, r) => s + r.contacts, 0);
 
-      res.json({
-        summary,
-        totalContacts,
-        totalLoads,
-        totalMargin,
-        unattributedLoads: totalUnattributedLoads,
-        unattributedMargin: totalUnattributedMargin,
-        unworkedAccounts: unworkedCompanyCount,
-        unworkedLoads,
-        unworkedMargin,
-        unassignedContacts: totalUnassignedContacts,
-      });
+      res.json({ summary, totalContacts, totalLoads, totalMargin });
     } catch (e: any) {
       console.error("[relationship-freight-summary]", e);
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  // ── Freight Attribution Triage Worklist (Task #783) ─────────────────────────
-  // Ranked, margin-sorted list of every attribution gap across the rep's book:
-  //   • unworked_account     — company has freight but no contact has a base
-  //   • unattributed_lane    — worked company, loads not claimed by any contact
-  //   • unassigned_contact   — contact has lanes/attribs but no relationship base
-  // Reuses the helpers from the relationship-freight summary endpoints so the
-  // bucket math stays identical: a row that disappears from this worklist also
-  // disappears from the corresponding callout on the dashboard portlet.
-  app.get("/api/freight-attribution-triage", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-
-      const userIsAdmin = isAdmin(user);
-      const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
-
-      let visibleCompanyIds: string[] = [];
-      if (userIsAdmin) {
-        const all = await storage.getCompanies(user.organizationId);
-        visibleCompanyIds = all.map(c => c.id);
-      } else if (isDirector) {
-        const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
-        const repIds = [user.id, ...teamIds];
-        const all = await storage.getCompanies(user.organizationId);
-        visibleCompanyIds = all.filter(c => repIds.includes(c.assignedTo ?? "")).map(c => c.id);
-      } else {
-        const all = await storage.getCompanies(user.organizationId);
-        visibleCompanyIds = all.filter(c => c.assignedTo === user.id).map(c => c.id);
-      }
-
-      if (visibleCompanyIds.length === 0) {
-        return res.json({ rows: [], totalMargin: 0, totalLoads: 0, counts: { unworked_account: 0, unattributed_lane: 0, unassigned_contact: 0 } });
-      }
-
-      const [allCompanies, allContacts, allAttributions, upload] = await Promise.all([
-        storage.getCompaniesByIds(visibleCompanyIds, user.organizationId),
-        storage.getContactsByCompanyIds(visibleCompanyIds),
-        storage.getLaneAttributionsByCompanyIds(visibleCompanyIds),
-        storage.getLatestFinancialUploadForOrg(user.organizationId),
-      ]);
-
-      const companyById: Record<string, typeof allCompanies[number]> = {};
-      const companyNameMap: Record<string, string[]> = {};
-      for (const c of allCompanies) {
-        companyById[c.id] = c;
-        companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
-      }
-
-      const rawRows: any[] = (upload?.rows ?? []) as any[];
-      const cols = rawRows.length ? resolveColumns(rawRows) : ({} as any);
-      const marginK = cols.marginDollar ?? "Margin $";
-
-      const workedCompanyIds = new Set<string>(
-        allContacts.filter(c => c.relationshipBase && c.relationshipBase.trim()).map(c => c.companyId)
-      );
-
-      const TRIAGE_BASE_RANK: Record<string, number> = { hr: 4, "3rd": 3, "2nd": 2, "1st": 1, unknown: 0 };
-      const sortedAllContacts = [...allContacts].sort((a, b) => {
-        const ra = TRIAGE_BASE_RANK[normRelationshipBase(a.relationshipBase)] ?? 0;
-        const rb = TRIAGE_BASE_RANK[normRelationshipBase(b.relationshipBase)] ?? 0;
-        if (rb !== ra) return rb - ra;
-        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
-      });
-
-      const contactsByCompany: Record<string, typeof allContacts> = {};
-      for (const c of allContacts) {
-        if (!contactsByCompany[c.companyId]) contactsByCompany[c.companyId] = [];
-        contactsByCompany[c.companyId].push(c);
-      }
-
-      type TriageRow =
-        | {
-            id: string;
-            type: "unworked_account";
-            companyId: string;
-            companyName: string;
-            margin: number;
-            loads: number;
-            contacts: Array<{ id: string; name: string; title: string | null; relationshipBase: string | null }>;
-          }
-        | {
-            id: string;
-            type: "unattributed_lane";
-            companyId: string;
-            companyName: string;
-            margin: number;
-            loads: number;
-            originCity: string | null;
-            originState: string | null;
-            destinationCity: string | null;
-            destinationState: string | null;
-            originLabel: string;
-            destinationLabel: string;
-            reason: "no_coverage" | "no_matching_lane" | "broad_matcher_suppressed";
-            workedContacts: Array<{ id: string; name: string; title: string | null; relationshipBase: string }>;
-          }
-        | {
-            id: string;
-            type: "unassigned_contact";
-            companyId: string;
-            companyName: string;
-            margin: number;
-            loads: number;
-            contactId: string;
-            contactName: string;
-            contactTitle: string | null;
-          };
-
-      const rows: TriageRow[] = [];
-
-      // ── Unworked accounts ────────────────────────────────────────────────────
-      if (rawRows.length > 0) {
-        for (const companyId of visibleCompanyIds) {
-          if (workedCompanyIds.has(companyId)) continue;
-          const co = companyById[companyId];
-          if (!co) continue;
-          const names = companyNameMap[companyId] ?? [];
-          if (names.length === 0) continue;
-          const total = computeCompanyFreightTotal(rawRows, cols, names);
-          if (total.loads === 0) continue;
-          const cs = (contactsByCompany[companyId] ?? []).map(c => ({
-            id: c.id,
-            name: c.name,
-            title: c.title ?? null,
-            relationshipBase: c.relationshipBase ?? null,
-          }));
-          rows.push({
-            id: `unworked:${companyId}`,
-            type: "unworked_account",
-            companyId,
-            companyName: co.name,
-            margin: total.margin,
-            loads: total.loads,
-            contacts: cs,
-          });
-        }
-      }
-
-      // ── Unattributed lanes (worked companies) ────────────────────────────────
-      // Same priority-claim logic as the dashboard endpoint: highest base claims
-      // first, leftover indices are unattributed.
-      if (rawRows.length > 0) {
-        const companySeenIndices: Record<string, Set<number>> = {};
-        const companyHasAnyLaneData: Record<string, boolean> = {};
-        // States covered by a contact's broad state-only matchers that were suppressed
-        // by that same contact's more-specific lane matchers (Phase 2 rule). When loads
-        // remain unattributed AND fall in one of these states, we surface the
-        // "broad_matcher_suppressed" reason.
-        const companySuppressedBroadStates: Record<string, Set<string>> = {};
-        const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
-        for (const contact of sortedAllContacts) {
-          if (!workedCompanyIds.has(contact.companyId)) continue;
-          const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
-          const hasAttribs = contactAttribs.length > 0;
-          const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
-          if (!hasAttribs && !hasLaneStrings) continue;
-          companyHasAnyLaneData[contact.companyId] = true;
-          const names = companyNameMap[contact.companyId] ?? [];
-          if (names.length === 0) continue;
-          if (!companySeenIndices[contact.companyId]) companySeenIndices[contact.companyId] = new Set<number>();
-          const seen = companySeenIndices[contact.companyId];
-          if (hasAttribs) {
-            const m = computeFreightMetrics(rawRows, cols, names, contactAttribs, seen);
-            m.matchedIndices.forEach(i => seen.add(i));
-          } else {
-            const m = computeFreightFromContactLaneStrings(rawRows, cols, names, contact.lanes || [], contact.regions || [], seen);
-            m.matchedIndices.forEach(i => seen.add(i));
-            // Detect broad-state matchers that were suppressed by more-specific
-            // matchers on the same contact (mirrors Phase 2 logic in
-            // computeFreightFromContactLaneStrings).
-            const terms = [...(contact.lanes || []), ...(contact.regions || [])];
-            const broadStates: string[] = [];
-            let hasNonBroad = false;
-            for (const term of terms) {
-              const t = (term || "").trim();
-              if (!t) continue;
-              const dirMatch = t.match(/^(.+?)(?:→|->|\s+to\s+)(.+)$/i);
-              if (dirMatch) { hasNonBroad = true; continue; }
-              if (t.length <= 3 && /^[a-zA-Z]+$/.test(t)) { broadStates.push(norm(t)); continue; }
-              hasNonBroad = true;
-            }
-            if (hasNonBroad && broadStates.length > 0) {
-              if (!companySuppressedBroadStates[contact.companyId]) companySuppressedBroadStates[contact.companyId] = new Set<string>();
-              for (const st of broadStates) companySuppressedBroadStates[contact.companyId].add(st);
-            }
-          }
-        }
-
-        const shipperCityK = cols.shipperCity ?? cols.origin;
-        const shipperStateK = cols.shipperState ?? cols.originState;
-        const consigneeCityK = cols.consigneeCity ?? cols.destination;
-        const consigneeStateK = cols.consigneeState ?? cols.destinationState;
-
-        for (const companyId of visibleCompanyIds) {
-          if (!workedCompanyIds.has(companyId)) continue;
-          const co = companyById[companyId];
-          if (!co) continue;
-          const names = companyNameMap[companyId] ?? [];
-          if (names.length === 0) continue;
-          const total = computeCompanyFreightTotal(rawRows, cols, names);
-          const seen = companySeenIndices[companyId] ?? new Set<number>();
-          // Group unclaimed indices by normalized O/D
-          type LaneGroup = {
-            originCityNorm: string;
-            originStateNorm: string;
-            destCityNorm: string;
-            destStateNorm: string;
-            originCityRaw: string;
-            originStateRaw: string;
-            destCityRaw: string;
-            destStateRaw: string;
-            loads: number;
-            margin: number;
-          };
-          const groups: Record<string, LaneGroup> = {};
-          for (const idx of total.allIndices) {
-            if (seen.has(idx)) continue;
-            const row = rawRows[idx];
-            const oCityRaw = String((shipperCityK ? row[shipperCityK] : "") || "").split(",")[0].trim();
-            const oStateRaw = String((shipperStateK ? row[shipperStateK] : "") || "").trim();
-            const dCityRaw = String((consigneeCityK ? row[consigneeCityK] : "") || "").split(",")[0].trim();
-            const dStateRaw = String((consigneeStateK ? row[consigneeStateK] : "") || "").trim();
-            const oCityNorm = normCity(oCityRaw);
-            const oStateNorm = norm(oStateRaw);
-            const dCityNorm = normCity(dCityRaw);
-            const dStateNorm = norm(dStateRaw);
-            const key = `${oCityNorm}|${oStateNorm}|${dCityNorm}|${dStateNorm}`;
-            if (!groups[key]) {
-              groups[key] = {
-                originCityNorm: oCityNorm,
-                originStateNorm: oStateNorm,
-                destCityNorm: dCityNorm,
-                destStateNorm: dStateNorm,
-                originCityRaw: oCityRaw,
-                originStateRaw: oStateRaw,
-                destCityRaw: dCityRaw,
-                destStateRaw: dStateRaw,
-                loads: 0,
-                margin: 0,
-              };
-            }
-            const g = groups[key];
-            g.loads++;
-            g.margin += parseFloat(String(row[marginK] || 0).replace(/[$,]/g, "")) || 0;
-          }
-
-          if (Object.keys(groups).length === 0) continue;
-
-          const workedContacts = (contactsByCompany[companyId] ?? [])
-            .filter(c => normRelationshipBase(c.relationshipBase) !== "unknown")
-            .map(c => ({
-              id: c.id,
-              name: c.name,
-              title: c.title ?? null,
-              relationshipBase: normRelationshipBase(c.relationshipBase),
-            }));
-
-          const baseReason: "no_coverage" | "no_matching_lane" = companyHasAnyLaneData[companyId]
-            ? "no_matching_lane"
-            : "no_coverage";
-          const suppressedStates = companySuppressedBroadStates[companyId] ?? new Set<string>();
-
-          for (const [key, g] of Object.entries(groups)) {
-            const fmtPart = (city: string, st: string) => {
-              const c = city.trim();
-              const s = st.trim().toUpperCase();
-              if (c && s) return `${c}, ${s}`;
-              if (c) return c;
-              if (s) return s;
-              return "Unknown";
-            };
-            // Per-group reason refinement: if a contact had a broad state-only
-            // matcher in this O/D's origin/dest state but the matcher was
-            // suppressed by a more-specific lane on the same contact, surface
-            // that as the cause.
-            let reason: "no_coverage" | "no_matching_lane" | "broad_matcher_suppressed" = baseReason;
-            if (
-              suppressedStates.size > 0 &&
-              (suppressedStates.has(g.originStateNorm) || suppressedStates.has(g.destStateNorm))
-            ) {
-              reason = "broad_matcher_suppressed";
-            }
-            rows.push({
-              id: `unattributed:${companyId}:${key}`,
-              type: "unattributed_lane",
-              companyId,
-              companyName: co.name,
-              margin: g.margin,
-              loads: g.loads,
-              originCity: g.originCityRaw || null,
-              originState: g.originStateRaw || null,
-              destinationCity: g.destCityRaw || null,
-              destinationState: g.destStateRaw || null,
-              originLabel: fmtPart(g.originCityRaw, g.originStateRaw),
-              destinationLabel: fmtPart(g.destCityRaw, g.destStateRaw),
-              reason,
-              workedContacts,
-            });
-          }
-        }
-      }
-
-      // ── Unassigned contacts (worked account, has lane data, no base) ────────
-      for (const contact of allContacts) {
-        if (!workedCompanyIds.has(contact.companyId)) continue;
-        const base = normRelationshipBase(contact.relationshipBase);
-        if (base !== "unknown") continue;
-        const hasAttribs = allAttributions.some(a => a.contactId === contact.id);
-        const hasLaneStrings = (contact.lanes && contact.lanes.length > 0) || (contact.regions && contact.regions.length > 0);
-        if (!hasAttribs && !hasLaneStrings) continue;
-        const co = companyById[contact.companyId];
-        if (!co) continue;
-        // Compute the contact's own freight footprint (without dedup) for sorting context
-        const names = companyNameMap[contact.companyId] ?? [];
-        let loads = 0, margin = 0;
-        if (rawRows.length > 0 && names.length > 0) {
-          if (hasAttribs) {
-            const contactAttribs = allAttributions.filter(a => a.contactId === contact.id);
-            const m = computeFreightMetrics(rawRows, cols, names, contactAttribs);
-            loads = m.loads; margin = m.margin;
-          } else {
-            const m = computeFreightFromContactLaneStrings(rawRows, cols, names, contact.lanes || [], contact.regions || []);
-            loads = m.loads; margin = m.margin;
-          }
-        }
-        rows.push({
-          id: `unassigned:${contact.id}`,
-          type: "unassigned_contact",
-          companyId: contact.companyId,
-          companyName: co.name,
-          margin,
-          loads,
-          contactId: contact.id,
-          contactName: contact.name,
-          contactTitle: contact.title ?? null,
-        });
-      }
-
-      rows.sort((a, b) => b.margin - a.margin);
-
-      const counts = {
-        unworked_account: rows.filter(r => r.type === "unworked_account").length,
-        unattributed_lane: rows.filter(r => r.type === "unattributed_lane").length,
-        unassigned_contact: rows.filter(r => r.type === "unassigned_contact").length,
-      };
-      const totalMargin = rows.reduce((s, r) => s + r.margin, 0);
-      const totalLoads = rows.reduce((s, r) => s + r.loads, 0);
-
-      res.json({ rows, totalMargin, totalLoads, counts });
-    } catch (e: any) {
-      console.error("[freight-attribution-triage]", e);
       res.status(500).json({ error: e.message });
     }
   });
@@ -8015,11 +10357,11 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const userIsAdmin = isAdmin(user);
+      const isAdmin = user.role === "admin";
       const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
 
       let visibleCompanyIds: string[] = [];
-      if (userIsAdmin) {
+      if (isAdmin) {
         const all = await storage.getCompanies(user.organizationId);
         visibleCompanyIds = all.map(c => c.id);
       } else if (isDirector) {
@@ -8052,6 +10394,16 @@ Respond with valid JSON only:
       const greenfieldCompanyIds = visibleCompanyIds.filter(id => !companiesWithAttributedContacts.has(id));
       const greenfieldCount = greenfieldCompanyIds.length;
 
+      function normB(raw: string | null | undefined): string {
+        if (!raw) return "unknown";
+        const v = raw.trim().toLowerCase();
+        if (v === "1st" || v === "1st base" || v === "first base" || v === "first") return "1st";
+        if (v === "2nd" || v === "2nd base" || v === "second base" || v === "second") return "2nd";
+        if (v === "3rd" || v === "3rd base" || v === "third base" || v === "third") return "3rd";
+        if (v === "hr" || v === "home run" || v === "homerun" || v === "home") return "hr";
+        return "unknown";
+      }
+
       const BASE_ORDER = ["hr", "3rd", "2nd", "1st", "unknown"];
       const BASE_LABELS: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run", "unknown": "Unassigned" };
 
@@ -8071,7 +10423,7 @@ Respond with valid JSON only:
       }
 
       for (const contact of allContacts) {
-        const base = normRelationshipBase(contact.relationshipBase);
+        const base = normB(contact.relationshipBase);
         companiesPerLevel[base].add(contact.companyId);
         const recentlyAdvanced = !!(contact.baseAdvancedAt && contact.baseAdvancedAt >= cutoffStr);
         if (recentlyAdvanced) advancesPerLevel[base]++;
@@ -8122,15 +10474,11 @@ Respond with valid JSON only:
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
 
-      const relSumCacheKey = `rel-summary:${user.id}`;
-      const relSumCached = cacheGet(relSumCacheKey);
-      if (relSumCached) return res.json(relSumCached);
-
-      const userIsAdmin = isAdmin(user);
+      const isAdmin = user.role === "admin";
       const isDirector = ["director", "national_account_manager"].includes(user.role ?? "");
 
       let visibleCompanyIds: string[] = [];
-      if (userIsAdmin) {
+      if (isAdmin) {
         const all = await storage.getCompanies(user.organizationId);
         visibleCompanyIds = all.map(c => c.id);
       } else if (isDirector) {
@@ -8194,7 +10542,7 @@ Respond with valid JSON only:
       const companyNameMap: Record<string, string[]> = {};
       for (const c of allCompanies) companyNameMap[c.id] = [c.name, ...(c.financialAlias ? c.financialAlias.split(",").map((a: string) => a.trim()) : [])].filter(Boolean);
 
-      const rawRows: any[] = (upload?.rows ?? []) as any[];
+      const rawRows: any[] = upload?.rows ?? [];
       const cols = rawRows.length ? resolveColumns(rawRows) : {} as any;
       const BASE_LABELS_S: Record<string, string> = { "1st": "1st Base", "2nd": "2nd Base", "3rd": "3rd Base", "hr": "Home Run" };
       const BASE_ORDER_S = ["1st", "2nd", "3rd", "hr"];
@@ -8213,20 +10561,10 @@ Respond with valid JSON only:
       for (const base of BASE_ORDER_S) groupedS[base] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
       groupedS["unknown"] = { contacts: 0, loads: 0, margin: 0, contractedLoads: 0, spotLoads: 0 };
 
-      // FIX 6: Replace N+1 per-company queries with a single bulk fetch
-      const allAttributionsListS = await storage.getLaneAttributionsByCompanyIds(visibleCompanyIds);
+      // Load lane attributions for visible companies
+      const allAttributionsListS = (await Promise.all(visibleCompanyIds.map(id => storage.getLaneAttributionsByCompany(id)))).flat();
 
-      // FIX 2 & 3: Add per-company deduplication (seenIndices) and sort contacts by base priority
-      // so the highest-value relationship claims a shared load row first.
-      const BASE_PRIORITY_DS: Record<string, number> = { hr: 0, "3rd": 1, "2nd": 2, "1st": 3, unknown: 4 };
-      const companySeenIndicesDS: Record<string, Set<number>> = {};
-      const sortedAllContactsDS = [...allContacts].sort((a, b) => {
-        const pa = BASE_PRIORITY_DS[normBaseS(a.relationshipBase)] ?? 4;
-        const pb = BASE_PRIORITY_DS[normBaseS(b.relationshipBase)] ?? 4;
-        return pa - pb;
-      });
-
-      for (const contact of sortedAllContactsDS) {
+      for (const contact of allContacts) {
         if (!contact.relationshipBase || !contact.relationshipBase.trim()) continue;
         const contactAttribs = allAttributionsListS.filter(a => a.contactId === contact.id);
         const hasAttribsS = contactAttribs.length > 0;
@@ -8235,28 +10573,21 @@ Respond with valid JSON only:
 
         const base = normBaseS(contact.relationshipBase);
         groupedS[base].contacts++;
-
         if (rawRows.length > 0) {
           const companyNames = companyNameMap[contact.companyId] ?? [];
-          if (!companySeenIndicesDS[contact.companyId]) companySeenIndicesDS[contact.companyId] = new Set<number>();
-          const seenDS = companySeenIndicesDS[contact.companyId];
-
-          // FIX 1: Priority rule — explicit attributions take precedence; lane strings are a fallback
-          // (previously both branches ran additively — now strictly one or the other)
           if (hasAttribsS) {
-            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs, seenDS);
+            const m = computeFreightMetrics(rawRows, cols, companyNames, contactAttribs);
             groupedS[base].loads += m.loads;
             groupedS[base].margin += m.margin;
             groupedS[base].contractedLoads += m.contractedLoads;
             groupedS[base].spotLoads += m.spotLoads;
-            m.matchedIndices.forEach(idx => seenDS.add(idx));
-          } else {
-            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || [], seenDS);
+          }
+          if (hasLaneStringsS) {
+            const m = computeFreightFromContactLaneStrings(rawRows, cols, companyNames, contact.lanes || [], contact.regions || []);
             groupedS[base].loads += m.loads;
             groupedS[base].margin += m.margin;
             groupedS[base].contractedLoads += m.contractedLoads;
             groupedS[base].spotLoads += m.spotLoads;
-            m.matchedIndices.forEach(idx => seenDS.add(idx));
           }
         }
       }
@@ -8274,46 +10605,7 @@ Respond with valid JSON only:
       const totalMargin = summaryResult.reduce((s: number, r: any) => s + r.margin, 0);
       const totalContacts = summaryResult.reduce((s: number, r: any) => s + r.contacts, 0);
 
-      // ── Unworked Accounts (no relationship base set on any contact) ──────────
-      const marginKDS = (cols as any).marginDollar ?? "Margin $";
-      const workedCompanyIdsDS = new Set<string>(
-        allContacts.filter((c: any) => c.relationshipBase && c.relationshipBase.trim()).map((c: any) => c.companyId)
-      );
-      const unworkedCompanyIdsDS = visibleCompanyIds.filter(id => !workedCompanyIdsDS.has(id));
-      let unworkedLoadsDS = 0;
-      let unworkedMarginDS = 0;
-      if (rawRows.length > 0) {
-        for (const companyId of unworkedCompanyIdsDS) {
-          const companyNames = companyNameMap[companyId] ?? [];
-          if (companyNames.length === 0) continue;
-          const total = computeCompanyFreightTotal(rawRows, cols, companyNames);
-          unworkedLoadsDS += total.loads;
-          for (const idx of total.allIndices) {
-            unworkedMarginDS += parseFloat(String(rawRows[idx][marginKDS] || 0).replace(/[$,]/g, "")) || 0;
-          }
-        }
-      }
-
-      // ── Unattributed loads (worked companies, unclaimed by any contact lane) ──
-      let totalUnattributedLoadsDS = 0;
-      let totalUnattributedMarginDS = 0;
-      if (rawRows.length > 0) {
-        for (const companyId of visibleCompanyIds) {
-          if (!workedCompanyIdsDS.has(companyId)) continue;
-          const companyNames = companyNameMap[companyId] ?? [];
-          if (companyNames.length === 0) continue;
-          const companyTotal = computeCompanyFreightTotal(rawRows, cols, companyNames);
-          const seen = companySeenIndicesDS[companyId] ?? new Set<number>();
-          for (const idx of companyTotal.allIndices) {
-            if (!seen.has(idx)) {
-              totalUnattributedLoadsDS++;
-              totalUnattributedMarginDS += parseFloat(String(rawRows[idx][marginKDS] || 0).replace(/[$,]/g, "")) || 0;
-            }
-          }
-        }
-      }
-
-      const relSumResult = {
+      res.json({
         distribution: {
           levels: distLevels,
           recentAdvances: recentAdvances2,
@@ -8321,20 +10613,8 @@ Respond with valid JSON only:
           totalContacts: allContacts.length,
           greenfieldCount: greenfieldCount2,
         },
-        summary: {
-          summary: summaryResult,
-          totalContacts,
-          totalLoads,
-          totalMargin,
-          unattributedLoads: totalUnattributedLoadsDS,
-          unattributedMargin: totalUnattributedMarginDS,
-          unworkedAccounts: unworkedCompanyIdsDS.length,
-          unworkedLoads: unworkedLoadsDS,
-          unworkedMargin: unworkedMarginDS,
-        },
-      };
-      cacheSet(relSumCacheKey, relSumResult, 10 * 60 * 1000);
-      res.json(relSumResult);
+        summary: { summary: summaryResult, totalContacts, totalLoads, totalMargin },
+      });
     } catch (e: any) {
       console.error("[dashboard-relationship-summary]", e);
       res.status(500).json({ error: e.message });
@@ -8346,2060 +10626,9 @@ Respond with valid JSON only:
       if (err.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({ error: "File is too large. Maximum size is 50MB." });
       }
-      return res.status(400).json({ error: getErrorMessage(err) });
+      return res.status(400).json({ error: err.message });
     }
     next(err);
-  });
-
-  // ─── Stripe Billing Routes ────────────────────────────────────────────────────
-
-  // Get Stripe publishable key (public, no auth)
-  app.get("/api/stripe/config", async (_req, res) => {
-    try {
-      const publishableKey = await getStripePublishableKey();
-      res.json({ publishableKey });
-    } catch {
-      res.status(500).json({ error: "Stripe not configured" });
-    }
-  });
-
-  interface ProductRow {
-    product_id: string;
-    product_name: string;
-    product_description: string | null;
-    product_metadata: Record<string, string> | null;
-    price_id: string | null;
-    unit_amount: number | null;
-    currency: string | null;
-    recurring: { interval: string; interval_count: number } | null;
-  }
-
-  interface ProductEntry {
-    id: string;
-    name: string;
-    description: string | null;
-    metadata: Record<string, string>;
-    prices: Array<{ id: string; unitAmount: number | null; currency: string; recurring: { interval: string; interval_count: number } | null }>;
-  }
-
-  // List products with prices from the stripe schema (public, no auth)
-  app.get("/api/stripe/products", async (_req, res) => {
-    try {
-      const result = await db.execute(sql`
-        SELECT
-          p.id as product_id,
-          p.name as product_name,
-          p.description as product_description,
-          p.metadata as product_metadata,
-          pr.id as price_id,
-          pr.unit_amount,
-          pr.currency,
-          pr.recurring,
-          pr.active as price_active
-        FROM stripe.products p
-        LEFT JOIN stripe.prices pr ON pr.product = p.id AND pr.active = true
-        WHERE p.active = true
-        ORDER BY p.name, pr.unit_amount
-      `);
-
-      const productsMap = new Map<string, ProductEntry>();
-      // db.execute() returns untyped rows; the columns are guaranteed by the
-      // SELECT above which maps exactly to the ProductRow interface.
-      for (const row of result.rows as unknown as ProductRow[]) {
-        if (!productsMap.has(row.product_id)) {
-          productsMap.set(row.product_id, {
-            id: row.product_id,
-            name: row.product_name,
-            description: row.product_description,
-            metadata: row.product_metadata ?? {},
-            prices: [],
-          });
-        }
-        if (row.price_id && row.currency) {
-          productsMap.get(row.product_id)!.prices.push({
-            id: row.price_id,
-            unitAmount: row.unit_amount,
-            currency: row.currency,
-            recurring: row.recurring,
-          });
-        }
-      }
-
-      res.json({ products: Array.from(productsMap.values()) });
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      console.error("GET /api/stripe/products error:", message);
-      res.json({ products: [] });
-    }
-  });
-
-  // Simple in-memory rate limiter for the public checkout endpoint.
-  // Limits each IP to 5 checkout session requests per hour to prevent abuse.
-  const checkoutRateLimit = new Map<string, { count: number; windowStart: number }>();
-  const CHECKOUT_LIMIT = 5;
-  const CHECKOUT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
-
-  // Create a Stripe Checkout session (public, no auth required — prospect is signing up)
-  app.post("/api/stripe/checkout", async (req, res) => {
-    const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
-    const now = Date.now();
-    const bucket = checkoutRateLimit.get(ip);
-
-    if (bucket) {
-      if (now - bucket.windowStart < CHECKOUT_WINDOW_MS) {
-        if (bucket.count >= CHECKOUT_LIMIT) {
-          return res.status(429).json({ error: "Too many checkout requests. Please try again later." });
-        }
-        bucket.count += 1;
-      } else {
-        checkoutRateLimit.set(ip, { count: 1, windowStart: now });
-      }
-    } else {
-      checkoutRateLimit.set(ip, { count: 1, windowStart: now });
-    }
-
-    try {
-      const { priceId, companyName, adminEmail } = req.body as {
-        priceId: string;
-        companyName?: string;
-        adminEmail?: string;
-      };
-      if (!priceId) return res.status(400).json({ error: "priceId is required" });
-
-      // Basic shape validation on optional identity fields to prevent malformed org records
-      if (companyName !== undefined && (typeof companyName !== "string" || companyName.length > 200)) {
-        return res.status(400).json({ error: "Invalid companyName" });
-      }
-      if (adminEmail !== undefined) {
-        const emailOk = typeof adminEmail === "string" && adminEmail.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail);
-        if (!emailOk) return res.status(400).json({ error: "Invalid adminEmail" });
-      }
-
-      // Allowlist: only permit prices that are synced, active, and belong to one of our
-      // explicitly typed products (subscription plan or one-time add-on). This prevents
-      // a client from passing arbitrary price IDs from unrelated Stripe products.
-      const priceCheckResult = await db.execute(sql`
-        SELECT pr.id, pr.recurring
-        FROM stripe.prices pr
-        INNER JOIN stripe.products p ON p.id = pr.product
-        WHERE pr.id = ${priceId}
-          AND pr.active = true
-          AND p.active = true
-          AND (p.metadata->>'type' = 'subscription' OR p.metadata->>'type' = 'one_time')
-      `);
-
-      if (priceCheckResult.rows.length === 0) {
-        return res.status(400).json({ error: "Invalid or inactive price" });
-      }
-
-      // Derive mode from price type so the client cannot override it
-      const priceRow = priceCheckResult.rows[0] as { recurring: { interval: string } | null };
-      const resolvedMode: "subscription" | "payment" = priceRow.recurring ? "subscription" : "payment";
-
-      const stripe = await getUncachableStripeClient();
-      const baseUrl = `${req.protocol}://${req.get("host")}`;
-
-      const session = await stripe.checkout.sessions.create({
-        payment_method_types: ["card"],
-        line_items: [{ price: priceId, quantity: 1 }],
-        mode: resolvedMode,
-        success_url: `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${baseUrl}/?checkout=cancelled`,
-        metadata: {
-          companyName: companyName ?? "",
-          adminEmail: adminEmail ?? "",
-        },
-        ...(adminEmail ? { customer_email: adminEmail } : {}),
-      });
-      res.json({ url: session.url });
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      console.error("POST /api/stripe/checkout error:", message);
-      res.status(500).json({ error: "Failed to create checkout session" });
-    }
-  });
-
-  // Read a completed checkout session for the success page — informational only.
-  // Org creation and billing activation are handled by the webhook (checkout.session.completed),
-  // which fires reliably even if the buyer closes the tab before reaching this URL.
-  app.get("/api/stripe/confirm-checkout", async (req, res) => {
-    try {
-      const { session_id } = req.query as { session_id?: string };
-      if (!session_id) return res.status(400).json({ error: "session_id required" });
-
-      const stripe = await getUncachableStripeClient();
-      const session = await stripe.checkout.sessions.retrieve(session_id);
-
-      // Require the session to be fully complete (Stripe sets status="complete" once paid).
-      // Additionally allow "no_payment_required" for free-trial subscriptions.
-      const succeeded =
-        session.status === "complete" &&
-        (session.payment_status === "paid" || session.payment_status === "no_payment_required");
-
-      if (!succeeded) {
-        return res.status(402).json({ error: "Payment not completed" });
-      }
-
-      const companyName =
-        session.metadata?.companyName ||
-        session.customer_details?.name ||
-        "New Organization";
-      const adminEmail =
-        session.metadata?.adminEmail ||
-        session.customer_details?.email ||
-        "";
-
-      res.json({
-        success: true,
-        companyName,
-        adminEmail,
-        planName: "Freight DNA Subscription",
-      });
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      console.error("GET /api/stripe/confirm-checkout error:", message);
-      res.status(500).json({ error: "Failed to confirm checkout" });
-    }
-  });
-
-  // Admin: get own organization's billing status
-  app.get("/api/admin/billing", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
-      // Scope to the admin's own organization — never leak cross-tenant data
-      const org = user.organizationId ? await storage.getOrganizationById(user.organizationId) : null;
-      res.json({ organization: org ?? null });
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      console.error("GET /api/admin/billing error:", message);
-      res.status(500).json({ error: "Failed to fetch billing data" });
-    }
-  });
-
-  // Admin: list invoices for own organization (admin only)
-  app.get("/api/admin/billing/invoices", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user || user.role !== "admin") return res.status(403).json({ error: "Forbidden" });
-
-      const org = user.organizationId ? await storage.getOrganizationById(user.organizationId) : null;
-      if (!org?.stripeCustomerId) return res.json({ invoices: [] });
-
-      const stripe = await getUncachableStripeClient();
-      const invoiceList = await stripe.invoices.list({
-        customer: org.stripeCustomerId,
-        limit: 24,
-        status: "paid",
-      });
-
-      const invoices = invoiceList.data.map(inv => ({
-        id: inv.id,
-        number: inv.number,
-        amountPaid: inv.amount_paid,
-        currency: inv.currency,
-        status: inv.status,
-        created: inv.created,
-        periodStart: inv.period_start,
-        periodEnd: inv.period_end,
-        invoicePdf: inv.invoice_pdf,
-        hostedInvoiceUrl: inv.hosted_invoice_url,
-      }));
-
-      res.json({ invoices });
-    } catch (err: unknown) {
-      const message = getErrorMessage(err);
-      console.error("GET /api/admin/billing/invoices error:", message);
-      res.status(500).json({ error: "Failed to fetch invoices" });
-    }
-  });
-
-  // ── Lane Carrier Routes (Procurement Rolodex) ─────────────────────────────
-
-  // Helper: verify award is accessible to the current user (same org + visibility)
-  async function verifyAwardAccess(user: User, awardId: string): Promise<boolean> {
-    const award = await storage.getAward(awardId);
-    if (!award) return false;
-    const orgCompanies = await storage.getCompanies(user.organizationId);
-    const orgCompanyIds = new Set(orgCompanies.map((c) => c.id));
-    if (!orgCompanyIds.has(award.companyId)) return false;
-    const visibleIds = await getVisibleCompanyIds(user);
-    if (visibleIds !== null && !visibleIds.includes(award.companyId)) return false;
-    return true;
-  }
-
-  // Helper: verify a task is accessible to the current user, respecting company visibility constraints
-  async function verifyTaskAccess(user: User, taskId: string): Promise<boolean> {
-    const task = await storage.getTask(taskId);
-    if (!task) return false;
-    // When the task is linked to a company, enforce company-visibility rules (same as canAccessCompany)
-    if (task.companyId) {
-      return canAccessCompany(user, task.companyId);
-    }
-    // No company link: fall back to checking the assigned/creating user's org membership
-    const assignedUser = await storage.getUser(task.assignedTo);
-    return !!(assignedUser && assignedUser.organizationId === user.organizationId);
-  }
-
-  // Per-key serialization map: prevents concurrent requests from creating duplicate procurement tasks
-  // for the same (awardId, lane) pair (Node.js single-thread, but async interleaving is still possible)
-  const procTaskCreationLocks = new Map<string, Promise<{ lane: string; taskId: string; created: boolean }>>();
-
-  // Idempotent procurement task generation — server validates qualifying lanes (any parseable origin → destination) and finds-or-creates
-  // Helper: normalize a lane string for dedup matching (trim, collapse whitespace, lowercase)
-  function normalizeLane(lane: string): string {
-    return lane.trim().replace(/\s+/g, " ").toLowerCase();
-  }
-
-  // GET existing procurement tasks for an award (for AwardCard "already set up" indicator)
-  app.get("/api/awards/:awardId/procurement-tasks", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const awardId = pStr(req.params.awardId);
-      if (!(await verifyAwardAccess(user, awardId))) return res.status(403).json({ error: "Access denied" });
-      // Count tasks by awardId directly — not gated by current parseable lanes
-      const taskCount = await storage.countProcurementTasksByAward(awardId);
-      return res.status(200).json({ taskCount });
-    } catch (err) {
-      console.error("procurement-tasks GET error", err);
-      return res.status(500).json({ error: "Failed to check procurement tasks" });
-    }
-  });
-
-  app.post("/api/awards/:awardId/procurement-tasks", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const awardId = pStr(req.params.awardId);
-      if (!(await verifyAwardAccess(user, awardId))) return res.status(403).json({ error: "Access denied" });
-      // lanes is optional — if omitted, all award qualifying lanes are processed server-side
-      const { lanes } = (req.body ?? {}) as { lanes?: Array<{ lane: string }> };
-      const award = await storage.getAward(awardId);
-      if (!award) return res.status(404).json({ error: "Award not found" });
-      if (!award.lanes || award.lanes.length === 0) {
-        return res.status(400).json({ error: "This award has no lanes. Edit the award and add lanes in Origin → Destination format before generating tasks." });
-      }
-      // Parse award lane strings server-side; origin/dest/volume are derived here, not trusted from client
-      const lanePattern = /^(.+?)\s*(?:→|->|\bto\b)\s*(.+?)(?:\s*\((\d[\d,]*)\s*(?:loads?|shipments?|shpts?)[^)]*\))?$/i;
-      type LaneMeta = { origin: string; destination: string; volume: number };
-      const qualifyingLaneMap = new Map<string, LaneMeta>(
-        (award.lanes ?? [])
-          .map((l: string) => {
-            const normalized = normalizeLane(l);
-            const m = normalized.match(lanePattern);
-            if (!m) return null;
-            const volume = m[3] ? parseInt(m[3].replace(/,/g, "")) : 0;
-            return [normalized, { origin: m[1].trim(), destination: m[2].trim(), volume }] as [string, LaneMeta];
-          })
-          .filter((entry): entry is [string, LaneMeta] => entry !== null)
-      );
-      // Process all server-computed qualifying lanes (any parseable origin → destination)
-      const validLaneEntries = [...qualifyingLaneMap.entries()];
-      if (validLaneEntries.length === 0) return res.status(400).json({ error: "No parseable lanes found for this award. Edit the award and ensure lanes use Origin → Destination format (e.g., Chicago, IL → Memphis, TN)." });
-      const company = award.companyId ? await storage.getCompany(award.companyId) : null;
-      const customerName = company?.name ?? null;
-      const awardTitle = award.title ?? null;
-      // Per-key serialization prevents concurrent requests from creating duplicate tasks for the same lane
-      // Use Promise.allSettled so a single lane DB error does not fail the entire request
-      const settled = await Promise.allSettled(validLaneEntries.map(([laneName, meta]) => {
-        const lockKey = `${awardId}:${laneName}`;
-        if (!procTaskCreationLocks.has(lockKey)) {
-          const op = (async () => {
-            const existing = await storage.findProcurementTask(awardId, laneName);
-            if (existing) return { lane: laneName, taskId: existing.id, created: false };
-            // Resolve equipment type from a matching recurring lane (if one exists)
-            // This enables precise equipment-aware matching in My Procurement later.
-            const normOrigin = normalizeLaneLocation(meta.origin);
-            const normDest = normalizeLaneLocation(meta.destination);
-            const laneEquipRow = await storage.pool.query<{ equipment_type: string | null }>(
-              `SELECT equipment_type FROM recurring_lanes
-               WHERE org_id = $1
-                 AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(origin), '\\s+', ' ', 'g'), '\\s*,\\s*', ', ', 'g')) = $2
-                 AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(destination), '\\s+', ' ', 'g'), '\\s*,\\s*', ', ', 'g')) = $3
-               ORDER BY assigned_at DESC NULLS LAST LIMIT 1`,
-              [user.organizationId, normOrigin, normDest]
-            );
-            const rawEquip = laneEquipRow.rows[0]?.equipment_type ?? null;
-            const equipmentType = rawEquip ? normalizeEquipmentType(rawEquip) : null;
-            const task = await storage.createTask({
-              title: `Carrier Procurement — ${laneName}`,
-              notes: `Procurement workspace for lane: ${laneName}${meta.volume > 0 ? ` (${meta.volume.toLocaleString()} loads/yr)` : ""}. Award ID: ${awardId}. Target 5–10 carrier contacts.`,
-              status: "open",
-              dueDate: null,
-              assignedTo: user.id,
-              assignedBy: user.id,
-              companyId: award.companyId ?? null,
-              contactId: null,
-              attachedLaneData: [{ type: "carrier_procurement", lane: laneName, origin: meta.origin, destination: meta.destination, volume: meta.volume, awardId, awardTitle, customerName, equipmentType }],
-              createdAt: new Date().toISOString(),
-            });
-            return { lane: laneName, taskId: task.id, created: true };
-          })();
-          procTaskCreationLocks.set(lockKey, op.finally(() => procTaskCreationLocks.delete(lockKey)));
-        }
-        return procTaskCreationLocks.get(lockKey)!;
-      }));
-      const results: Array<{ lane: string; taskId: string; created: boolean; failed?: boolean }> = settled.map((s, i) => {
-        if (s.status === "fulfilled") return s.value;
-        const laneName = validLaneEntries[i][0];
-        console.error(`procurement-tasks: lane "${laneName}" failed`, s.reason);
-        return { lane: laneName, taskId: "", created: false, failed: true };
-      });
-      const successCount = results.filter(r => !r.failed).length;
-      if (successCount === 0) {
-        return res.status(500).json({ error: "Failed to generate procurement tasks for all lanes" });
-      }
-      return res.status(200).json({ results });
-    } catch (err) {
-      console.error("procurement-tasks error", err);
-      return res.status(500).json({ error: "Failed to generate procurement tasks" });
-    }
-  });
-
-  // Assign a specific procurement lane to an LM — creates task if needed, then reassigns
-  app.post("/api/awards/:awardId/lanes/assign-lm", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { awardId } = req.params as { awardId: string };
-      if (!(await verifyAwardAccess(user, awardId))) return res.status(403).json({ error: "Access denied" });
-
-      const { lane, assignToUserId } = req.body as { lane?: string; assignToUserId?: string };
-      if (!lane || !assignToUserId) return res.status(400).json({ error: "lane and assignToUserId are required" });
-
-      // Verify the assignee is in the same org
-      const assignee = await storage.getUser(assignToUserId);
-      if (!assignee || assignee.organizationId !== user.organizationId) {
-        return res.status(400).json({ error: "Invalid assignee" });
-      }
-
-      const award = await storage.getAward(awardId);
-      if (!award) return res.status(404).json({ error: "Award not found" });
-
-      // Parse lane string to extract origin/destination/volume
-      const lanePattern = /^(.+?)\s*(?:→|->|\bto\b)\s*(.+?)(?:\s*\((\d[\d,]*)\s*(?:loads?|shipments?)[^)]*\))?$/i;
-      const m = lane.match(lanePattern);
-      if (!m) return res.status(400).json({ error: "Could not parse lane. Use format: Origin → Destination" });
-      const origin = m[1].trim();
-      const destination = m[2].trim();
-      const volume = m[3] ? parseInt(m[3].replace(/,/g, "")) : 0;
-
-      let taskId: string;
-      let created = false;
-
-      const lmCompany = award.companyId ? await storage.getCompany(award.companyId) : null;
-      const lmCustomerName = lmCompany?.name ?? null;
-      const lmAwardTitle = award.title ?? null;
-
-      const existing = await storage.findProcurementTask(awardId, lane);
-      if (existing) {
-        // Reassign existing task to the LM
-        await storage.updateTask(existing.id, { assignedTo: assignToUserId, assignedBy: user.id });
-        taskId = existing.id;
-      } else {
-        // Resolve equipment type from a matching recurring lane for precise My Procurement matching
-        const lmNormOrigin = normalizeLaneLocation(origin);
-        const lmNormDest = normalizeLaneLocation(destination);
-        const lmEquipRow = await storage.pool.query<{ equipment_type: string | null }>(
-          `SELECT equipment_type FROM recurring_lanes
-           WHERE org_id = $1
-             AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(origin), '\\s+', ' ', 'g'), '\\s*,\\s*', ', ', 'g')) = $2
-             AND LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(destination), '\\s+', ' ', 'g'), '\\s*,\\s*', ', ', 'g')) = $3
-           ORDER BY assigned_at DESC NULLS LAST LIMIT 1`,
-          [user.organizationId, lmNormOrigin, lmNormDest]
-        );
-        const lmRawEquip = lmEquipRow.rows[0]?.equipment_type ?? null;
-        const lmEquipmentType = lmRawEquip ? normalizeEquipmentType(lmRawEquip) : null;
-        // Create a new procurement task assigned to the LM
-        const task = await storage.createTask({
-          title: `Carrier Procurement — ${lane}`,
-          notes: `Procurement workspace for lane: ${lane}${volume > 0 ? ` (${volume.toLocaleString()} loads/yr)` : ""}. Award ID: ${awardId}. Target 5–10 carrier contacts.`,
-          status: "open",
-          dueDate: null,
-          assignedTo: assignToUserId,
-          assignedBy: user.id,
-          companyId: award.companyId ?? null,
-          contactId: null,
-          attachedLaneData: [{ type: "carrier_procurement", lane, origin, destination, volume, awardId, awardTitle: lmAwardTitle, customerName: lmCustomerName, equipmentType: lmEquipmentType }],
-          createdAt: new Date().toISOString(),
-        });
-        taskId = task.id;
-        created = true;
-      }
-
-      // Notify the LM
-      if (assignToUserId !== user.id) {
-        storage.createNotification({
-          userId: assignToUserId,
-          type: "task_assigned",
-          title: `${user.name} assigned you a carrier procurement task`,
-          body: `Source 5–10 carriers for lane: ${lane}`,
-          link: "/tasks",
-          relatedId: taskId,
-          read: false,
-        }).catch((e) => console.error("Assign-LM notification error:", e));
-      }
-
-      return res.json({ taskId, created, assigneeName: assignee.name });
-    } catch (err) {
-      console.error("assign-lm error", err);
-      return res.status(500).json({ error: "Failed to assign lane to LM" });
-    }
-  });
-
-  // GET carriers by task
-  app.get("/api/tasks/:taskId/lane-carriers", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await verifyTaskAccess(user, pStr(req.params.taskId)))) return res.status(403).json({ error: "Access denied" });
-      const carriers = await storage.getLaneCarriersByTask(pStr(req.params.taskId));
-      res.json(carriers);
-    } catch (err) {
-      res.status(500).json({ error: "Failed to fetch lane carriers" });
-    }
-  });
-
-  // GET carriers by award
-  app.get("/api/awards/:awardId/lane-carriers", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await verifyAwardAccess(user, pStr(req.params.awardId)))) return res.status(403).json({ error: "Access denied" });
-      const carriers = await storage.getLaneCarriersByAward(pStr(req.params.awardId));
-      res.json(carriers);
-    } catch (err) {
-      res.status(500).json({ error: "Failed to fetch lane carriers" });
-    }
-  });
-
-  // POST create lane carrier
-  const LANE_CARRIER_STATUS_ENUM = ["contacted", "emailed", "committed", "declined"] as const;
-  type LaneCarrierStatus = typeof LANE_CARRIER_STATUS_ENUM[number];
-
-  app.post("/api/lane-carriers", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      // Validate status enum
-      if (req.body.status && !LANE_CARRIER_STATUS_ENUM.includes(req.body.status as LaneCarrierStatus)) {
-        return res.status(400).json({ error: `status must be one of: ${LANE_CARRIER_STATUS_ENUM.join(", ")}` });
-      }
-      // Verify task belongs to user's org and is accessible
-      if (!(await verifyTaskAccess(user, req.body.taskId))) return res.status(403).json({ error: "Access denied" });
-      // Verify award is accessible
-      if (!(await verifyAwardAccess(user, req.body.awardId))) return res.status(403).json({ error: "Access denied" });
-      // Task must explicitly be a carrier_procurement task with matching award+lane metadata
-      const task = await storage.getTask(req.body.taskId);
-      if (task) {
-        const laneData = Array.isArray(task.attachedLaneData) ? task.attachedLaneData as Array<{ awardId?: string; lane?: string; type?: string }> : [];
-        const procEntries = laneData.filter(e => e.type === "carrier_procurement");
-        if (procEntries.length === 0) {
-          return res.status(400).json({ error: "Task is not a carrier procurement task" });
-        }
-        const taskAwardIds = procEntries.map(e => e.awardId).filter(Boolean);
-        if (taskAwardIds.length > 0 && !taskAwardIds.includes(req.body.awardId)) {
-          return res.status(400).json({ error: "Task does not belong to the specified award" });
-        }
-        const taskLanes = procEntries.map(e => e.lane).filter(Boolean);
-        if (taskLanes.length > 0 && req.body.lane && !taskLanes.includes(req.body.lane)) {
-          return res.status(400).json({ error: "Lane does not match task's procurement lanes" });
-        }
-      }
-      // Prevent duplicate carrier name on the same task+lane
-      if (req.body.taskId && req.body.lane && req.body.carrierName) {
-        const existing = await storage.getLaneCarriersByTask(req.body.taskId);
-        const isDuplicate = existing.some(c =>
-          c.lane === req.body.lane &&
-          c.carrierName.toLowerCase() === String(req.body.carrierName).trim().toLowerCase()
-        );
-        if (isDuplicate) {
-          return res.status(409).json({ error: "Carrier already logged for this lane" });
-        }
-      }
-      const parsed = insertLaneCarrierSchema.safeParse({
-        ...req.body,
-        createdAt: new Date().toISOString(),
-      });
-      if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
-      const carrier = await storage.createLaneCarrier(parsed.data);
-      res.json(carrier);
-    } catch (err) {
-      res.status(500).json({ error: "Failed to create lane carrier" });
-    }
-  });
-
-  // PATCH update lane carrier
-  app.patch("/api/lane-carriers/:id", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      // Validate status enum if provided
-      if (req.body.status && !LANE_CARRIER_STATUS_ENUM.includes(req.body.status as LaneCarrierStatus)) {
-        return res.status(400).json({ error: `status must be one of: ${LANE_CARRIER_STATUS_ENUM.join(", ")}` });
-      }
-      const existing = await storage.getLaneCarrier(pStr(req.params.id));
-      if (!existing) return res.status(404).json({ error: "Lane carrier not found" });
-      if (!(await verifyAwardAccess(user, existing.awardId))) return res.status(403).json({ error: "Access denied" });
-      // Only allow updating mutable fields — never allow changing taskId/awardId/lane/createdAt
-      const patchSchema = insertLaneCarrierSchema.pick({
-        carrierName: true,
-        mcNumber: true,
-        contactName: true,
-        phone: true,
-        email: true,
-        rate: true,
-        capacityPerWeek: true,
-        notes: true,
-        status: true,
-      }).partial();
-      const parsed = patchSchema.safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
-      let carrier;
-      try {
-        carrier = await storage.updateLaneCarrier(pStr(req.params.id), parsed.data);
-      } catch (updateErr: unknown) {
-        const msg = updateErr instanceof Error ? updateErr.message : String(updateErr);
-        if (msg.includes("unique") || msg.includes("duplicate")) {
-          return res.status(409).json({ error: "Carrier already logged for this lane" });
-        }
-        throw updateErr;
-      }
-      if (!carrier) return res.status(404).json({ error: "Lane carrier not found" });
-      res.json(carrier);
-    } catch (err) {
-      res.status(500).json({ error: "Failed to update lane carrier" });
-    }
-  });
-
-  // DELETE lane carrier
-  app.delete("/api/lane-carriers/:id", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const existing = await storage.getLaneCarrier(pStr(req.params.id));
-      if (!existing) return res.status(404).json({ error: "Lane carrier not found" });
-      if (!(await verifyAwardAccess(user, existing.awardId))) return res.status(403).json({ error: "Access denied" });
-      const ok = await storage.deleteLaneCarrier(pStr(req.params.id));
-      if (!ok) return res.status(404).json({ error: "Lane carrier not found" });
-      res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: "Failed to delete lane carrier" });
-    }
-  });
-
-  // AI email draft
-  app.post("/api/ai/draft-email", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const { contactId, companyId, subject, toName, companyName } = req.body as {
-        contactId?: string; companyId?: string; subject?: string; toName?: string; companyName?: string;
-      };
-
-      const senderName = user.name || user.username || "the sender";
-
-      let contactCtx = "";
-      let recentNotes = "";
-
-      if (contactId) {
-        const contact = await storage.getContact(contactId);
-        if (contact) {
-          const parts: string[] = [];
-          if (contact.title) parts.push(`Title: ${contact.title}`);
-          if (contact.interests) parts.push(`Personal interests: ${contact.interests}`);
-          if (contact.nextSteps) parts.push(`Next steps noted: ${contact.nextSteps}`);
-          if (contact.relationshipBase) parts.push(`Relationship level: ${contact.relationshipBase}`);
-          contactCtx = parts.join("\n");
-
-          const tps = await storage.getTouchpointsByContact(contactId);
-          const withNotes = tps.filter(t => t.notes && t.notes.trim()).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 4);
-          recentNotes = withNotes.map(t => `[${t.date} ${t.type}] ${t.notes}`).join("\n");
-        }
-      }
-
-      let companyCtx = "";
-      if (companyId) {
-        const company = await storage.getCompany(companyId);
-        if (company) {
-          const parts: string[] = [];
-          if (company.industry) parts.push(`Industry: ${company.industry}`);
-          if (company.accountSummary) parts.push(`Account summary: ${company.accountSummary}`);
-          companyCtx = parts.join("\n");
-        }
-      }
-
-      const systemPrompt = `You are a freight broker at Freight-DNA / Value Truck writing a short email to a shipper contact.
-
-House style — follow every rule:
-- Sound like a freight broker, not a corporate sales rep or account manager. Direct, conversational, freight-native.
-- 3–5 short sentences MAX. Under 120 words total.
-- BANNED phrases — never use any of these:
-  "I hope this email finds you well", "I wanted to follow up on our recent exchanges",
-  "reaching out about", "just checking in", "I wanted to touch base",
-  "as per our last conversation", "circling back", "loop you in",
-  "value your partnership", "mutually beneficial", "synergy",
-  "at your earliest convenience", "please don't hesitate"
-- When you have little context about the contact or company, write a SHORT and HONEST email. Do NOT pad with vague filler or generic pleasantries. Fewer sentences is better than empty ones.
-- End with a concrete operational ask — something the recipient can act on. Examples: "Got anything moving this week?", "What lanes are giving you headaches right now?", "Any freight we should be quoting on?"
-- Sign off with ONLY the name: ${senderName}. No "Best regards", no "Sincerely", no "Thanks," — just the name on its own line.
-- Do NOT include any placeholder like [Your Name] or [Name]. Use the exact sender name provided above.
-- Output ONLY the email body. No subject line. No extra commentary.`;
-
-      const userPrompt = `Write an email to ${toName || "the contact"} at ${companyName || "their company"}.
-Subject hint: ${subject || "General outreach"}
-${contactCtx ? `\nContact context:\n${contactCtx}` : ""}
-${companyCtx ? `\nAccount context:\n${companyCtx}` : ""}
-${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recentNotes}` : ""}`;
-
-      const OpenAI = (await import("openai")).default;
-      const openai = new OpenAI({
-        apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-        baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
-      });
-
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4o",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 300,
-        temperature: 0.7,
-      });
-
-      const draft = completion.choices[0]?.message?.content?.trim() ?? "";
-      res.json({ draft });
-    } catch (err) {
-      console.error("[ai-draft-email] error:", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to generate draft" });
-    }
-  });
-
-  // Rep scorecard — aggregated metrics for all reps (admin/director only)
-  app.get("/api/rep-scorecard", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!["admin", "director", "national_account_manager", "sales", "sales_director"].includes(user.role ?? "")) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const orgId = user.organizationId;
-      const allUsers = await storage.getUsers(orgId);
-      const repRoles = ["account_manager", "national_account_manager"];
-      const reps = allUsers.filter(u => repRoles.includes(u.role ?? ""));
-
-      const now = new Date();
-      const range = (qStr(req.query.range)) || "last_week";
-
-      let rangeStart: Date;
-      let rangeEnd: Date = new Date(now);
-      rangeEnd.setHours(23, 59, 59, 999);
-
-      if (range === "mtd") {
-        rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
-        rangeStart.setHours(0, 0, 0, 0);
-      } else if (range === "last_month") {
-        rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        rangeStart.setHours(0, 0, 0, 0);
-        rangeEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-        rangeEnd.setHours(23, 59, 59, 999);
-      } else if (range === "ytd") {
-        rangeStart = new Date(now.getFullYear(), 0, 1);
-        rangeStart.setHours(0, 0, 0, 0);
-      } else {
-        // last_week: Monday–Sunday of previous week
-        const day = now.getDay();
-        const daysToLastMonday = (day === 0 ? 6 : day - 1) + 7;
-        rangeStart = new Date(now);
-        rangeStart.setDate(rangeStart.getDate() - daysToLastMonday);
-        rangeStart.setHours(0, 0, 0, 0);
-        rangeEnd = new Date(rangeStart);
-        rangeEnd.setDate(rangeEnd.getDate() + 6);
-        rangeEnd.setHours(23, 59, 59, 999);
-      }
-
-      const rangeStartStr = rangeStart.toISOString().split("T")[0];
-      const rangeEndStr = rangeEnd.toISOString().split("T")[0];
-
-      // Goals always use the current month (targets are not adjusted per selected range)
-      const period = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-
-      // weekStart used only for display label
-      const weekStartStr = rangeStartStr;
-
-      // All touchpoints in range (bulk fetch, then split per rep)
-      const allTps = await storage.getTouchpointsSince(rangeStartStr);
-
-      // All prospects (for relationshipsMoved count)
-      const allProspects = await storage.getProspects(orgId);
-      const prospectsMovedInRange = allProspects.filter(p => {
-        if (!p.stageChangedAt) return false;
-        const changed = new Date(p.stageChangedAt);
-        return changed >= rangeStart && changed <= rangeEnd;
-      });
-
-      // All contacts (for contacts-added count)
-      const allContacts = await storage.getContactsByOrg(orgId);
-      const orgUserIds = new Set(allUsers.map(u => u.id));
-      const contactsThisMonth = allContacts.filter(c => {
-        if (!c.createdAt || !c.createdBy || !orgUserIds.has(c.createdBy)) return false;
-        const dateStr = c.createdAt.slice(0, 10);
-        return dateStr >= rangeStartStr && dateStr <= rangeEndStr;
-      });
-
-      // All goals (no filter = all org goals via am-scoped logic)
-      const allGoals = await storage.getGoals({});
-
-      const results = await Promise.all(reps.map(async rep => {
-        const repTps = allTps.filter((t: any) => t.loggedById === rep.id && (!t.date || t.date <= rangeEndStr));
-        const weeklyTotal = repTps.length;
-        const weeklyCalls = repTps.filter((t: any) => t.type === "call").length;
-        const weeklyEmails = repTps.filter((t: any) => t.type === "email").length;
-        const weeklyTexts = repTps.filter((t: any) => t.type === "text").length;
-        const weeklySiteVisits = repTps.filter((t: any) => t.type === "site_visit").length;
-        const weeklyMeaningful = repTps.filter((t: any) => t.isMeaningful).length;
-        const contactsAdded = contactsThisMonth.filter(c => c.createdBy === rep.id).length;
-        const relationshipsMoved = prospectsMovedInRange.filter(p => p.ownerId === rep.id).length;
-
-        const repGoals = allGoals.filter((g: any) => g.userId === rep.id && g.period === period);
-        const touchpointGoal = repGoals.find((g: any) => g.metric === "touchpoints");
-        const meaningfulGoal = repGoals.find((g: any) => g.metric === "meaningful_touchpoints");
-        const contactsGoal = repGoals.find((g: any) => g.metric === "contacts_added");
-
-        return {
-          userId: rep.id,
-          name: rep.name,
-          role: rep.role,
-          weeklyTotal,
-          weeklyCalls,
-          weeklyEmails,
-          weeklyTexts,
-          weeklySiteVisits,
-          weeklyMeaningful,
-          contactsAdded,
-          relationshipsMoved,
-          touchpointGoalTarget: touchpointGoal?.target != null ? Number(touchpointGoal.target) : null,
-          meaningfulGoalTarget: meaningfulGoal?.target != null ? Number(meaningfulGoal.target) : null,
-          contactsGoalTarget: contactsGoal?.target != null ? Number(contactsGoal.target) : null,
-        };
-      }));
-
-      results.sort((a, b) => b.weeklyTotal - a.weeklyTotal);
-      res.json({ weekStart: weekStartStr, results });
-    } catch (err) {
-      console.error("[rep-scorecard]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to load rep scorecard" });
-    }
-  });
-
-  app.get("/api/plays-activity", requireAuth, async (req, res) => {
-    try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      if (!["admin", "director", "national_account_manager", "sales", "sales_director"].includes(user.role ?? "")) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-
-      const orgId = user.organizationId;
-      const allUsers = await storage.getUsers(orgId);
-      const repRoles = ["account_manager", "national_account_manager"];
-      const reps = allUsers.filter(u => repRoles.includes(u.role ?? ""));
-
-      const now = new Date();
-      const range = (qStr(req.query.range)) || "last_week";
-
-      let rangeStart: Date;
-      let rangeEnd: Date = new Date(now);
-      rangeEnd.setHours(23, 59, 59, 999);
-
-      if (range === "mtd") {
-        rangeStart = new Date(now.getFullYear(), now.getMonth(), 1);
-      } else if (range === "last_month") {
-        rangeStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-        rangeEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-        rangeEnd.setHours(23, 59, 59, 999);
-      } else if (range === "ytd") {
-        rangeStart = new Date(now.getFullYear(), 0, 1);
-      } else {
-        const day = now.getDay();
-        const daysToLastMonday = (day === 0 ? 6 : day - 1) + 7;
-        rangeStart = new Date(now);
-        rangeStart.setDate(rangeStart.getDate() - daysToLastMonday);
-        rangeEnd = new Date(rangeStart);
-        rangeEnd.setDate(rangeEnd.getDate() + 6);
-        rangeEnd.setHours(23, 59, 59, 999);
-      }
-      rangeStart.setHours(0, 0, 0, 0);
-
-      const rangeStartStr = rangeStart.toISOString().split("T")[0];
-      const rangeEndStr = rangeEnd.toISOString().split("T")[0];
-
-      const allTps = await storage.getTouchpointsSince(rangeStartStr);
-      const rangeTps = allTps.filter((t: any) => !t.date || t.date <= rangeEndStr);
-
-      const taggedTps = rangeTps.filter(t => t.playLabel);
-
-      const playCountMap = new Map<string, { total: number; byRep: Map<string, number> }>();
-      for (const tp of taggedTps) {
-        const label = tp.playLabel!;
-        if (!playCountMap.has(label)) {
-          playCountMap.set(label, { total: 0, byRep: new Map() });
-        }
-        const entry = playCountMap.get(label)!;
-        entry.total++;
-        const repId = tp.loggedById;
-        entry.byRep.set(repId, (entry.byRep.get(repId) ?? 0) + 1);
-      }
-
-      const plays = Array.from(playCountMap.entries())
-        .map(([label, data]) => {
-          const topReps = Array.from(data.byRep.entries())
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 5)
-            .map(([repId, count]) => {
-              const rep = reps.find(r => r.id === repId);
-              return { userId: repId, name: rep?.name ?? "Unknown", count };
-            });
-          return { playLabel: label, totalUsed: data.total, topReps };
-        })
-        .sort((a, b) => b.totalUsed - a.totalUsed);
-
-      const repPlayStats = reps.map(rep => {
-        const repTagged = taggedTps.filter(t => t.loggedById === rep.id);
-        const repPlays = new Map<string, number>();
-        for (const tp of repTagged) {
-          const label = tp.playLabel!;
-          repPlays.set(label, (repPlays.get(label) ?? 0) + 1);
-        }
-        return {
-          userId: rep.id,
-          name: rep.name,
-          role: rep.role,
-          totalPlaysExecuted: repTagged.length,
-          plays: Array.from(repPlays.entries())
-            .map(([label, count]) => ({ playLabel: label, count }))
-            .sort((a, b) => b.count - a.count),
-        };
-      }).filter(r => r.totalPlaysExecuted > 0).sort((a, b) => b.totalPlaysExecuted - a.totalPlaysExecuted);
-
-      res.json({ plays, repPlayStats });
-    } catch (err) {
-      console.error("[plays-activity]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to load plays activity" });
-    }
-  });
-
-  // ── Weekly Coaching Commitments ──────────────────────────────────────────
-
-  function getWeekStart(date = new Date()): string {
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    d.setDate(diff);
-    return d.toISOString().split("T")[0];
-  }
-  function getWeekEnd(weekStart: string): string {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + 4);
-    return d.toISOString().split("T")[0];
-  }
-
-  // Team view MUST come before /:id to avoid route collision
-  app.get("/api/weekly-commitments/team", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (!managerRoles.includes(currentUser.role)) return res.status(403).json({ error: "Manager access required" });
-      const orgId = req.session.organizationId!;
-      const weekStart = (qStr(req.query.weekStart)) || getWeekStart();
-      const rows = await storage.getTeamWeeklyCommitments(orgId, weekStart);
-      res.json(rows);
-    } catch (err) {
-      console.error("[weekly-commitments/team]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to load team commitments" });
-    }
-  });
-
-  app.get("/api/weekly-commitments", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const orgId = req.session.organizationId!;
-      const weekStart = qOptStr(req.query.weekStart);
-      const rows = await storage.getWeeklyCommitments(currentUser.id, orgId, weekStart);
-      res.json(rows);
-    } catch (err) {
-      console.error("[weekly-commitments]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to load commitments" });
-    }
-  });
-
-  app.post("/api/weekly-commitments", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const orgId = req.session.organizationId!;
-      // Cross-tenant guard on optional companyId / contactId. The commitment
-      // record is rep-owned, but it carries references to a company/contact
-      // and surfaces them in dashboards — those references must belong to
-      // the same org.
-      if (req.body.companyId) {
-        const owningCompany = await storage.getCompanyInOrg(req.body.companyId, orgId);
-        if (!owningCompany) return res.status(404).json({ error: "Company not found" });
-      }
-      if (req.body.contactId) {
-        const owningContact = await storage.getContact(req.body.contactId);
-        if (!owningContact) return res.status(404).json({ error: "Contact not found" });
-        const owningCompany = await storage.getCompanyInOrg(owningContact.companyId, orgId);
-        if (!owningCompany) return res.status(404).json({ error: "Contact not found" });
-      }
-      const thisWeek = getWeekStart();
-      const dueDate = getWeekEnd(thisWeek);
-      const payload = {
-        userId: currentUser.id,
-        orgId,
-        weekStart: thisWeek,
-        dueDate,
-        createdAt: new Date().toISOString(),
-        companyId: req.body.companyId ?? null,
-        contactId: req.body.contactId ?? null,
-        companyName: req.body.companyName ?? null,
-        contactName: req.body.contactName ?? null,
-        commitmentText: req.body.commitmentText,
-        lever: req.body.lever ?? "Recovery",
-        source: req.body.source ?? "dashboard",
-        status: "pending" as const,
-      };
-      if (!payload.commitmentText) return res.status(400).json({ error: "commitmentText is required" });
-      const row = await storage.createWeeklyCommitment(payload);
-      res.json(row);
-    } catch (err) {
-      console.error("[weekly-commitments POST]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to create commitment" });
-    }
-  });
-
-  app.patch("/api/weekly-commitments/:id", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { status } = req.body;
-      if (!["pending", "completed", "missed"].includes(status)) return res.status(400).json({ error: "Invalid status" });
-      const row = await storage.updateWeeklyCommitmentStatus(pStr(req.params.id), currentUser.id, status);
-      if (!row) return res.status(404).json({ error: "Commitment not found" });
-      res.json(row);
-    } catch (err) {
-      console.error("[weekly-commitments PATCH]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to update commitment" });
-    }
-  });
-
-  app.delete("/api/weekly-commitments/:id", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const ok = await storage.deleteWeeklyCommitment(pStr(req.params.id), currentUser.id);
-      if (!ok) return res.status(404).json({ error: "Commitment not found" });
-      res.json({ success: true });
-    } catch (err) {
-      console.error("[weekly-commitments DELETE]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to delete commitment" });
-    }
-  });
-
-  // ─── NBA Phase 1 Persistent Card Routes ──────────────────────────────────────
-
-  // GET /api/nba/company/:companyId/card — single persistent Phase 1 card for Account 360
-  app.get("/api/nba/company/:companyId/card", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      // Enforce company-visibility — cards for foreign-org companies were
-      // previously returned to anyone authenticated who guessed the ID.
-      if (!(await canAccessCompany(currentUser, pStr(req.params.companyId)))) {
-        return res.status(403).json({ error: "Access denied" });
-      }
-      const card = await storage.getNbaCardForCompany(pStr(req.params.companyId));
-      if (!card) return res.json(null);
-
-      // Project to the canonical wire shape so this endpoint matches the
-      // bulk /api/nba/cards response. Build a minimal ProjectionContext
-      // with just the single card's related rows.
-      const { contactIds, laneIds } = collectProjectionIds([card]);
-      const [contactRows, laneRows] = await Promise.all([
-        Promise.all(contactIds.map(id => storage.getContact(id).catch(() => null))),
-        Promise.all(laneIds.map(id => storage.getRecurringLane(id).catch(() => null))),
-      ]);
-      const contacts = new Map<string, Contact>(
-        contactRows.filter((c): c is Contact => !!c).map(c => [c.id, c]),
-      );
-      const lanes = new Map<string, RecurringLane>(
-        laneRows.filter((l): l is RecurringLane => !!l).map(l => [l.id, l]),
-      );
-      const userIds = new Set<string>();
-      for (const lane of lanes.values()) {
-        if (lane.ownerUserId) userIds.add(lane.ownerUserId);
-        if (lane.overseerUserId) userIds.add(lane.overseerUserId);
-      }
-      const userRows = await Promise.all([...userIds].map(id => storage.getUser(id)));
-      const userMap = new Map<string, User>(
-        userRows.filter((u): u is User => !!u).map(u => [u.id, u]),
-      );
-
-      res.json(projectNbaCard(card, { contacts, lanes, users: userMap }));
-    } catch (err) {
-      console.error("[nba/company/card GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch company NBA card" });
-    }
-  });
-
-  // GET /api/nba/cards — fetch visible cards for the current user
-  // Directors and admins get all visible cards in the org (portfolio view).
-  app.get("/api/nba/cards", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const isPortfolioRole = ["admin", "director"].includes(currentUser.role);
-      let cards;
-      if (isPortfolioRole) {
-        // Portfolio roles (admin/director) see all org-wide cards — allow up to 200
-        const limit = Math.min(Number(req.query.limit ?? 200), 200);
-        cards = await storage.getVisibleNbaCardsForOrg(currentUser.organizationId, limit);
-      } else {
-        // Default cap is 5 (focused triage) but reps can request up to 50 when
-        // they are sorting/filtering by at-stake $ (Task #372 — triage by impact).
-        const limit = Math.min(Number(req.query.limit ?? 5), 50);
-        // Task #773 — Priorities feed must respect getVisibleCompanyIds. The
-        // raw `nbaCards.userId === rep.id` query alone leaks cards whose
-        // attribution rep doesn't own the matched account (e.g. Webex
-        // missed-call cards minted on the rep's extension for an account
-        // outside their book). Fetch a larger window so we still return up
-        // to `limit` cards after the visible-company intersection.
-        const rawCards = await storage.getVisibleNbaCards(currentUser.id, limit * 4);
-        const visibleIds = await getVisibleCompanyIds(currentUser);
-        if (visibleIds === null) {
-          // null = unrestricted (admin); we already handled the portfolio
-          // path above, but keep this branch defensive.
-          cards = rawCards.slice(0, limit);
-        } else {
-          const visibleSet = new Set(visibleIds);
-          // Org-level cards (no companyId) always pass through; cards tied
-          // to a specific company must be inside the rep's visible set.
-          cards = rawCards
-            .filter(c => !c.companyId || visibleSet.has(c.companyId))
-            .slice(0, limit);
-        }
-      }
-      // Exclude cards tied to archived companies
-      const orgCompanies = await storage.getCompanies(currentUser.organizationId);
-      const archivedIds = new Set(orgCompanies.filter(c => c.archivedAt).map(c => c.id));
-      let activeCards = cards.filter(c => !c.companyId || !archivedIds.has(c.companyId));
-      // Suppress recurring_lane_capacity cards when feature flag is disabled
-      const laneOutreachEnabled = await storage.getFeatureFlag(currentUser.organizationId, "lane_carrier_outreach_v1");
-      if (!laneOutreachEnabled) {
-        activeCards = activeCards.filter(c => c.ruleType !== "recurring_lane_capacity");
-      }
-
-      // Task #372 — enrich every card with primary contact + primary lane
-      // display info. This block previously inlined ~75 lines of context
-      // building + per-card mapping. It is now delegated to the canonical
-      // projectNbaCard helper so this endpoint and /api/nba/company/:id/card
-      // emit the same wire shape (was a real drift bug source).
-      const { contactIds, laneIds } = collectProjectionIds(activeCards);
-      const [contactRows, laneRows] = await Promise.all([
-        Promise.all(contactIds.map(id => storage.getContact(id).catch(() => null))),
-        Promise.all(laneIds.map(id => storage.getRecurringLane(id).catch(() => null))),
-      ]);
-      const contacts = new Map<string, Contact>(
-        contactRows.filter((c): c is Contact => !!c).map(c => [c.id, c]),
-      );
-      const lanes = new Map<string, RecurringLane>(
-        laneRows.filter((l): l is RecurringLane => !!l).map(l => [l.id, l]),
-      );
-      // Owner/overseer enrichment is gated to recurring_lane_capacity
-      // cards inside projectNbaCard. We still need to fetch the relevant
-      // users up front so the projector has them in context — collect IDs
-      // from any lanes that those cards reference via linkedLaneId.
-      const userIds = new Set<string>();
-      for (const c of activeCards) {
-        if (c.ruleType !== "recurring_lane_capacity" || !c.linkedLaneId) continue;
-        const lane = lanes.get(c.linkedLaneId);
-        if (!lane) continue;
-        if (lane.ownerUserId) userIds.add(lane.ownerUserId);
-        if (lane.overseerUserId) userIds.add(lane.overseerUserId);
-      }
-      const userRows = await Promise.all([...userIds].map(id => storage.getUser(id)));
-      const userMap = new Map<string, User>(
-        userRows.filter((u): u is User => !!u).map(u => [u.id, u]),
-      );
-
-      const projected = activeCards.map(c =>
-        projectNbaCard(c, { contacts, lanes, users: userMap }),
-      );
-      res.json(projected);
-    } catch (err) {
-      console.error("[nba/cards GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch NBA cards" });
-    }
-  });
-
-  // PATCH /api/nba/cards/:id/resolve — act on a card (action/dismiss/snooze/alternate)
-  app.patch("/api/nba/cards/:id/resolve", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { action, dismissReason, snoozeUntil, alternateActionNote, linkedCommitmentId, linkedTouchpointId, linkedTaskId } = req.body;
-
-      const validActions = ["actioned", "dismissed", "snoozed", "alternate"];
-      if (!validActions.includes(action)) {
-        return res.status(400).json({ error: `action must be one of ${validActions.join(", ")}` });
-      }
-
-      // recurring_lane_capacity cards can only be completed via outreach threshold
-      // or preferred-carrier program toggle — block direct manual resolution
-      if (action === "actioned") {
-        const card = await storage.getNbaCard(pStr(req.params.id));
-        if (card?.ruleType === "recurring_lane_capacity") {
-          return res.status(409).json({ error: "Lane capacity cards complete automatically when outreach threshold is reached or a preferred-carrier program is activated" });
-        }
-      }
-
-      const now = new Date().toISOString();
-      const updateData: Record<string, unknown> = { status: action, resolvedAt: now };
-      if (action === "dismissed")  updateData.dismissReason = dismissReason ?? null;
-      if (action === "snoozed")    updateData.snoozeUntil = snoozeUntil;
-      if (action === "alternate")  updateData.alternateActionNote = alternateActionNote ?? null;
-      if (linkedCommitmentId)      updateData.linkedCommitmentId = linkedCommitmentId;
-      if (linkedTouchpointId)      updateData.linkedTouchpointId = linkedTouchpointId;
-      if (linkedTaskId)            updateData.linkedTaskId = linkedTaskId;
-
-      const updated = await storage.resolveNbaCard(pStr(req.params.id), currentUser.id, updateData);
-      if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
-      // Task #374: lifecycle events — both the action-specific event and a
-      // generic "resolved" event so analytics can reason about resolution
-      // independent of the resolution kind (acted/dismissed/snoozed/alternate).
-      try {
-        await storage.recordNbaCardEvent({
-          cardId: updated.id,
-          orgId: updated.orgId,
-          userId: updated.userId,
-          eventType: action === "actioned" ? "acted" : action,
-          reason: action === "dismissed" ? (dismissReason ?? null) : null,
-          actorUserId: currentUser.id,
-          metadata: action === "snoozed" ? { snoozeUntil } : action === "alternate" ? { alternateActionNote } : null,
-        });
-        await storage.recordNbaCardEvent({
-          cardId: updated.id,
-          orgId: updated.orgId,
-          userId: updated.userId,
-          eventType: "resolved",
-          reason: action,
-          actorUserId: currentUser.id,
-          metadata: null,
-        });
-      } catch (e) { console.error("[nba/cards PATCH event]", e); }
-      // Resolving a card removes it from the daily workspace — broadcast so
-      // any open Today's Priorities tabs refresh immediately.
-      publishLiveSync(updated.orgId, "daily_workspace", updated.id);
-      res.json(updated);
-    } catch (err) {
-      console.error("[nba/cards PATCH]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to resolve NBA card" });
-    }
-  });
-
-  // POST /api/nba/cards/:id/view — Task #374 mark a card as viewed by the rep
-  app.post("/api/nba/cards/:id/view", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const updated = await storage.markNbaCardViewed(pStr(req.params.id), currentUser.id, currentUser.organizationId);
-      if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
-      res.json({ ok: true, firstViewedAt: updated.firstViewedAt });
-    } catch (err) {
-      console.error("[nba/cards/:id/view POST]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to record view" });
-    }
-  });
-
-  // POST /api/nba/cards/:id/link-outcome — attach a touchpoint/task/commitment to a card
-  app.post("/api/nba/cards/:id/link-outcome", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { linkedCommitmentId, linkedTouchpointId, linkedTaskId, outcomeTypeLinked } = req.body;
-      const now = new Date().toISOString();
-      // Linking an outcome implicitly resolves the card as "actioned" so it is
-      // (a) no longer visible in the rep's open queue and (b) eligible for the
-      // outcome classifier (which only scans non-visible statuses).
-      const updateData: Record<string, unknown> = {
-        outcomeLinkedAt: now,
-        outcomeTypeLinked: outcomeTypeLinked ?? null,
-        linkedCommitmentId: linkedCommitmentId ?? null,
-        linkedTouchpointId: linkedTouchpointId ?? null,
-        linkedTaskId: linkedTaskId ?? null,
-        status: "actioned",
-        resolutionAction: "link_outcome",
-      };
-      const updated = await storage.resolveNbaCard(pStr(req.params.id), currentUser.id, updateData);
-      if (!updated) return res.status(404).json({ error: "Card not found or not yours" });
-      try {
-        // link-outcome implicitly resolves the card as "acted". Emit the same
-        // normalized event triple (acted + resolved + outcome_linked) the PATCH
-        // path emits so the lifecycle is uniform across all resolution paths.
-        await storage.recordNbaCardEvent({
-          cardId: updated.id,
-          orgId: updated.orgId,
-          userId: updated.userId,
-          eventType: "acted",
-          actorUserId: currentUser.id,
-          reason: "link_outcome",
-          metadata: null,
-        });
-        await storage.recordNbaCardEvent({
-          cardId: updated.id,
-          orgId: updated.orgId,
-          userId: updated.userId,
-          eventType: "resolved",
-          actorUserId: currentUser.id,
-          reason: "link_outcome",
-          metadata: null,
-        });
-        await storage.recordNbaCardEvent({
-          cardId: updated.id,
-          orgId: updated.orgId,
-          userId: updated.userId,
-          eventType: "outcome_linked",
-          actorUserId: currentUser.id,
-          metadata: { outcomeTypeLinked, linkedCommitmentId, linkedTouchpointId, linkedTaskId },
-        });
-      } catch (e) { console.error("[nba/cards/link-outcome event]", e); }
-      res.json(updated);
-    } catch (err) {
-      console.error("[nba/cards/link-outcome POST]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to link outcome" });
-    }
-  });
-
-  // GET /api/nba/my-impact — Task #374 rep-facing "Your NBA impact" summary
-  app.get("/api/nba/my-impact", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      // Default to "this calendar month" (days elapsed since the 1st) per spec;
-      // callers can override with ?daysBack=N for an explicit rolling window.
-      const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      const monthDays = Math.max(1, Math.ceil((now.getTime() - startOfMonth.getTime()) / (24 * 60 * 60 * 1000)));
-      const daysBack = req.query.daysBack
-        ? Math.min(Number(req.query.daysBack), 90)
-        : monthDays;
-      const summary = await storage.getNbaImpactForUser(currentUser.id, currentUser.organizationId, daysBack);
-      res.json(summary);
-    } catch (err) {
-      console.error("[nba/my-impact GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch NBA impact" });
-    }
-  });
-
-  // GET /api/nba/team-rollup — Task #374 NAM/Director team NBA rollup portlet
-  // Director scope = vertical (director → NAMs → AMs); NAM scope = direct AMs.
-  app.get("/api/nba/team-rollup", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { role, organizationId } = currentUser;
-      const allowed = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (!allowed.includes(role)) return res.status(403).json({ error: "Not authorized" });
-      const daysBack = Math.min(Number(req.query.daysBack ?? 30), 90);
-      const allUsers = await storage.getUsers(organizationId);
-      const directReports = allUsers.filter(u => u.managerId === currentUser.id);
-      let amIds: string[] = [];
-      if (role === "national_account_manager") {
-        amIds = directReports.filter(u => u.role === "account_manager").map(u => u.id);
-      } else {
-        // Director / admin: walk one more level
-        const namIds = directReports.map(u => u.id);
-        const ams = allUsers.filter(u => u.role === "account_manager"
-          && (namIds.includes(u.managerId ?? "") || u.managerId === currentUser.id));
-        amIds = ams.map(u => u.id);
-      }
-      const rollup = await storage.getNbaTeamRollup(amIds, organizationId, daysBack);
-      res.json(rollup);
-    } catch (err) {
-      console.error("[nba/team-rollup GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch team rollup" });
-    }
-  });
-
-  // GET /api/nba/team-rollup/:repId/cards — Task #374 read-only drill-in into an
-  // AM's NBA feed for the rep's manager (NAM, director or admin in scope).
-  app.get("/api/nba/team-rollup/:repId/cards", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { role, organizationId } = currentUser;
-      const allowed = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (!allowed.includes(role)) return res.status(403).json({ error: "Not authorized" });
-      const repId = pStr(req.params.repId);
-      const allUsers = await storage.getUsers(organizationId);
-      const rep = allUsers.find(u => u.id === repId);
-      if (!rep || rep.organizationId !== organizationId) {
-        return res.status(404).json({ error: "Rep not found" });
-      }
-      // Scope check: rep must roll up to currentUser
-      const isInScope =
-        role === "admin" ||
-        rep.managerId === currentUser.id ||
-        ((role === "director" || role === "sales_director") && allUsers.some(u => u.id === rep.managerId && u.managerId === currentUser.id));
-      if (!isInScope) return res.status(403).json({ error: "Rep not in your scope" });
-      const cards = await storage.getNbaCardsForUserReadonly(repId, organizationId);
-      // Decorate with companyName so the manager drill-in shows "Acme — Title"
-      const companyIds = Array.from(new Set(cards.map(c => c.companyId).filter(Boolean) as string[]));
-      const companyNameMap = new Map<string, string>();
-      if (companyIds.length > 0) {
-        const cos = await storage.getCompaniesByIds(companyIds, organizationId);
-        for (const co of cos) companyNameMap.set(co.id, co.name);
-      }
-      const decorated = cards.map(c => ({
-        ...c,
-        companyName: c.companyId ? companyNameMap.get(c.companyId) ?? null : null,
-      }));
-      res.json({ repId, repName: rep.name, cards: decorated });
-    } catch (err) {
-      console.error("[nba/team-rollup/:repId/cards GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch rep cards" });
-    }
-  });
-
-  // GET /api/nba/manager-summary — manager view of team NBA card engagement
-  app.get("/api/nba/manager-summary", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { role, organizationId } = currentUser;
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
-      const weekStart = String(req.query.weekStart ?? new Date().toISOString().split("T")[0].slice(0, 10));
-      const summary = await storage.getNbaManagerSummary(organizationId, weekStart);
-      res.json(summary);
-    } catch (err) {
-      console.error("[nba/manager-summary GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch manager summary" });
-    }
-  });
-
-  // ── Daily Priorities Workspace (Task #674) ────────────────────────────────
-  //
-  // In-memory session-scoped dismiss store.
-  // Key: userId  Value: Set of dismissed cardIds
-  // Resets on server restart — acceptable for v1 (no schema change needed).
-  const _workspaceDismissed = new Map<string, Set<string>>();
-
-  // 30-second response cache keyed by (orgId, viewerUserId, scopedToUserId).
-  // The endpoint pulls all NBA cards + companies + per-card contact/lane rows,
-  // which is heavy; the daily workspace gets re-queried on every cross-tab
-  // liveSync invalidation, so a small TTL prevents thundering herds without
-  // making the data stale. Entries are evicted lazily.
-  const _workspaceCache = new Map<string, { ts: number; payload: unknown }>();
-  const WORKSPACE_CACHE_TTL_MS = 30_000;
-  const _workspaceCacheKey = (orgId: string, viewerId: string, scopedTo: string | null) =>
-    `${orgId}::${viewerId}::${scopedTo ?? "self"}`;
-  const _invalidateWorkspaceCache = (orgId: string) => {
-    const prefix = `${orgId}::`;
-    for (const k of _workspaceCache.keys()) {
-      if (k.startsWith(prefix)) _workspaceCache.delete(k);
-    }
-  };
-
-  // Bust the workspace cache whenever ANY topic that can affect a daily
-  // workspace fires for an org. This makes server-side cache freshness match
-  // the client's live-sync semantics — clients get an SSE invalidation, then
-  // their immediate refetch hits a fresh cache (rather than reading the
-  // stale 30s entry). Topics here mirror the client TOPIC_TO_QUERY_KEYS map
-  // entries that include /api/nba/daily-workspace.
-  const _WORKSPACE_INVALIDATING_TOPICS = new Set([
-    "daily_workspace",
-    "customer_quote",
-    "carrier_outreach",
-    "recurring_lane",
-    "freight_opportunity",
-  ]);
-  subscribeAllLiveSync((evt) => {
-    if (_WORKSPACE_INVALIDATING_TOPICS.has(evt.topic)) {
-      _invalidateWorkspaceCache(evt.orgId);
-    }
-  });
-
-  // GET /api/nba/daily-workspace — bucketed priority list for Today's Priorities
-  // ?repId=<userId>  — admin/director/sales_director may scope to a specific rep
-  app.get("/api/nba/daily-workspace", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { id: currentUserId, role, organizationId } = currentUser;
-
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
-
-      // Resolve the target user ID for card fetching
-      const repIdParam = qOptStr(req.query.repId);
-      let targetUserId: string = currentUserId;
-      if (repIdParam && repIdParam !== currentUserId) {
-        const canScope = ["admin", "director", "sales_director"].includes(role);
-        if (!canScope) return res.status(403).json({ error: "Only admins/directors may view another rep's workspace" });
-        // Validate rep is in the same org
-        const allOrgUsers = await storage.getUsers(organizationId);
-        const rep = allOrgUsers.find(u => u.id === repIdParam && u.organizationId === organizationId);
-        if (!rep) return res.status(404).json({ error: "Rep not found" });
-        targetUserId = repIdParam;
-      }
-
-      // Cache lookup — keyed per (org, viewer, scopedTo). Viewer is part of the
-      // key because the in-memory dismiss set is viewer-scoped.
-      const scopedToKey = targetUserId !== currentUserId ? targetUserId : null;
-      const cacheKey = _workspaceCacheKey(organizationId, currentUserId, scopedToKey);
-      const cached = _workspaceCache.get(cacheKey);
-      if (cached && Date.now() - cached.ts < WORKSPACE_CACHE_TTL_MS) {
-        return res.json(cached.payload);
-      }
-
-      // Fetch raw cards (all visible, no artificial limit for workspace view)
-      const rawCards = await storage.getNbaCardsForUserReadonly(targetUserId, organizationId);
-
-      // Filter session-dismissed cards
-      const dismissedSet = _workspaceDismissed.get(currentUserId) ?? new Set<string>();
-      const cards = rawCards.filter(c => !dismissedSet.has(c.id));
-
-      // Exclude archived companies
-      const orgCompanies = await storage.getCompanies(organizationId);
-      const archivedIds = new Set(orgCompanies.filter(co => co.archivedAt).map(co => co.id));
-      const activeCards = cards.filter(c => !c.companyId || !archivedIds.has(c.companyId));
-
-      // Assign each card a bucket
-      type CardWithBucket = (typeof activeCards)[number] & { bucket: WorkspaceBucket };
-      const withBuckets: CardWithBucket[] = activeCards.map(c => ({
-        ...c,
-        bucket: ruleTypeToBucket(c.ruleType ?? "", c.outcomeType ?? ""),
-      }));
-
-      // De-duplicate by companyId: keep the card with the highest-priority bucket
-      // (lowest BUCKET_PRIORITY number wins). Within the same bucket, keep highest urgencyScore.
-      const companyBest = new Map<string, CardWithBucket>();
-      for (const card of withBuckets) {
-        const key = card.companyId ?? `no-company-${card.id}`;
-        const existing = companyBest.get(key);
-        if (!existing) {
-          companyBest.set(key, card);
-        } else {
-          const existPriority = BUCKET_PRIORITY[existing.bucket];
-          const newPriority = BUCKET_PRIORITY[card.bucket];
-          if (
-            newPriority < existPriority ||
-            (newPriority === existPriority && (card.urgencyScore ?? 0) > (existing.urgencyScore ?? 0))
-          ) {
-            companyBest.set(key, card);
-          }
-        }
-      }
-      const deduped = [...companyBest.values()];
-
-      // Sort within each bucket by urgency score desc
-      const bucketed: Record<WorkspaceBucket, CardWithBucket[]> = {
-        quote_now:       [],
-        follow_up:       [],
-        defend:          [],
-        grow:            [],
-        procure_carrier: [],
-      };
-      for (const card of deduped) {
-        bucketed[card.bucket].push(card);
-      }
-      for (const bucket of BUCKET_ORDER) {
-        bucketed[bucket].sort((a, b) => (b.urgencyScore ?? 0) - (a.urgencyScore ?? 0));
-      }
-
-      // Enrich with contact + lane display info using the canonical projection helper
-      const { contactIds, laneIds } = collectProjectionIds(deduped);
-      const [contactRows, laneRows] = await Promise.all([
-        Promise.all(contactIds.map(id => storage.getContact(id).catch(() => null))),
-        Promise.all(laneIds.map(id => storage.getRecurringLane(id).catch(() => null))),
-      ]);
-      const contacts = new Map<string, Contact>(
-        contactRows.filter((c): c is Contact => !!c).map(c => [c.id, c]),
-      );
-      const lanes = new Map<string, RecurringLane>(
-        laneRows.filter((l): l is RecurringLane => !!l).map(l => [l.id, l]),
-      );
-      const userIds = new Set<string>();
-      for (const c of deduped) {
-        if (c.ruleType !== "recurring_lane_capacity" || !c.linkedLaneId) continue;
-        const lane = lanes.get(c.linkedLaneId);
-        if (!lane) continue;
-        if (lane.ownerUserId) userIds.add(lane.ownerUserId);
-        if (lane.overseerUserId) userIds.add(lane.overseerUserId);
-      }
-      const userRows = await Promise.all([...userIds].map(id => storage.getUser(id)));
-      const userMap = new Map<string, User>(
-        userRows.filter((u): u is User => !!u).map(u => [u.id, u]),
-      );
-
-      // Build projected buckets — each card retains its `.bucket` field
-      const projectedBuckets = Object.fromEntries(
-        BUCKET_ORDER.map(bucket => [
-          bucket,
-          bucketed[bucket].map(c => ({
-            ...projectNbaCard(c, { contacts, lanes, users: userMap }),
-            bucket,
-          })),
-        ]),
-      ) as unknown as Record<WorkspaceBucket, ReturnType<typeof projectNbaCard> & { bucket: WorkspaceBucket }[]>;
-
-      const totalCards = deduped.length;
-      const payload = {
-        buckets: projectedBuckets,
-        totalCards,
-        scopedToUserId: targetUserId !== currentUserId ? targetUserId : null,
-      };
-      _workspaceCache.set(cacheKey, { ts: Date.now(), payload });
-      res.json(payload);
-    } catch (err) {
-      console.error("[nba/daily-workspace GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch daily workspace" });
-    }
-  });
-
-  // POST /api/nba/dismiss/:cardId — session-scoped (in-memory) dismiss
-  // Does NOT write to DB; card reappears after a server restart.
-  //
-  // Dismiss is keyed by the **current user's ID** (the viewer), not the target
-  // rep. This is intentional: when a director scopes the workspace to a rep via
-  // ?repId=, their "Not now" click hides the card from *their own* session view
-  // of that rep's cards. The rep's own workspace is unaffected. This maintains
-  // clean separation between personal session state and persistent card status.
-  app.post("/api/nba/dismiss/:cardId", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const cardId = pStr(req.params.cardId);
-      if (!cardId) return res.status(400).json({ error: "cardId required" });
-      let set = _workspaceDismissed.get(currentUser.id);
-      if (!set) {
-        set = new Set<string>();
-        _workspaceDismissed.set(currentUser.id, set);
-      }
-      set.add(cardId);
-      // Invalidate the workspace cache for this org so the next fetch
-      // doesn't return the stale (still-includes-the-card) payload.
-      _invalidateWorkspaceCache(currentUser.organizationId);
-      publishLiveSync(currentUser.organizationId, "daily_workspace", cardId);
-      res.json({ ok: true, cardId });
-    } catch (err) {
-      console.error("[nba/dismiss POST]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to dismiss card" });
-    }
-  });
-
-  // GET /api/nba/rule-performance — analytics for the Phase 1 engine
-  app.get("/api/nba/rule-performance", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { role, organizationId } = currentUser;
-      const managerRoles = ["admin", "director", "national_account_manager", "sales", "sales_director"];
-      if (!managerRoles.includes(role)) return res.status(403).json({ error: "Not authorized" });
-      const daysBack = Math.min(Number(req.query.daysBack ?? 30), 90);
-      const performance = await storage.getNbaRulePerformance(organizationId, daysBack);
-      res.json(performance);
-    } catch (err) {
-      console.error("[nba/rule-performance GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch rule performance" });
-    }
-  });
-
-  // POST /api/nba/run-engine — manually trigger Phase 1 engine for the current org
-  app.post("/api/nba/run-engine", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { role, organizationId } = currentUser;
-      if (!["admin", "director"].includes(role)) return res.status(403).json({ error: "Admin or Director role required" });
-
-      const { runPhase1EngineForOrg } = await import("./nbaPhase1Engine");
-      const { companyResults, laneCapacitySpecs } = await runPhase1EngineForOrg(organizationId, storage);
-
-      let generated = 0;
-      let skipped = 0;
-      const now = new Date().toISOString();
-
-      // ── Per-company winner cards (all rules except R12) ──────────────────
-      for (const { userId, result } of companyResults) {
-        if (!result.winner) { skipped++; continue; }
-
-        // Dedup: skip if a card for same company + same rule already exists in last 14 days
-        const existing = await storage.getRecentNbaCardByType(result.companyId, result.winner.ruleType, 14);
-        if (existing) { skipped++; continue; }
-
-        // Supersede any prior visible/generated card for this company with a DIFFERENT rule type
-        await storage.supersedePreviousNbaCards(result.companyId, result.winner.ruleType);
-
-        await storage.createNbaCard({
-          orgId: organizationId,
-          userId,
-          companyId: result.companyId,
-          companyName: result.companyName,
-          ruleType: result.winner.ruleType,
-          outcomeType: result.winner.outcomeType,
-          confidence: result.winner.confidence,
-          signalCount: result.winner.signalCount,
-          signalSummary: result.winner.signalSummary,
-          whyThisNow: result.winner.whyThisNow,
-          suggestedAction: result.winner.suggestedAction,
-          expectedOutcome: result.winner.expectedOutcome,
-          growthLever: result.winner.growthLever,
-          relationshipMove: result.winner.relationshipMove,
-          accountTier: result.winner.accountTier,
-          urgencyScore: result.winner.urgencyScore,
-          playLabel: getPlayForRuleType(result.winner.ruleType)?.name ?? null,
-          status: "visible",
-          createdAt: now,
-          contactId: result.winner.contactId,
-          linkedTaskId: result.winner.linkedTaskId,
-          linkedLaneId: result.winner.linkedLaneId,
-        });
-
-        generated++;
-      }
-
-      // ── R12: per-lane × owner cards (dedup by laneId + userId) ──────────
-      for (const spec of laneCapacitySpecs) {
-        // Dedup: skip if a recurring_lane_capacity card for this lane already exists in last 30 days
-        const existingLane = await storage.getRecentNbaCardByLane(spec.laneId, spec.userId, 30);
-        if (existingLane) { skipped++; continue; }
-
-        await storage.createNbaCard({
-          orgId: organizationId,
-          userId: spec.userId,
-          companyId: spec.companyId,
-          companyName: spec.companyName,
-          ruleType: spec.candidate.ruleType,
-          outcomeType: spec.candidate.outcomeType,
-          confidence: spec.candidate.confidence,
-          signalCount: spec.candidate.signalCount,
-          signalSummary: spec.candidate.signalSummary,
-          whyThisNow: spec.candidate.whyThisNow,
-          suggestedAction: spec.candidate.suggestedAction,
-          expectedOutcome: spec.candidate.expectedOutcome,
-          growthLever: spec.candidate.growthLever,
-          relationshipMove: spec.candidate.relationshipMove,
-          accountTier: spec.candidate.accountTier,
-          urgencyScore: spec.candidate.urgencyScore,
-          playLabel: getPlayForRuleType(spec.candidate.ruleType)?.name ?? null,
-          status: "visible",
-          createdAt: now,
-          linkedLaneId: spec.laneId,
-        });
-
-        generated++;
-      }
-
-      res.json({ generated, skipped, total: companyResults.length + laneCapacitySpecs.length });
-    } catch (err) {
-      console.error("[nba/run-engine POST]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to run NBA engine" });
-    }
-  });
-
-  // ── Account Contact Suggestions (Task #201) ───────────────────────────────
-
-  /** GET /api/internal/accounts/suggestion-counts — batch pending count per account
-   *  Scoped by role: admin/director/sales_director see everything in the org;
-   *  NAMs/LMs see their own accounts plus those owned by their direct/indirect
-   *  reports; AMs/reps see only the accounts they personally own. */
-  app.get("/api/internal/accounts/suggestion-counts", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const orgWide = ["admin", "director", "sales_director"].includes(currentUser.role);
-      let scope: string[] | undefined;
-      if (!orgWide) {
-        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-        scope = Array.from(new Set([currentUser.id, ...teamIds]));
-      }
-      const counts = await storage.countPendingContactSuggestionsByOrg(currentUser.organizationId, scope);
-      res.json(counts);
-    } catch (err) {
-      console.error("[suggestion-counts GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch suggestion counts" });
-    }
-  });
-
-  /** GET /api/internal/accounts/:accountId/contact-suggestions */
-  app.get("/api/internal/accounts/:accountId/contact-suggestions", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { accountId } = req.params as { accountId: string };
-      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
-      if (!company) return res.status(404).json({ error: "Account not found" });
-      // Scope check: non-privileged roles may only read suggestions for accounts
-      // they own or accounts owned by someone in their reporting chain.
-      const orgWide = ["admin", "director", "sales_director"].includes(currentUser.role);
-      if (!orgWide) {
-        const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
-        const scope = new Set([currentUser.id, ...teamIds]);
-        if (!company.salesPersonId || !scope.has(company.salesPersonId)) {
-          return res.status(403).json({ error: "You don't have access to this account's suggestions." });
-        }
-      }
-      const status = qOptStr(req.query.status);
-      const suggestions = await storage.getAccountContactSuggestions(accountId, status);
-      // Only return pending / snoozed suggestions (exclude accepted/ignored/never_suggest unless explicitly requested)
-      const filtered = status ? suggestions : suggestions.filter(s => s.status === "pending" || s.status === "snoozed");
-      res.json(filtered);
-    } catch (err) {
-      console.error("[contact-suggestions GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to fetch suggestions" });
-    }
-  });
-
-  /** POST /api/internal/accounts/:accountId/contact-suggestions/:id/accept */
-  app.post("/api/internal/accounts/:accountId/contact-suggestions/:id/accept", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { accountId, id } = req.params as { accountId: string; id: string };
-      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
-      if (!company) return res.status(404).json({ error: "Account not found" });
-      const suggestion = await storage.getAccountContactSuggestion(id);
-      if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
-
-      const { roleType, targetContactId } = req.body as { roleType?: string; targetContactId?: string };
-
-      const now = new Date();
-      let contact;
-
-      // ── Task #450: Attach suggestion to a specific existing contact ──
-      if (targetContactId) {
-        const target = await storage.getContact(targetContactId);
-        if (!target || target.companyId !== accountId) {
-          return res.status(400).json({ error: "Selected contact does not belong to this account" });
-        }
-        // Reject if the suggestion's email is already taken by a DIFFERENT contact in the org.
-        const emailOwner = await storage.getContactByEmailInOrg(suggestion.emailAddress, currentUser.organizationId);
-        if (emailOwner && emailOwner.contactId !== target.id) {
-          return res.status(409).json({
-            error: `That email is already on contact "${emailOwner.contactName}". Resolve the duplicate before re-assigning.`,
-          });
-        }
-        const updatePayload: import("@shared/schema").InsertContact = {
-          companyId: target.companyId,
-          name: target.name,
-          title: target.title || suggestion.suggestedTitle || null,
-          phone: target.phone || suggestion.suggestedPhone || null,
-          email: suggestion.emailAddress, // attach the suggested email
-          relationshipBase: target.relationshipBase ?? null,
-          reportsToId: target.reportsToId ?? null,
-          lanes: target.lanes ?? null,
-          regions: target.regions ?? null,
-          freightSpend: target.freightSpend ?? null,
-          spotBiddingProcess: target.spotBiddingProcess ?? null,
-          nextSteps: target.nextSteps ?? null,
-          interests: target.interests ?? null,
-          notes: target.notes ?? null,
-          createdAt: target.createdAt ?? null,
-          createdBy: target.createdBy ?? null,
-          baseAdvancedAt: target.baseAdvancedAt ?? null,
-          lastSeenAt: now,
-          roleType: roleType ?? target.roleType ?? null,
-          sourceType: target.sourceType ?? "email_capture",
-          status: target.status ?? "active",
-          isPrimary: target.isPrimary ?? false,
-        };
-        contact = await storage.updateContact(target.id, updatePayload);
-        await storage.updateAccountContactSuggestionStatus(id, "accepted", { userId: currentUser.id });
-        return res.json({ suggestion: { ...suggestion, status: "accepted" }, contact, mode: "merged" });
-      }
-
-      // Accept (default): create or update contact by email match within the account
-      const existingContact = await storage.getContactByEmailAndCompany(suggestion.emailAddress, accountId);
-      if (existingContact) {
-        // Update lastSeenAt without overwriting manually-curated fields.
-        // Build an explicit InsertContact payload.
-        // Preserve curated (non-blank) fields; backfill blanks from suggestion hints.
-        const updatePayload: import("@shared/schema").InsertContact = {
-          companyId: existingContact.companyId,
-          name: existingContact.name || suggestion.suggestedName || suggestion.emailAddress,
-          title: existingContact.title || suggestion.suggestedTitle || null,
-          phone: existingContact.phone || suggestion.suggestedPhone || null,
-          relationshipBase: existingContact.relationshipBase ?? null,
-          email: existingContact.email ?? null,
-          reportsToId: existingContact.reportsToId ?? null,
-          lanes: existingContact.lanes ?? null,
-          regions: existingContact.regions ?? null,
-          freightSpend: existingContact.freightSpend ?? null,
-          spotBiddingProcess: existingContact.spotBiddingProcess ?? null,
-          nextSteps: existingContact.nextSteps ?? null,
-          interests: existingContact.interests ?? null,
-          notes: existingContact.notes ?? null,
-          createdAt: existingContact.createdAt ?? null,
-          createdBy: existingContact.createdBy ?? null,
-          baseAdvancedAt: existingContact.baseAdvancedAt ?? null,
-          lastSeenAt: now,
-          roleType: roleType ?? existingContact.roleType ?? null,
-          sourceType: existingContact.sourceType ?? "email_capture",
-          status: existingContact.status ?? "active",
-          isPrimary: existingContact.isPrimary ?? false,
-        };
-        contact = await storage.updateContact(existingContact.id, updatePayload);
-      } else {
-        const createPayload: import("@shared/schema").InsertContact = {
-          companyId: accountId,
-          name: suggestion.suggestedName ?? suggestion.emailAddress,
-          title: suggestion.suggestedTitle ?? null,
-          email: suggestion.emailAddress,
-          phone: suggestion.suggestedPhone ?? null,
-          roleType: roleType ?? null,
-          sourceType: "email_capture",
-          lastSeenAt: now,
-          status: "active",
-          isPrimary: false,
-          relationshipBase: null,
-          reportsToId: null,
-          lanes: null,
-          regions: null,
-          freightSpend: null,
-          spotBiddingProcess: null,
-          nextSteps: null,
-          interests: null,
-          notes: null,
-          createdAt: null,
-          createdBy: null,
-          baseAdvancedAt: null,
-        };
-        contact = await storage.createContact(createPayload);
-      }
-
-      // Mark suggestion as accepted
-      await storage.updateAccountContactSuggestionStatus(id, "accepted", { userId: currentUser.id });
-      res.json({ suggestion: { ...suggestion, status: "accepted" }, contact });
-    } catch (err) {
-      console.error("[contact-suggestions/accept POST]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to accept suggestion" });
-    }
-  });
-
-  /** POST /api/internal/accounts/:accountId/contact-suggestions/:id/ignore */
-  app.post("/api/internal/accounts/:accountId/contact-suggestions/:id/ignore", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { accountId, id } = req.params as { accountId: string; id: string };
-      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
-      if (!company) return res.status(404).json({ error: "Account not found" });
-      const suggestion = await storage.getAccountContactSuggestion(id);
-      if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
-      const updated = await storage.updateAccountContactSuggestionStatus(id, "ignored", { userId: currentUser.id });
-      res.json(updated);
-    } catch (err) {
-      console.error("[contact-suggestions/ignore POST]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to ignore suggestion" });
-    }
-  });
-
-  /** POST /api/internal/accounts/:accountId/contact-suggestions/:id/snooze */
-  app.post("/api/internal/accounts/:accountId/contact-suggestions/:id/snooze", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { accountId, id } = req.params as { accountId: string; id: string };
-      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
-      if (!company) return res.status(404).json({ error: "Account not found" });
-      const suggestion = await storage.getAccountContactSuggestion(id);
-      if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
-      const { snoozedUntil } = req.body as { snoozedUntil?: string };
-      const snoozedUntilDate = snoozedUntil ? new Date(snoozedUntil) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-      const updated = await storage.updateAccountContactSuggestionStatus(id, "snoozed", { userId: currentUser.id, snoozedUntil: snoozedUntilDate });
-      res.json(updated);
-    } catch (err) {
-      console.error("[contact-suggestions/snooze POST]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to snooze suggestion" });
-    }
-  });
-
-  /** POST /api/internal/accounts/:accountId/contact-suggestions/:id/never-suggest */
-  app.post("/api/internal/accounts/:accountId/contact-suggestions/:id/never-suggest", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const { accountId, id } = req.params as { accountId: string; id: string };
-      const company = await storage.getCompanyInOrg(accountId, currentUser.organizationId);
-      if (!company) return res.status(404).json({ error: "Account not found" });
-      const suggestion = await storage.getAccountContactSuggestion(id);
-      if (!suggestion || suggestion.accountId !== accountId) return res.status(404).json({ error: "Suggestion not found" });
-      const updated = await storage.updateAccountContactSuggestionStatus(id, "never_suggest", { userId: currentUser.id });
-      res.json(updated);
-    } catch (err) {
-      console.error("[contact-suggestions/never-suggest POST]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to suppress suggestion" });
-    }
-  });
-
-  registerGeographicResponsibilitiesRoutes(app);
-  registerContactGeographySuggestionRoutes(app);
-  registerAIIntelligenceRoutes(app);
-  registerDocumentRoutes(app);
-  registerCopilotCardRoutes(app);
-
-  // ── Sidebar tooltip overrides (Task #385) ──────────────────────────────
-  app.get("/api/sidebar-tooltips", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const items = await storage.getSidebarTooltips(currentUser.organizationId);
-      res.json({ items });
-    } catch (err) {
-      console.error("[sidebar-tooltips GET]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to load sidebar tooltips" });
-    }
-  });
-
-  app.put("/api/sidebar-tooltips", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-      const parsed = upsertSidebarTooltipSchema.safeParse(req.body);
-      if (!parsed.success) return res.status(400).json({ error: "Invalid payload", issues: parsed.error.issues });
-      const { itemKey, description } = parsed.data;
-      const trimmed = description.trim();
-      if (!trimmed) {
-        await storage.deleteSidebarTooltip(currentUser.organizationId, itemKey);
-        return res.json({ deleted: true, itemKey });
-      }
-      const row = await storage.upsertSidebarTooltip(currentUser.organizationId, itemKey, trimmed, currentUser.id);
-      res.json(row);
-    } catch (err) {
-      console.error("[sidebar-tooltips PUT]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to save sidebar tooltip" });
-    }
-  });
-
-  app.delete("/api/sidebar-tooltips/:itemKey", requireAuth, async (req, res) => {
-    try {
-      const currentUser = await getCurrentUser(req);
-      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (currentUser.role !== "admin") return res.status(403).json({ error: "Admin access required" });
-      await storage.deleteSidebarTooltip(currentUser.organizationId, pStr(req.params.itemKey));
-      res.json({ ok: true });
-    } catch (err) {
-      console.error("[sidebar-tooltips DELETE]", getErrorMessage(err));
-      res.status(500).json({ error: "Failed to reset sidebar tooltip" });
-    }
   });
 
   return httpServer;

@@ -27,17 +27,14 @@ import {
   ChevronDown, ChevronUp, Bell, BellRing, Loader2, MessageSquare,
   List, ChevronLeft, ChevronRight as ChevronRightIcon, Plane,
   AlertTriangle, Users, User as UserIcon, StickyNote,
-  Truck, Route, CheckCheck, UserCog, X as XIcon,
 } from "lucide-react";
-import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, apiRequest } from "@/lib/queryClient";
 import { useMarkNotificationsRead, TASK_NOTIFICATION_TYPES } from "@/hooks/use-notifications";
 import { TaskDialog } from "@/components/task-dialog";
 import { FileAttachmentList } from "@/components/file-attachment";
-import type { ProcurementLaneInfo } from "@/components/carrier-procurement-workspace";
-import type { Company, Task, User, PersonalAlert, LaneCarrier } from "@shared/schema";
+import type { Company, Task, User, PersonalAlert } from "@shared/schema";
 type TaskWithCount = Task & { commentCount?: number };
 
 type SafeUser = Omit<User, "password">;
@@ -148,7 +145,7 @@ function TaskCalendarView({
         </div>
         <div className="grid grid-cols-7 divide-x divide-y border-t">
           {Array.from({ length: firstDow }).map((_, i) => (
-            <div key={`pad-${i}`} className="h-14 md:h-24 bg-muted/20" />
+            <div key={`pad-${i}`} className="h-24 bg-muted/20" />
           ))}
           {Array.from({ length: daysInMonth }).map((_, i) => {
             const day = i + 1;
@@ -161,19 +158,19 @@ function TaskCalendarView({
             return (
               <div
                 key={day}
-                className={`h-14 md:h-24 p-1 md:p-1.5 cursor-pointer transition-colors relative overflow-hidden
+                className={`h-24 p-1.5 cursor-pointer transition-colors relative overflow-hidden
                   ${isSelected ? "bg-primary/10 ring-1 ring-inset ring-primary" : "hover:bg-muted/40"}
                   ${ptos.length > 0 ? "bg-violet-50 dark:bg-violet-950/20" : ""}
                 `}
                 onClick={() => setSelectedDay(day === selectedDay ? null : day)}
                 data-testid={`calendar-day-${day}`}
               >
-                <div className="flex items-center justify-between mb-0.5 md:mb-1">
-                  <span className={`text-[10px] md:text-xs font-medium w-4 h-4 md:w-5 md:h-5 flex items-center justify-center rounded-full
+                <div className="flex items-center justify-between mb-1">
+                  <span className={`text-xs font-medium w-5 h-5 flex items-center justify-center rounded-full
                     ${isToday ? "bg-primary text-primary-foreground" : "text-foreground"}`}>
                     {day}
                   </span>
-                  {ptos.length > 0 && <Plane className="h-3 w-3 text-violet-500 shrink-0 hidden md:block" />}
+                  {ptos.length > 0 && <Plane className="h-3 w-3 text-violet-500 shrink-0" />}
                 </div>
                 {dayTasks.length > 0 && (
                   <div className="flex flex-wrap gap-0.5 mt-0.5">
@@ -185,14 +182,12 @@ function TaskCalendarView({
                     )}
                   </div>
                 )}
-                <div className="hidden md:block">
-                  {dayTasks.slice(0, 2).map(t => (
-                    <p key={t.id} className="text-[10px] leading-tight text-muted-foreground truncate mt-0.5">{t.title}</p>
-                  ))}
-                  {dayTasks.length > 2 && (
-                    <p className="text-[9px] text-muted-foreground">+{dayTasks.length - 2} more</p>
-                  )}
-                </div>
+                {dayTasks.slice(0, 2).map(t => (
+                  <p key={t.id} className="text-[10px] leading-tight text-muted-foreground truncate mt-0.5">{t.title}</p>
+                ))}
+                {dayTasks.length > 2 && (
+                  <p className="text-[9px] text-muted-foreground">+{dayTasks.length - 2} more</p>
+                )}
               </div>
             );
           })}
@@ -380,7 +375,7 @@ function AlertDialog({ open, onOpenChange, companies }: { open: boolean; onOpenC
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="none">No account linked</SelectItem>
-                {[...companies].sort((a, b) => a.name.localeCompare(b.name)).map(c => (
+                {companies.map(c => (
                   <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                 ))}
               </SelectContent>
@@ -401,47 +396,6 @@ function AlertDialog({ open, onOpenChange, companies }: { open: boolean; onOpenC
   );
 }
 
-function ProcurementTaskMiniSummary({ lane, taskId }: { lane: ProcurementLaneInfo; taskId: string }) {
-  const { data: carriers = [] } = useQuery<LaneCarrier[]>({
-    queryKey: ["/api/tasks", taskId, "lane-carriers"],
-    staleTime: 2 * 60 * 1000,
-  });
-  const laneName = lane.lane;
-  const activeCount = carriers.filter((c: LaneCarrier) => c.lane === laneName && c.status !== "declined").length;
-  const committedCount = carriers.filter((c: LaneCarrier) => c.lane === laneName && c.status === "committed").length;
-  let coverageColor = "bg-red-500/10 text-red-700 dark:text-red-400";
-  if (activeCount >= 5) coverageColor = "bg-green-500/10 text-green-700 dark:text-green-400";
-  else if (activeCount > 0) coverageColor = "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
-
-  return (
-    <div className="mt-1 space-y-0.5" data-testid={`procurement-summary-${taskId}`}>
-      {(lane.customerName || lane.awardTitle) && (
-        <div className="text-xs text-muted-foreground">
-          {lane.customerName && <span className="font-medium">{lane.customerName}</span>}
-          {lane.customerName && lane.awardTitle && " · "}
-          {lane.awardTitle && <span>{lane.awardTitle}</span>}
-        </div>
-      )}
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <Route className="h-3 w-3" />
-          <span>{lane.origin} → {lane.destination}</span>
-        </div>
-        {lane.volume > 0 && (
-          <span className="text-xs text-muted-foreground">{Number(lane.volume).toLocaleString()} loads/yr</span>
-        )}
-        {lane.rate && (
-          <span className="text-xs text-muted-foreground">${lane.rate}/load</span>
-        )}
-      </div>
-      <Badge className={`text-xs h-5 px-1.5 ${coverageColor}`} data-testid={`badge-proc-coverage-${taskId}`}>
-        <Truck className="h-2.5 w-2.5 mr-1" />
-        {committedCount}/{activeCount} committed · {activeCount}/5 contacted
-      </Badge>
-    </div>
-  );
-}
-
 export default function TasksPage() {
   const { user: currentUser } = useAuth();
   const { toast } = useToast();
@@ -453,16 +407,13 @@ export default function TasksPage() {
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"list" | "calendar">("list");
   const [showMyTasksOnly, setShowMyTasksOnly] = useState(true);
-  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<string>>(new Set());
-  const [reassignDialogOpen, setReassignDialogOpen] = useState(false);
-  const [reassignUserId, setReassignUserId] = useState("");
   const markRead = useMarkNotificationsRead(TASK_NOTIFICATION_TYPES);
 
   const isAdminRole = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales";
 
   useEffect(() => {
     if (currentUser) {
-      markRead.mutate(undefined);
+      markRead.mutate();
     }
   }, [currentUser?.id]);
 
@@ -576,42 +527,6 @@ export default function TasksPage() {
     },
   });
 
-  const bulkCompleteMutation = useMutation({
-    mutationFn: async (ids: string[]) => {
-      await Promise.all(ids.map(id => apiRequest("PATCH", `/api/tasks/${id}`, { status: "completed" })));
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      toast({ title: `${selectedTaskIds.size} task${selectedTaskIds.size !== 1 ? "s" : ""} marked complete` });
-      setSelectedTaskIds(new Set());
-    },
-    onError: () => toast({ title: "Failed to update tasks", variant: "destructive" }),
-  });
-
-  const bulkReassignMutation = useMutation({
-    mutationFn: async ({ ids, userId }: { ids: string[]; userId: string }) => {
-      await Promise.all(ids.map(id => apiRequest("PATCH", `/api/tasks/${id}`, { assignedTo: userId })));
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
-      const name = teamMembers.find(u => u.id === reassignUserId)?.name || "user";
-      toast({ title: `${selectedTaskIds.size} task${selectedTaskIds.size !== 1 ? "s" : ""} reassigned to ${name}` });
-      setReassignDialogOpen(false);
-      setReassignUserId("");
-      setSelectedTaskIds(new Set());
-    },
-    onError: () => toast({ title: "Failed to reassign tasks", variant: "destructive" }),
-  });
-
-  const toggleTaskSelection = (taskId: string) => {
-    setSelectedTaskIds(prev => {
-      const next = new Set(prev);
-      if (next.has(taskId)) next.delete(taskId);
-      else next.add(taskId);
-      return next;
-    });
-  };
-
   const getUserName = (userId: string) => teamMembers.find(u => u.id === userId)?.name || "";
   const getCompanyName = (companyId: string | null) => companyId ? companies?.find(c => c.id === companyId)?.name || "" : "";
 
@@ -619,47 +534,19 @@ export default function TasksPage() {
     const companyName = getCompanyName(task.companyId);
     const assigneeName = getUserName(task.assignedTo);
     const assignerName = getUserName(task.assignedBy);
-    const procLane = ((): ProcurementLaneInfo | null => {
-      if (!Array.isArray(task.attachedLaneData)) return null;
-      const found = (task.attachedLaneData as Array<Record<string, unknown>>).find(
-        (l) =>
-          l != null &&
-          l.type === "carrier_procurement" &&
-          typeof l.lane === "string" &&
-          typeof l.origin === "string" &&
-          typeof l.destination === "string" &&
-          typeof l.volume === "number" &&
-          typeof l.awardId === "string"
-      );
-      return (found ?? null) as ProcurementLaneInfo | null;
-    })();
+    const isMyTask = task.assignedTo === currentUser?.id;
 
-    const isSelected = selectedTaskIds.has(task.id);
     return (
       <div
         key={task.id}
-        className={`flex items-start gap-3 p-3 rounded-lg border transition-all group cursor-pointer
+        className={`flex items-center gap-3 p-3 rounded-lg border transition-all group cursor-pointer
           ${urgent
             ? "border-red-200 dark:border-red-900/50 bg-red-50/50 dark:bg-red-950/10 hover:bg-red-50 dark:hover:bg-red-950/20"
-            : procLane
-              ? "border-primary/20 bg-primary/3 hover:border-primary/40 hover:bg-primary/5"
-              : isSelected
-                ? "border-primary/30 bg-primary/5"
-                : "border-transparent hover:border-border hover:bg-muted/50"}
+            : "border-transparent hover:border-border hover:bg-muted/50"}
           ${isCompleted ? "opacity-60" : ""}`}
         data-testid={`task-row-${task.id}`}
         onClick={() => { setEditingTask(task); setFocusComments(false); setTaskDialogOpen(true); }}
       >
-        {/* Multi-select checkbox — always in DOM; fades in on hover or stays visible when selected */}
-        {!isCompleted && (
-          <Checkbox
-            checked={isSelected}
-            onCheckedChange={() => toggleTaskSelection(task.id)}
-            onClick={e => e.stopPropagation()}
-            className={`shrink-0 mt-0.5 h-3.5 w-3.5 transition-opacity duration-150 ${isSelected ? "opacity-100" : "opacity-20 group-hover:opacity-100"}`}
-            data-testid={`checkbox-task-${task.id}`}
-          />
-        )}
         {/* Quick-complete checkbox */}
         <button
           onClick={(e) => {
@@ -667,7 +554,7 @@ export default function TasksPage() {
             const newStatus = task.status === "completed" ? "open" : "completed";
             toggleStatusMutation.mutate({ id: task.id, status: newStatus });
           }}
-          className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all hover:scale-110 mt-0.5
+          className={`shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center transition-all hover:scale-110
             ${task.status === "completed"
               ? "bg-green-500 border-green-500 text-white"
               : urgent
@@ -683,7 +570,7 @@ export default function TasksPage() {
         {!isCompleted && (
           <button
             onClick={(e) => { e.stopPropagation(); toggleStatusMutation.mutate({ id: task.id, status: nextStatus(task.status) }); }}
-            className="shrink-0 hover:scale-110 transition-transform mt-0.5"
+            className="shrink-0 hover:scale-110 transition-transform"
             title={`Status: ${task.status}. Click to advance.`}
             data-testid={`button-toggle-status-${task.id}`}
           >
@@ -714,27 +601,10 @@ export default function TasksPage() {
               </span>
             )}
           </div>
-          {procLane && (
-            <ProcurementTaskMiniSummary lane={procLane} taskId={task.id} />
-          )}
-          {procLane && !isCompleted && (
-            <div className="mt-1.5">
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-6 px-2 text-xs border-primary/30 text-primary hover:bg-primary/10"
-                onClick={(e) => { e.stopPropagation(); setEditingTask(task); setFocusComments(false); setTaskDialogOpen(true); }}
-                data-testid={`button-open-workspace-${task.id}`}
-              >
-                <Truck className="h-3 w-3 mr-1" />
-                Open Workspace
-              </Button>
-            </div>
-          )}
           <FileAttachmentList entityType="task" entityIds={[task.id]} />
         </div>
 
-        {!isCompleted && !procLane && dueDateBadge(task.dueDate)}
+        {!isCompleted && dueDateBadge(task.dueDate)}
 
         {(task.commentCount ?? 0) > 0 && (
           <button
@@ -1063,47 +933,6 @@ export default function TasksPage() {
       </>
       )}
 
-      {/* Bulk action bar */}
-      {selectedTaskIds.size > 0 && (
-        <div
-          className="sticky bottom-4 flex items-center gap-2 p-3 rounded-lg border border-primary/30 bg-background/95 backdrop-blur shadow-lg"
-          data-testid="bulk-action-bar"
-        >
-          <span className="text-sm font-medium text-primary">
-            {selectedTaskIds.size} task{selectedTaskIds.size !== 1 ? "s" : ""} selected
-          </span>
-          <div className="flex-1" />
-          <Button
-            variant="outline"
-            className="h-8 text-sm gap-1.5"
-            onClick={() => bulkCompleteMutation.mutate(Array.from(selectedTaskIds))}
-            disabled={bulkCompleteMutation.isPending}
-            data-testid="button-bulk-complete"
-          >
-            <CheckCheck className="h-3.5 w-3.5" />
-            Mark Complete
-          </Button>
-          {teamMembers.length > 0 && (
-            <Button
-              variant="outline"
-              className="h-8 text-sm gap-1.5"
-              onClick={() => { setReassignUserId(""); setReassignDialogOpen(true); }}
-              data-testid="button-bulk-reassign"
-            >
-              <UserCog className="h-3.5 w-3.5" />
-              Reassign…
-            </Button>
-          )}
-          <button
-            onClick={() => setSelectedTaskIds(new Set())}
-            className="text-muted-foreground hover:text-foreground transition-colors ml-1"
-            data-testid="button-clear-selection"
-          >
-            <XIcon className="h-4 w-4" />
-          </button>
-        </div>
-      )}
-
       <TaskDialog
         open={taskDialogOpen}
         onOpenChange={(open) => { setTaskDialogOpen(open); if (!open) setFocusComments(false); }}
@@ -1116,37 +945,6 @@ export default function TasksPage() {
         onOpenChange={setAlertDialogOpen}
         companies={companies}
       />
-
-      {/* Reassign dialog */}
-      <Dialog open={reassignDialogOpen} onOpenChange={setReassignDialogOpen}>
-        <DialogContent className="sm:max-w-xs" data-testid="dialog-bulk-reassign">
-          <DialogHeader>
-            <DialogTitle>Reassign {selectedTaskIds.size} task{selectedTaskIds.size !== 1 ? "s" : ""}</DialogTitle>
-          </DialogHeader>
-          <div className="py-2">
-            <Select value={reassignUserId} onValueChange={setReassignUserId}>
-              <SelectTrigger data-testid="select-reassign-user">
-                <SelectValue placeholder="Choose a team member…" />
-              </SelectTrigger>
-              <SelectContent>
-                {[...teamMembers].sort((a, b) => a.name.localeCompare(b.name)).map(u => (
-                  <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setReassignDialogOpen(false)} data-testid="button-cancel-reassign">Cancel</Button>
-            <Button
-              onClick={() => bulkReassignMutation.mutate({ ids: Array.from(selectedTaskIds), userId: reassignUserId })}
-              disabled={!reassignUserId || bulkReassignMutation.isPending}
-              data-testid="button-confirm-reassign"
-            >
-              {bulkReassignMutation.isPending ? "Reassigning…" : "Reassign"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       </div>
     </div>
   );

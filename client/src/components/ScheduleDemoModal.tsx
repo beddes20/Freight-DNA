@@ -7,17 +7,17 @@ import { X, CheckCircle } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 
 const interestOptions = [
-  "Growing wallet share",
-  "Contact & relationship tracking",
-  "RFP & bid management",
-  "Team performance & goals",
-  "Lane & freight analytics",
-  "AI-powered sales tools",
-  "Replacing an existing CRM",
+  "Accountability",
+  "Sustainable Growth",
+  "Macro to Micro Visibility",
+  "CRM",
+  "RFP Analysis",
+  "Reporting",
+  "Pricing",
   "Other",
 ];
 
-const ALL_TIME_OPTIONS = [
+const timeOptions = [
   "10:00 AM",
   "10:30 AM",
   "11:00 AM",
@@ -35,54 +35,13 @@ const ALL_TIME_OPTIONS = [
   "5:00 PM",
 ];
 
-// Returns a "tomorrow" date string in YYYY-MM-DD format (local time)
-function getTomorrowStr(): string {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd}`;
-}
-
-// Deterministic pseudo-random slot blocker seeded by the date string.
-// Blocks 1–3 slots per day so the calendar never looks wide open.
-// Same date always produces the same blocked set (no flicker on re-render).
-function getAvailableTimesForDate(dateStr: string): string[] {
-  if (!dateStr) return ALL_TIME_OPTIONS;
-
-  // Simple 32-bit integer hash of the date string
-  let hash = 0;
-  for (let i = 0; i < dateStr.length; i++) {
-    hash = Math.imul(31, hash) + dateStr.charCodeAt(i);
-    hash |= 0;
-  }
-  hash = Math.abs(hash);
-
-  // LCG to pick 4–7 unique indices to block
-  const blockCount = (hash % 4) + 4; // 4, 5, 6, or 7
-  const blocked = new Set<number>();
-  let seed = hash;
-  while (blocked.size < blockCount) {
-    seed = (Math.imul(1664525, seed) + 1013904223) | 0;
-    blocked.add(Math.abs(seed) % ALL_TIME_OPTIONS.length);
-  }
-
-  return ALL_TIME_OPTIONS.filter((_, i) => !blocked.has(i));
-}
-
-const minDate = getTomorrowStr();
-
 const formSchema = z.object({
   firstName: z.string().min(1, "First name is required"),
   lastName: z.string().min(1, "Last name is required"),
   email: z.string().email("Enter a valid business email"),
   phone: z.string().optional(),
   interests: z.array(z.string()).min(1, "Please select at least one area of interest"),
-  preferredDate: z
-    .string()
-    .min(1, "Preferred date is required")
-    .refine(val => val >= minDate, { message: "Please select a future date" }),
+  preferredDate: z.string().min(1, "Preferred date is required"),
   preferredTime: z.string().min(1, "Preferred time is required"),
 });
 
@@ -123,7 +82,6 @@ const errorStyle: React.CSSProperties = {
 
 export default function ScheduleDemoModal({ open, onClose }: Props) {
   const [submitted, setSubmitted] = useState(false);
-  const [selectedDate, setSelectedDate] = useState("");
 
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
@@ -139,7 +97,6 @@ export default function ScheduleDemoModal({ open, onClose }: Props) {
   });
 
   const selectedInterests = form.watch("interests");
-  const availableTimes = getAvailableTimesForDate(selectedDate);
 
   const toggleInterest = (opt: string) => {
     const current = form.getValues("interests");
@@ -147,18 +104,6 @@ export default function ScheduleDemoModal({ open, onClose }: Props) {
       ? current.filter(i => i !== opt)
       : [...current, opt];
     form.setValue("interests", updated, { shouldValidate: true });
-  };
-
-  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newDate = e.target.value;
-    setSelectedDate(newDate);
-    form.setValue("preferredDate", newDate, { shouldValidate: true });
-    // Clear time if the previously-selected time is now blocked on the new date
-    const currentTime = form.getValues("preferredTime");
-    const newAvailable = getAvailableTimesForDate(newDate);
-    if (currentTime && !newAvailable.includes(currentTime)) {
-      form.setValue("preferredTime", "", { shouldValidate: false });
-    }
   };
 
   const mutation = useMutation({
@@ -177,7 +122,6 @@ export default function ScheduleDemoModal({ open, onClose }: Props) {
       onClose();
       setTimeout(() => {
         setSubmitted(false);
-        setSelectedDate("");
         form.reset();
       }, 300);
     }
@@ -365,10 +309,8 @@ export default function ScheduleDemoModal({ open, onClose }: Props) {
                   <div>
                     <label style={labelStyle}>Preferred Date <span style={{ color: "#f87171" }}>*</span></label>
                     <input
+                      {...form.register("preferredDate")}
                       type="date"
-                      min={minDate}
-                      value={selectedDate}
-                      onChange={handleDateChange}
                       style={{ ...inputStyle, colorScheme: "dark" }}
                       data-testid="input-preferred-date"
                     />
@@ -382,12 +324,9 @@ export default function ScheduleDemoModal({ open, onClose }: Props) {
                       {...form.register("preferredTime")}
                       style={{ ...inputStyle, appearance: "none" }}
                       data-testid="select-preferred-time"
-                      disabled={!selectedDate}
                     >
-                      <option value="">
-                        {selectedDate ? "Select time..." : "Pick a date first"}
-                      </option>
-                      {availableTimes.map(t => (
+                      <option value="">Select time...</option>
+                      {timeOptions.map(t => (
                         <option key={t} value={t}>{t} CST</option>
                       ))}
                     </select>

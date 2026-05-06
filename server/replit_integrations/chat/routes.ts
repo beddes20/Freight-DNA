@@ -1,8 +1,6 @@
 import type { Express, Request, Response } from "express";
-import { pStr } from "../../lib/req";
 import OpenAI from "openai";
 import { chatStorage } from "./storage";
-import { getCurrentUser } from "../../auth";
 
 const openai = new OpenAI({
   apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
@@ -10,12 +8,10 @@ const openai = new OpenAI({
 });
 
 export function registerChatRoutes(app: Express): void {
-  // Get all conversations for the current user
+  // Get all conversations
   app.get("/api/conversations", async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const conversations = await chatStorage.getAllConversationsForUser(user.id);
+      const conversations = await chatStorage.getAllConversations();
       res.json(conversations);
     } catch (error) {
       console.error("Error fetching conversations:", error);
@@ -23,13 +19,11 @@ export function registerChatRoutes(app: Express): void {
     }
   });
 
-  // Get single conversation with messages — must be owned by current user
+  // Get single conversation with messages
   app.get("/api/conversations/:id", async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(pStr(req.params.id));
-      const conversation = await chatStorage.getConversationForUser(id, user.id);
+      const id = parseInt(req.params.id);
+      const conversation = await chatStorage.getConversation(id);
       if (!conversation) {
         return res.status(404).json({ error: "Conversation not found" });
       }
@@ -44,10 +38,8 @@ export function registerChatRoutes(app: Express): void {
   // Create new conversation
   app.post("/api/conversations", async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
       const { title } = req.body;
-      const conversation = await chatStorage.createConversation(title || "New Chat", user.id);
+      const conversation = await chatStorage.createConversation(title || "New Chat");
       res.status(201).json(conversation);
     } catch (error) {
       console.error("Error creating conversation:", error);
@@ -55,14 +47,11 @@ export function registerChatRoutes(app: Express): void {
     }
   });
 
-  // Delete conversation — must be owned by current user
+  // Delete conversation
   app.delete("/api/conversations/:id", async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const id = parseInt(pStr(req.params.id));
-      const ok = await chatStorage.deleteConversationForUser(id, user.id);
-      if (!ok) return res.status(404).json({ error: "Conversation not found" });
+      const id = parseInt(req.params.id);
+      await chatStorage.deleteConversation(id);
       res.status(204).send();
     } catch (error) {
       console.error("Error deleting conversation:", error);
@@ -70,14 +59,10 @@ export function registerChatRoutes(app: Express): void {
     }
   });
 
-  // Send message and get AI response (streaming) — must own the conversation
+  // Send message and get AI response (streaming)
   app.post("/api/conversations/:id/messages", async (req: Request, res: Response) => {
     try {
-      const user = await getCurrentUser(req);
-      if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const conversationId = parseInt(pStr(req.params.id));
-      const owned = await chatStorage.getConversationForUser(conversationId, user.id);
-      if (!owned) return res.status(404).json({ error: "Conversation not found" });
+      const conversationId = parseInt(req.params.id);
       const { content } = req.body;
 
       // Save user message
@@ -130,3 +115,4 @@ export function registerChatRoutes(app: Express): void {
     }
   });
 }
+

@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ResponsiveDialog } from "@/components/responsive-dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import {
   BarChart, Bar, ResponsiveContainer, Cell, Tooltip, XAxis,
@@ -24,14 +24,14 @@ import { useConfetti } from "@/components/confetti";
 import type { Goal, GoalComment } from "@shared/schema";
 
 const METRICS = [
-  { value: "custom",                label: "Custom",                              icon: Sliders,     color: "bg-orange-500",  unit: "units" },
+  { value: "contacts_added",        label: "New Contacts",                        icon: Users,       color: "bg-blue-500",    unit: "contacts" },
+  { value: "touchpoints",           label: "Touchpoints",                         icon: TrendingUp,  color: "bg-cyan-500",    unit: "touches" },
+  { value: "meaningful_touchpoints",label: "Meaningful Conversations (auto-tracked)", icon: Heart, color: "bg-rose-500",    unit: "convos" },
   { value: "load_count",            label: "Load Count",                          icon: Truck,       color: "bg-green-500",   unit: "loads" },
   { value: "loads_booked",          label: "Loads Booked (auto-tracked)",         icon: Truck,       color: "bg-teal-500",    unit: "loads" },
   { value: "margin",                label: "Margin ($)",                          icon: DollarSign,  color: "bg-violet-500",  unit: "$" },
   { value: "margin_pct",            label: "Margin %",                            icon: Percent,     color: "bg-emerald-500", unit: "%" },
-  { value: "meaningful_touchpoints",label: "Meaningful Conversations (auto-tracked)", icon: Heart, color: "bg-rose-500",    unit: "convos" },
-  { value: "contacts_added",        label: "New Contacts",                        icon: Users,       color: "bg-blue-500",    unit: "contacts" },
-  { value: "touchpoints",           label: "Touchpoints",                         icon: TrendingUp,  color: "bg-cyan-500",    unit: "touches" },
+  { value: "custom",                label: "Custom",                              icon: Sliders,     color: "bg-orange-500",  unit: "units" },
 ];
 
 const PERIODS = [
@@ -65,7 +65,7 @@ interface GoalCardProps {
   goal: Goal;
   currentUserId: string;
   userRole: string;
-  allUsers: Array<{ id: string; name: string; role?: string }>;
+  allUsers: Array<{ id: string; name: string }>;
   allCompanies: Array<{ id: string; name: string }>;
   onEdit: (goal: Goal) => void;
   onDelete: (id: string) => void;
@@ -592,7 +592,7 @@ export default function GoalsPage() {
   }
 
   const createGoal = useMutation({
-    mutationFn: (data: object) => apiRequest("POST", "/api/goals", data).then(r => r.json()),
+    mutationFn: (data: object) => apiRequest("POST", "/api/goals", data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/goals/monthly-check"] });
@@ -604,7 +604,7 @@ export default function GoalsPage() {
   });
 
   const updateGoalMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: object }) => apiRequest("PATCH", `/api/goals/${id}`, data).then(r => r.json()),
+    mutationFn: ({ id, data }: { id: string; data: object }) => apiRequest("PATCH", `/api/goals/${id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       setDialogOpen(false);
@@ -614,7 +614,7 @@ export default function GoalsPage() {
   });
 
   const deleteGoalMutation = useMutation({
-    mutationFn: async (id: string) => { await apiRequest("DELETE", `/api/goals/${id}`); },
+    mutationFn: (id: string) => apiRequest("DELETE", `/api/goals/${id}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       toast({ description: "Goal deleted." });
@@ -622,8 +622,8 @@ export default function GoalsPage() {
   });
 
   const bulkGoalMutation = useMutation({
-    mutationFn: (data: object) => apiRequest("POST", "/api/goals/bulk", data).then(r => r.json()),
-    onSuccess: (res: { created?: number }) => {
+    mutationFn: (data: object) => apiRequest("POST", "/api/goals/bulk", data),
+    onSuccess: (res: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/goals"] });
       queryClient.invalidateQueries({ queryKey: ["/api/goals/monthly-check"] });
       setBulkOpen(false);
@@ -800,9 +800,9 @@ export default function GoalsPage() {
 
   if (isLoading) {
     return (
-      <div className="p-4 md:p-6 space-y-4">
+      <div className="p-6 space-y-4">
         <div className="h-8 w-48 bg-muted animate-pulse rounded" />
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           {[1, 2, 3].map(i => <div key={i} className="h-24 bg-muted animate-pulse rounded-lg" />)}
         </div>
       </div>
@@ -810,7 +810,7 @@ export default function GoalsPage() {
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-5 max-w-4xl mx-auto">
+    <div className="p-6 space-y-5 max-w-4xl mx-auto">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold flex items-center gap-2">
@@ -1152,21 +1152,12 @@ export default function GoalsPage() {
         </Card>
       )}
 
-      <ResponsiveDialog
-        open={dialogOpen}
-        onOpenChange={v => { if (!v) { setDialogOpen(false); setEditingGoal(null); } }}
-        title={editingGoal ? "Edit Goal" : "Create Goal"}
-        className="max-w-md"
-        footer={
-          <div className="flex justify-end gap-2 w-full">
-            <Button variant="outline" onClick={() => { setDialogOpen(false); setEditingGoal(null); }}>Cancel</Button>
-            <Button onClick={handleSubmit} disabled={createGoal.isPending || updateGoalMutation.isPending} data-testid="button-save-goal">
-              {editingGoal ? "Save Changes" : "Create Goal"}
-            </Button>
-          </div>
-        }
-      >
-          <div className="space-y-4 py-2" data-testid="dialog-goal-form">
+      <Dialog open={dialogOpen} onOpenChange={v => { if (!v) { setDialogOpen(false); setEditingGoal(null); } }}>
+        <DialogContent className="max-w-md" data-testid="dialog-goal-form">
+          <DialogHeader>
+            <DialogTitle>{editingGoal ? "Edit Goal" : "Create Goal"}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
             {((isNam && !isAm) || amCanSetGoals) && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Team Member</label>
@@ -1362,40 +1353,25 @@ export default function GoalsPage() {
               </div>
             )}
           </div>
-      </ResponsiveDialog>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setDialogOpen(false); setEditingGoal(null); }}>Cancel</Button>
+            <Button onClick={handleSubmit} disabled={createGoal.isPending || updateGoalMutation.isPending} data-testid="button-save-goal">
+              {editingGoal ? "Save Changes" : "Create Goal"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Bulk Goal Dialog */}
-      <ResponsiveDialog
-        open={bulkOpen}
-        onOpenChange={setBulkOpen}
-        title={`Set Goal for All ${teamLabel}`}
-        className="max-w-md"
-        footer={
-          <div className="flex justify-end gap-2 w-full">
-            <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
-            <Button
-              disabled={!bulkForm.target || bulkGoalMutation.isPending}
-              onClick={() => {
-                if (!bulkForm.target) { toast({ variant: "destructive", description: "Enter a target value." }); return; }
-                if (bulkForm.startDate && bulkForm.endDate && bulkForm.endDate < bulkForm.startDate) {
-                  toast({ variant: "destructive", description: "End date must be after start date." }); return;
-                }
-                if (bulkForm.metric === "custom" && !(bulkForm as any).customLabel?.trim()) {
-                  toast({ variant: "destructive", description: "Enter a name for your custom metric." }); return;
-                }
-                bulkGoalMutation.mutate({
-                  ...bulkForm,
-                  amIds: uniqueAms.map(a => a.amId),
-                });
-              }}
-              data-testid="button-confirm-bulk-goals"
-            >
-              {bulkGoalMutation.isPending ? "Creating..." : `Create for ${uniqueAms.length} people`}
-            </Button>
-          </div>
-        }
-      >
-        <div className="space-y-4 py-2" data-testid="dialog-bulk-goals">
+      <Dialog open={bulkOpen} onOpenChange={setBulkOpen}>
+        <DialogContent className="max-w-md" data-testid="dialog-bulk-goals">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Users className="h-5 w-5 text-primary" />
+              Set Goal for All {teamLabel}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
             <p className="text-sm text-muted-foreground">
               This will create the same goal for all {uniqueAms.length} members on your team. Existing goals are not overwritten.
             </p>
@@ -1446,8 +1422,30 @@ export default function GoalsPage() {
               <Input placeholder="Context or instructions..." value={bulkForm.notes} onChange={(e) => setBulkForm(f => ({ ...f, notes: e.target.value }))} data-testid="input-bulk-notes" />
             </div>
           </div>
-      </ResponsiveDialog>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkOpen(false)}>Cancel</Button>
+            <Button
+              disabled={!bulkForm.target || bulkGoalMutation.isPending}
+              onClick={() => {
+                if (!bulkForm.target) { toast({ variant: "destructive", description: "Enter a target value." }); return; }
+                if (bulkForm.startDate && bulkForm.endDate && bulkForm.endDate < bulkForm.startDate) {
+                  toast({ variant: "destructive", description: "End date must be after start date." }); return;
+                }
+                if (bulkForm.metric === "custom" && !(bulkForm as any).customLabel?.trim()) {
+                  toast({ variant: "destructive", description: "Enter a name for your custom metric." }); return;
+                }
+                bulkGoalMutation.mutate({
+                  ...bulkForm,
+                  amIds: uniqueAms.map(a => a.amId),
+                });
+              }}
+              data-testid="button-confirm-bulk-goals"
+            >
+              {bulkGoalMutation.isPending ? "Creating..." : `Create for ${uniqueAms.length} people`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
-

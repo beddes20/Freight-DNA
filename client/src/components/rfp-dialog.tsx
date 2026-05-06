@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { z } from "zod";
-import { Loader2, Paperclip, X } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -46,110 +46,29 @@ const rfpSchema = z.object({
 
 type RfpFormData = z.infer<typeof rfpSchema>;
 
-interface ParsedFileFields {
-  fileName: string;
-  fileData: unknown;
-  laneCount: number | null;
-  totalVolume: string | null;
-  originStates: string[] | null;
-  destinationStates: string[] | null;
-}
-
-interface ParseFileResponse extends ParsedFileFields {
-  fileName: string;
-}
-
-interface ExtractedLane {
-  origin_state?: string;
-  dest_state?: string;
-  volume?: number | string;
-  [key: string]: unknown;
-}
-
-interface UploadRfpResponse {
-  rfp: Rfp;
-}
-
-interface PdfPreviewResponse {
-  isPdf: boolean;
-  extractedLanes: ExtractedLane[];
-  laneCount: number;
-}
-
 const CLOSED_STATUSES = ["lost", "awarded", "partially_awarded", "declined"];
 
 const CLOSE_REASONS = [
-  { value: "awarded_us", label: "Awarded to us" },
-  { value: "capacity", label: "Capacity constraints" },
-  { value: "incumbent", label: "Incumbent advantage" },
-  { value: "lane_coverage", label: "Lane coverage gap" },
-  { value: "no_response", label: "No response from customer" },
-  { value: "other", label: "Other" },
   { value: "price", label: "Price / Rate too high" },
+  { value: "incumbent", label: "Incumbent advantage" },
+  { value: "no_response", label: "No response from customer" },
+  { value: "capacity", label: "Capacity constraints" },
+  { value: "lane_coverage", label: "Lane coverage gap" },
   { value: "relationship", label: "Relationship / trust" },
   { value: "service", label: "Service concerns" },
+  { value: "awarded_us", label: "Awarded to us" },
+  { value: "other", label: "Other" },
 ];
 
 interface RfpDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   rfp?: Rfp;
-  defaultCompanyId?: string;
 }
 
-async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
-  const res = await fetch(url, { credentials: "include", ...init });
-  const body = await res.json().catch(() => ({ error: "Unexpected error" })) as { error?: string } & T;
-  if (!res.ok) {
-    throw new Error((body as { error?: string }).error || `Request failed (${res.status})`);
-  }
-  return body as T;
-}
-
-async function parseFileForEdit(file: File): Promise<ParsedFileFields> {
-  const fileExt = file.name.toLowerCase().replace(/.*(\.[^.]+)$/, "$1");
-
-  if (fileExt === ".pdf") {
-    const form = new FormData();
-    form.append("file", file);
-    const preview = await fetchJson<PdfPreviewResponse>("/api/rfps/preview-headers", { method: "POST", body: form });
-    const lanes = preview.extractedLanes ?? [];
-    const originStates = [...new Set(lanes.map((l) => l.origin_state).filter((s): s is string => Boolean(s)))];
-    const destinationStates = [...new Set(lanes.map((l) => l.dest_state).filter((s): s is string => Boolean(s)))];
-    const totalVolume = lanes.reduce((sum, l) => sum + (Number(l.volume) || 0), 0);
-    const highVolumeLanes = lanes
-      .filter((l) => Number(l.volume) > 0)
-      .sort((a, b) => Number(b.volume) - Number(a.volume))
-      .slice(0, 10);
-    return {
-      fileName: file.name,
-      fileData: { rows: lanes, highVolumeLanes, sheetName: "PDF Extract" },
-      laneCount: lanes.length,
-      totalVolume: String(totalVolume),
-      originStates,
-      destinationStates,
-    };
-  }
-
-  const form = new FormData();
-  form.append("file", file);
-  const parsed = await fetchJson<ParseFileResponse>("/api/rfps/parse-file", { method: "POST", body: form });
-  return {
-    fileName: parsed.fileName,
-    fileData: parsed.fileData,
-    laneCount: parsed.laneCount,
-    totalVolume: parsed.totalVolume,
-    originStates: parsed.originStates,
-    destinationStates: parsed.destinationStates,
-  };
-}
-
-export function RfpDialog({ open, onOpenChange, rfp, defaultCompanyId }: RfpDialogProps) {
+export function RfpDialog({ open, onOpenChange, rfp }: RfpDialogProps) {
   const { toast } = useToast();
   const isEditing = !!rfp;
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
 
   const { data: companies } = useQuery<Company[]>({
     queryKey: ["/api/companies"],
@@ -188,7 +107,7 @@ export function RfpDialog({ open, onOpenChange, rfp, defaultCompanyId }: RfpDial
       });
     } else {
       form.reset({
-        companyId: defaultCompanyId ?? "",
+        companyId: "",
         title: "",
         status: "pending",
         rfpType: "",
@@ -199,8 +118,7 @@ export function RfpDialog({ open, onOpenChange, rfp, defaultCompanyId }: RfpDial
         closeNotes: "",
       });
     }
-    setSelectedFile(null);
-  }, [rfp, open, defaultCompanyId]);
+  }, [rfp, form]);
 
   const createMutation = useMutation({
     mutationFn: async (data: InsertRfp) => {
@@ -233,137 +151,33 @@ export function RfpDialog({ open, onOpenChange, rfp, defaultCompanyId }: RfpDial
     },
   });
 
-  const buildPayload = (data: RfpFormData, fileFields: ParsedFileFields | null): InsertRfp => ({
-    companyId: data.companyId,
-    title: data.title,
-    status: data.status,
-    rfpType: data.rfpType || null,
-    value: data.value || null,
-    dueDate: data.dueDate || null,
-    notes: data.notes || null,
-    closeReason: CLOSED_STATUSES.includes(data.status) ? (data.closeReason || null) : null,
-    closeNotes: CLOSED_STATUSES.includes(data.status) ? (data.closeNotes || null) : null,
-    fileName: fileFields?.fileName ?? (isEditing ? (rfp?.fileName ?? null) : null),
-    fileData: fileFields?.fileData ?? (isEditing ? (rfp?.fileData ?? null) : null),
-    laneCount: fileFields?.laneCount ?? (isEditing ? (rfp?.laneCount ?? null) : null),
-    totalVolume: fileFields?.totalVolume ?? (isEditing ? (rfp?.totalVolume ?? null) : null),
-    originStates: fileFields?.originStates ?? (isEditing ? (rfp?.originStates ?? null) : null),
-    destinationStates: fileFields?.destinationStates ?? (isEditing ? (rfp?.destinationStates ?? null) : null),
-  });
+  const onSubmit = (data: RfpFormData) => {
+    const payload: any = {
+      companyId: data.companyId,
+      title: data.title,
+      status: data.status,
+      rfpType: data.rfpType || null,
+      value: data.value || null,
+      dueDate: data.dueDate || null,
+      notes: data.notes || null,
+      closeReason: CLOSED_STATUSES.includes(data.status) ? (data.closeReason || null) : null,
+      closeNotes: CLOSED_STATUSES.includes(data.status) ? (data.closeNotes || null) : null,
+      fileName: isEditing ? (rfp?.fileName ?? null) : null,
+      fileData: isEditing ? (rfp?.fileData ?? null) : null,
+      laneCount: isEditing ? (rfp?.laneCount ?? null) : null,
+      totalVolume: isEditing ? (rfp?.totalVolume ?? null) : null,
+      originStates: isEditing ? (rfp?.originStates ?? null) : null,
+      destinationStates: isEditing ? (rfp?.destinationStates ?? null) : null,
+    };
 
-  const onSubmit = async (data: RfpFormData) => {
-    if (!selectedFile) {
-      if (isEditing) {
-        updateMutation.mutate(buildPayload(data, null));
-      } else {
-        createMutation.mutate(buildPayload(data, null));
-      }
-      return;
-    }
-
-    setIsUploading(true);
-    try {
-      const fileExt = selectedFile.name.toLowerCase().replace(/.*(\.[^.]+)$/, "$1");
-      const isPdf = fileExt === ".pdf";
-
-      if (isEditing) {
-        const fileFields = await parseFileForEdit(selectedFile);
-        updateMutation.mutate(buildPayload(data, fileFields));
-        return;
-      }
-
-      if (isPdf) {
-        const previewForm = new FormData();
-        previewForm.append("file", selectedFile);
-        const preview = await fetchJson<PdfPreviewResponse>("/api/rfps/preview-headers", {
-          method: "POST",
-          body: previewForm,
-        });
-        const lanes = preview.extractedLanes ?? [];
-
-        const uploadResult = await fetchJson<UploadRfpResponse>("/api/rfps/upload-pdf", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            companyId: data.companyId,
-            rfpType: data.rfpType || null,
-            lanes,
-            fileName: selectedFile.name,
-            title: data.title,
-          }),
-        });
-        const uploadedRfp = uploadResult.rfp;
-
-        const patchRes = await apiRequest("PATCH", `/api/rfps/${uploadedRfp.id}`, buildPayload(data, {
-          fileName: uploadedRfp.fileName ?? selectedFile.name,
-          fileData: uploadedRfp.fileData,
-          laneCount: uploadedRfp.laneCount,
-          totalVolume: uploadedRfp.totalVolume,
-          originStates: uploadedRfp.originStates,
-          destinationStates: uploadedRfp.destinationStates,
-        }));
-        if (!patchRes.ok) {
-          throw new Error("RFP was saved but form fields could not be applied. Please edit the RFP to set the correct status, value, and due date.");
-        }
-
-        queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
-        toast({ title: "RFP created successfully" });
-        onOpenChange(false);
-        form.reset();
-      } else {
-        const uploadForm = new FormData();
-        uploadForm.append("file", selectedFile);
-        uploadForm.append("companyId", data.companyId);
-        uploadForm.append("title", data.title);
-        if (data.rfpType) uploadForm.append("rfpType", data.rfpType);
-
-        const uploadResult = await fetchJson<UploadRfpResponse>("/api/rfps/upload", {
-          method: "POST",
-          body: uploadForm,
-        });
-        const uploadedRfp = uploadResult.rfp;
-
-        const patchRes = await apiRequest("PATCH", `/api/rfps/${uploadedRfp.id}`, buildPayload(data, {
-          fileName: uploadedRfp.fileName ?? selectedFile.name,
-          fileData: uploadedRfp.fileData,
-          laneCount: uploadedRfp.laneCount,
-          totalVolume: uploadedRfp.totalVolume,
-          originStates: uploadedRfp.originStates,
-          destinationStates: uploadedRfp.destinationStates,
-        }));
-        if (!patchRes.ok) {
-          throw new Error("RFP was saved but form fields could not be applied. Please edit the RFP to set the correct status, value, and due date.");
-        }
-
-        queryClient.invalidateQueries({ queryKey: ["/api/rfps"] });
-        toast({ title: "RFP created successfully" });
-        onOpenChange(false);
-        form.reset();
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Something went wrong";
-      toast({ title: "Error saving RFP", description: message, variant: "destructive" });
-    } finally {
-      setIsUploading(false);
+    if (isEditing) {
+      updateMutation.mutate(payload);
+    } else {
+      createMutation.mutate(payload);
     }
   };
 
-  const isPending = createMutation.isPending || updateMutation.isPending || isUploading;
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0] ?? null;
-    setSelectedFile(file);
-    if (file && !form.getValues("title")) {
-      form.setValue("title", file.name.replace(/\.[^.]+$/, ""));
-    }
-  };
-
-  const clearFile = () => {
-    setSelectedFile(null);
-    if (fileInputRef.current) fileInputRef.current.value = "";
-  };
-
-  const existingFileName = rfp?.fileName;
+  const isPending = createMutation.isPending || updateMutation.isPending;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -539,52 +353,6 @@ export function RfpDialog({ open, onOpenChange, rfp, defaultCompanyId }: RfpDial
                 </FormItem>
               )}
             />
-
-            <div className="space-y-2">
-              <p className="text-sm font-medium">RFP File <span className="text-muted-foreground font-normal">(optional)</span></p>
-              {existingFileName && !selectedFile && (
-                <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted rounded px-3 py-2" data-testid="text-existing-filename">
-                  <Paperclip className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">{existingFileName}</span>
-                  <span className="text-xs ml-auto shrink-0">Current file</span>
-                </div>
-              )}
-              {selectedFile ? (
-                <div className="flex items-center gap-2 text-sm bg-muted rounded px-3 py-2" data-testid="text-selected-filename">
-                  <Paperclip className="h-3.5 w-3.5 shrink-0 text-primary" />
-                  <span className="truncate flex-1">{selectedFile.name}</span>
-                  <button
-                    type="button"
-                    onClick={clearFile}
-                    className="shrink-0 text-muted-foreground hover:text-foreground"
-                    data-testid="button-clear-file"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ) : (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full"
-                  data-testid="button-attach-file"
-                >
-                  <Paperclip className="h-4 w-4 mr-2" />
-                  {existingFileName ? "Replace file" : "Attach file"}
-                </Button>
-              )}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".xlsx,.xls,.csv,.pdf"
-                className="hidden"
-                onChange={handleFileChange}
-                data-testid="input-rfp-file"
-              />
-              <p className="text-xs text-muted-foreground">Accepts Excel (.xlsx, .xls), CSV, or PDF files</p>
-            </div>
 
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} data-testid="button-cancel-rfp">

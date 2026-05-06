@@ -38,8 +38,6 @@ export interface FinancialCols {
   marginDollar: string;
   tenderMethod: string;
   carrier: string;
-  carrierPay: string;
-  equipmentType: string;
 }
 
 export function resolveColumns(rows: any[]): FinancialCols {
@@ -71,8 +69,6 @@ export function resolveColumns(rows: any[]): FinancialCols {
     marginDollar:     find(/margin.?\$|^margin$/i,                                      "Margin $"),
     tenderMethod:     find(/tender/i,                                                   "Tender Method"),
     carrier:          find(/^carrier$|^carrier.?name$|^scac$|^carrier.?scac$/i,         "Carrier"),
-    carrierPay:       find(/carrier.?pay|carrier.?amount|buy.?rate|^carrier.?cost$|^linehaul$/i, "Carrier Pay"),
-    equipmentType:    find(/^equipment.?type$|^equip.?type$|^equipment$|^equip$|^mode$|^load.?mode$|^service.?type$|^trailer.?type$/i, "Equipment Type"),
   };
 }
 

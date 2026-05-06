@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { STALE_REALTIME } from "@/lib/queryClient";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -171,18 +170,8 @@ interface TouchpointsTodayPortletProps {
 }
 
 export function TouchpointsTodayPortlet({ collapsed, onToggle }: TouchpointsTodayPortletProps) {
-  // Compute the user's local date (YYYY-MM-DD) once per render so the query
-  // key and URL always reflect the caller's timezone — not the server's UTC clock.
-  const localDate = new Date().toLocaleDateString("en-CA"); // reliable YYYY-MM-DD
-
   const { data: touchpoints = [], isLoading, isError } = useQuery<TodayTouchpoint[]>({
-    queryKey: ["/api/touchpoints/today", localDate],
-    queryFn: async () => {
-      const res = await fetch(`/api/touchpoints/today?date=${localDate}`, { credentials: "include" });
-      if (!res.ok) throw new Error("Failed to fetch today's touchpoints");
-      return res.json();
-    },
-    staleTime: STALE_REALTIME,   // 30 s — shows newly logged touches quickly
+    queryKey: ["/api/touchpoints/today"],
     refetchInterval: 120000,
   });
 
@@ -200,11 +189,6 @@ export function TouchpointsTodayPortlet({ collapsed, onToggle }: TouchpointsToda
           <span className="text-sm font-semibold">
             Today's Touchpoints
           </span>
-          {!isLoading && (
-            <span className="text-xs text-muted-foreground font-normal hidden sm:inline" data-testid="label-touchpoints-scope">
-              (your logged touches)
-            </span>
-          )}
           {!isLoading && (
             <Badge variant="secondary" className="text-xs" data-testid="badge-touchpoints-today-count">
               {touchpoints.length}

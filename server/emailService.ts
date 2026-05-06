@@ -1,6 +1,5 @@
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
-import { isEmailLiveModeOn } from "./emailGate";
 
 function logMessage(msg: string) {
   const t = new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true });
@@ -39,14 +38,6 @@ export interface EmailOptions {
 }
 
 export async function sendEmail(opts: EmailOptions): Promise<boolean> {
-  if (!isEmailLiveModeOn()) {
-    logMessage(`[SUPPRESSED] Live mode is OFF — email to ${opts.to} ("${opts.subject}") was blocked. Enable Email Live Mode in Admin to send for real.`);
-    return false;
-  }
-
-  const deliverTo = opts.to;
-  const subject = opts.subject;
-
   const fromAddr = process.env.SMTP_FROM || "noreply@freight-dna.com";
   const fromName = process.env.SMTP_FROM_NAME || "Value Truck · Freight DNA";
   const from = `${fromName} <${fromAddr}>`;
@@ -56,34 +47,34 @@ export async function sendEmail(opts: EmailOptions): Promise<boolean> {
     try {
       const { error } = await resend.emails.send({
         from,
-        to: deliverTo,
-        subject,
+        to: opts.to,
+        subject: opts.subject,
         html: opts.html,
         text: opts.text,
       });
       if (error) {
-        logMessage(`Resend error for ${deliverTo}: ${error.message}`);
+        logMessage(`Resend error for ${opts.to}: ${error.message}`);
         return false;
       }
-      logMessage(`Email sent via Resend to ${deliverTo}: "${subject}"`);
+      logMessage(`Email sent via Resend to ${opts.to}: "${opts.subject}"`);
       return true;
     } catch (err: any) {
-      logMessage(`Resend exception for ${deliverTo}: ${err.message}`);
+      logMessage(`Resend exception for ${opts.to}: ${err.message}`);
       return false;
     }
   }
 
   const transporter = getTransporter();
   if (!transporter) {
-    logMessage(`Email not configured — skipping email to ${deliverTo}: "${subject}"`);
+    logMessage(`Email not configured — skipping email to ${opts.to}: "${opts.subject}"`);
     return false;
   }
   try {
-    await transporter.sendMail({ from, to: deliverTo, subject, html: opts.html, text: opts.text });
-    logMessage(`Email sent via SMTP to ${deliverTo}: "${subject}"`);
+    await transporter.sendMail({ from, to: opts.to, subject: opts.subject, html: opts.html, text: opts.text });
+    logMessage(`Email sent via SMTP to ${opts.to}: "${opts.subject}"`);
     return true;
   } catch (err: any) {
-    logMessage(`SMTP error for ${deliverTo}: ${err.message}`);
+    logMessage(`SMTP error for ${opts.to}: ${err.message}`);
     return false;
   }
 }
