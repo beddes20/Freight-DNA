@@ -778,10 +778,13 @@ export function registerFreightCockpitRoutes(app: Express) {
         for (const i of baseItems) {
           const opp = i.opportunity;
           const customerName = i.customer?.name ?? "";
+          const pickupRaw = opp.pickupWindowStart as unknown;
           const pickupIso =
-            opp.pickupWindowStart instanceof Date
-              ? opp.pickupWindowStart.toISOString()
-              : (opp.pickupWindowStart as string | null | undefined) ?? "";
+            pickupRaw instanceof Date
+              ? pickupRaw.toISOString()
+              : typeof pickupRaw === "string"
+                ? pickupRaw
+                : "";
           const key = [
             norm(opp.origin),
             norm(opp.originState),
