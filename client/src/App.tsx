@@ -99,6 +99,7 @@ import AdminFreightOutreachTemplatesPage from "@/pages/admin-freight-outreach-te
 import AdminCarrierIntelligencePage from "@/pages/admin-carrier-intelligence";
 import AdminCarrierIntelligenceScoringPage from "@/pages/admin-carrier-intelligence-scoring";
 import AdminHeroSlicePage from "@/pages/admin-hero-slice";
+import AdminEmailDerivedCompaniesPage from "@/pages/admin-email-derived-companies";
 import ProfilePage from "@/pages/profile";
 import AiAgentPortal from "@/pages/ai-agent";
 import AvailableFreightPage from "@/pages/available-freight";
@@ -237,6 +238,7 @@ function Router() {
       <Route path="/admin/carrier-intelligence" component={AdminCarrierIntelligencePage} />
       <Route path="/admin/carrier-intelligence/scoring" component={AdminCarrierIntelligenceScoringPage} />
       <Route path="/admin/hero-slice" component={AdminHeroSlicePage} />
+      <Route path="/admin/email-derived-companies" component={AdminEmailDerivedCompaniesPage} />
       <Route path="/admin/carrier-intelligence/imports" component={AdminCarrierIntelligencePage} />
       <Route path="/admin/carrier-intelligence/settings" component={CarrierIntelligenceSettingsPage} />
       <Route path="/carrier-intelligence/scorecard" component={CarrierIntelligenceScorecardPage} />

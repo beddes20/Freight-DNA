@@ -10,6 +10,7 @@ import { registerFinancialRoutes } from "./routes/financials";
 import { registerLoadFactRoutes } from "./routes/loadFact";
 import { registerCarrierIntelligenceScoringRoutes } from "./routes/carrierIntelligenceScoring";
 import { registerHeroSliceAdminRoutes } from "./routes/heroSliceAdmin";
+import { registerAdminEmailDerivedCompaniesRoutes } from "./routes/adminEmailDerivedCompanies";
 import { registerCarrierIntelligencePrefsRoutes } from "./routes/carrierIntelligencePrefs";
 import { registerGoalRoutes } from "./routes/goals";
 import { registerDashboardRoutes } from "./routes/dashboard";
@@ -2723,6 +2724,7 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerLoadFactRoutes(app);
   registerCarrierIntelligenceScoringRoutes(app);
   registerHeroSliceAdminRoutes(app);
+  registerAdminEmailDerivedCompaniesRoutes(app);
   registerCarrierIntelligencePrefsRoutes(app);
   // ── Company Historical Trends ─────────────────────────────────────────────
   app.get("/api/companies/:id/historical-trends", requireAuth, async (req, res) => {
