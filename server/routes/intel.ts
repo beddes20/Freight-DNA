@@ -1818,26 +1818,14 @@ export function registerIntelRoutes(app: Express): void {
     try {
       const user = await getCurrentUser(req);
       if (!user) return res.status(401).json({ error: "Not authenticated" });
-      const allowedRoles = ["admin", "director", "sales_director", "account_manager", "national_account_manager"];
+      const allowedRoles = ["admin", "account_manager", "national_account_manager"];
       if (!allowedRoles.includes(user.role)) return res.status(403).json({ error: "Not authorized" });
 
       const orgId = req.session.organizationId!;
-      // Drill-in support: admins can filter by any userId; directors and
-      // sales_directors can drill into any rep that rolls up to them
-      // (validated against their team tree). Reps and NAMs are always
-      // scoped to their own lanes.
-      const requestedUserId = typeof qStr(req.query.userId) === "string" ? qStr(req.query.userId).trim() : "";
-      let filterUserId = user.id;
-      if (requestedUserId && requestedUserId !== user.id) {
-        if (user.role === "admin") {
-          filterUserId = requestedUserId;
-        } else if (user.role === "director" || user.role === "sales_director") {
-          const teamIds = await storage.getTeamMemberIds(user.id, orgId);
-          if (teamIds.includes(requestedUserId)) {
-            filterUserId = requestedUserId;
-          }
-        }
-      }
+      // Non-admins are always scoped to their own lanes; admins can filter by userId param
+      const filterUserId = user.role === "admin" && typeof qStr(req.query.userId) === "string" && qStr(req.query.userId).trim()
+        ? qStr(req.query.userId).trim()
+        : user.id;
 
       // ── Task #272 perf ───────────────────────────────────────────────────
       // Cache the expensive My Lanes payload (VOTRI + weather + batched TRAC

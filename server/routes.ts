@@ -34,7 +34,6 @@ import { registerMarketSignalRoutes } from "./routes/marketSignals";
 import { registerEmailIntelligenceRoutes } from "./routes/emailIntelligence";
 import { registerEmailFactsRoutes } from "./routes/emailFacts";
 import { registerConversationsRoutes } from "./routes/conversations";
-import { registerConversationsV2LearningRoutes } from "./routes/conversationsV2Learning";
 import { registerProvenTacticsRoutes } from "./routes/provenTactics";
 import { registerPlaybookRoutes } from "./routes/playbook";
 import { registerEmailAnalyticsRoutes } from "./routes/emailAnalytics";
@@ -2637,7 +2636,6 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerEmailIntelligenceRoutes(app);
   registerEmailFactsRoutes(app);
   registerConversationsRoutes(app);
-  registerConversationsV2LearningRoutes(app);
   registerProvenTacticsRoutes(app);
   registerPlaybookRoutes(app);
   registerEmailAnalyticsRoutes(app);
