@@ -1,0 +1,169 @@
+Diagnosis: This slice is done, and it’s the first meaningful user-visible dashboard trust improvement in this Phase 1.5 sequence. Since you asked for copy-and-paste prompts moving forward, the right next prompt is a tight post-merge verification / publish prompt for this exact Award Health + Coverage Gaps freshness UI slice.
+
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — Post-Merge Verification + Publish Check for Award Health / Coverage Gaps Freshness UI
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+The Phase 1.5 S6 user-visible freshness UI slice is now implemented for:
+
+Award Health
+
+Coverage Gaps
+
+What shipped:
+
+decidePortletState(rowCount, freshness) helper
+
+shared PortletStateBanner
+
+Award Health + Coverage Gaps now distinguish:
+
+healthy + empty → hidden
+
+stale + empty → amber degraded banner
+
+unknown + empty → neutral “freshness unavailable” banner
+
+non-empty → existing rows unchanged
+
+Verification already completed in development:
+
+typecheck green
+
+vitest 21/21 green
+
+guardrails green
+
+code review approved
+
+There are unrelated pre-existing red workflows caused by dev-DB schema drift:
+
+storage-integration
+
+test:lane-system-e2e
+
+backfill-incident
+
+test:freight-capture-funnel
+These are explicitly out of scope and should not be treated as blockers for this UI-only slice.
+
+Goal:
+Do a final post-merge verification and publish-readiness check for the Award Health / Coverage Gaps freshness UI slice, without widening scope.
+
+Guardrails:
+
+Read-only verification first.
+
+No new code changes unless a real regression is found.
+
+Do not touch unrelated failing workflows.
+
+Do not touch server routes, schedulers, or schema unless a blocker is found.
+
+Keep this focused on Award Health + Coverage Gaps only.
+
+Scope:
+
+In scope:
+
+client/src/lib/portletState.ts
+
+client/src/components/dashboard/PortletStateBanner.tsx
+
+client/src/pages/dashboard/AwardHealthPortlet.tsx
+
+client/src/pages/dashboard/CoverageGapsPortlet.tsx
+
+associated tests for the slice
+
+Out of scope:
+
+NBA, Trending, Margin, Drifting, Relationship Advancement
+
+any transport-layer changes
+
+any scheduler work
+
+any schema drift remediation
+
+Tasks:
+
+Read-only code verification
+
+Reconfirm the exact behavior in the two portlets:
+
+freshness.status === "stale" + empty rows → degraded banner
+
+freshness.status === "unknown" + empty rows → neutral banner
+
+freshness.status === "ok" + empty rows → still hidden
+
+rows present → unchanged rendering
+
+Reconfirm PortletStateBanner only appears for the intended branches.
+
+Runtime verification
+
+Open the dashboard with a user who can see:
+
+Award Health
+
+Coverage Gaps
+
+Verify:
+
+healthy non-empty state still looks unchanged
+
+healthy empty state still hides
+
+stale empty state renders the amber banner
+
+unknown empty state renders the neutral banner
+
+If local data setup makes this difficult, verify by temporarily mocking or seeding freshness states in a safe dev-only path, then revert.
+
+Copy verification
+
+Confirm the exact user-facing copy matches the intended trust language:
+
+Award health may be stale
+
+Award freshness unavailable
+
+Coverage data may be stale
+
+Coverage freshness unavailable
+
+Confirm the optional footer only appears when freshness.lastUpdatedAt exists.
+
+Confirm the stale vs unknown distinction is preserved (unknown must never look like a warning/error state).
+
+Publish decision
+
+Determine whether this slice is safe to republish now.
+
+Do not treat unrelated red workflows as blockers if the scoped verification passes.
+
+Output format:
+A. Short diagnosis
+B. Verification results
+C. Any issue found (or “none”)
+D. Publish decision: safe / not safe
+E. Smallest next recommended dashboard trust slice
+
+Important:
+
+If this verification passes, recommend the next slice in the Phase 1.5 sequence.
+
+The likely next slice should be one of:
+
+extend freshness UI to NBA / Relationship Advancement
+
+add freshness labeling for Trending / Margin
+
+add summary-level pipeline health strip
+
+Keep the recommendation ordered by lowest blast radius and highest trust gain.
+
