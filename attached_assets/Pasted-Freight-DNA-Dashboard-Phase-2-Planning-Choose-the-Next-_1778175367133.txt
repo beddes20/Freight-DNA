@@ -1,0 +1,162 @@
+Freight-DNA — Dashboard Phase 2 Planning — Choose the Next Strategic Track
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Dashboard Phase 1.5 trust retrofit is now effectively complete:
+
+Sync alert visibility corrected
+
+Award Health / Coverage Gaps freshness UI
+
+NBA freshness UI
+
+Trending / Margin as-of labels
+
+Pipeline Health Strip
+
+Hardening guardrails (Sections 1500–1503)
+
+Empty-state clarity for Today’s Five + Cold Contacts
+
+AccountsDrifting degraded-input signal
+
+Dashboard Trust Contract doc completed and pinned
+
+The dashboard is now materially more honest and resilient.
+
+We should not drift into random incremental changes without choosing the next strategic track.
+
+Goal:
+Produce a planning-first Phase 2 recommendation for the Dashboard tab: identify the best next strategic track after trust retrofit, with concrete next tasks and execution order.
+
+Guardrails:
+
+Planning only in this task.
+
+Read-only analysis first.
+
+No code changes unless a tiny clarification is unavoidable.
+
+Keep recommendations practical and ordered by impact.
+
+Respect Freight-DNA’s trust-first posture:
+
+no destructive actions
+
+no silent assumptions
+
+no large rewrites without clear blast-radius analysis
+
+Scope:
+Evaluate and compare these 3 candidate Phase 2 tracks:
+
+Data-model / source-of-truth cleanup
+
+alias mapping table for financial aliases ↔ CRM company IDs
+
+reducing fuzzy normN / includes() matching risk
+
+quarantining phantom accounts from alias fallbacks
+
+lane string normalization for Coverage Gaps / Award Health
+
+Dashboard simplification / layout pass
+
+reduce duplication
+
+tighten role-specific stacks
+
+improve filter discoverability (e.g. director filter)
+
+reduce visual noise now that trust signals exist
+
+clarify which portlets are primary vs secondary
+
+Pipeline / scheduler hardening
+
+heartbeats and freshness sources for remaining dashboard-adjacent jobs
+
+replace swallowed catches
+
+stabilize failing tests/workflows that affect dashboard trust
+
+improve per-source observability without turning dashboard into an admin console
+
+Tasks:
+
+Read-only audit
+
+Revisit the current dashboard state and the Dashboard Trust Contract doc.
+
+Reconfirm the biggest remaining problems in each of the 3 candidate tracks:
+
+Track 1: data-model / joins / phantom accounts / fuzzy matching
+
+Track 2: layout / role-stack / usability / cognitive load
+
+Track 3: scheduler / pipeline / observability / failing workflow dependencies
+
+Use the codebase and current state of the dashboard to ground the recommendation.
+
+Compare the 3 tracks
+For each track, provide:
+
+what problem it solves
+
+why it matters now
+
+what user pain it would remove
+
+key files / tables / jobs involved
+
+risk level
+
+blast radius
+
+reversibility
+
+estimated sequencing complexity
+
+Recommend one primary Phase 2 track
+
+Pick the best next strategic track.
+
+Explain why it should come before the other two.
+
+Be explicit about what we should not do yet.
+
+Break the recommended track into concrete next tasks
+
+Provide the next 3–5 tasks in order.
+
+For each task, include:
+
+short diagnosis
+
+exact files / tables / jobs likely involved
+
+why it should be done in that order
+
+risks / rollout notes
+
+Also give a “not now” section
+
+What to defer from the other two tracks, and why.
+
+Output format:
+A. Short diagnosis of where the dashboard stands now
+B. Comparison of the 3 candidate Phase 2 tracks
+C. Recommended Phase 2 track
+D. Next 3–5 tasks in execution order
+E. What to defer / not do yet
+F. Risks / reasons not to bundle too much at once
+
+Important:
+
+This is a planning task only.
+
+Do not turn this into implementation.
+
+If one of the 3 tracks should be split into a tiny prerequisite first, call that out explicitly.
