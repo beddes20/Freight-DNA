@@ -1,0 +1,78 @@
+Act like a senior engineer helping me harden Freight‑DNA after a production data-loss incident.
+
+Goal:
+Help me (1) understand exactly what other data and features are affected and (2) put guardrails in place, so we can safely rebuild the “people layer” (contacts/org charts) without risking another loss.
+
+Context:
+
+App: Freight‑DNA (custom CRM for freight brokerage).
+
+Stack: TypeScript/Node backend with SQL database on Replit (dev + prod).
+
+Incident: Older curated contacts (e.g., Armstrong org chart, Randall Zercher, John Stone) are gone from prod. Production contacts currently has ~17 “saved” rows; ~803 email-based suggestions live in account_contact_suggestions.
+
+We’ve already confirmed from prod queries that Armstrong/Zercher/Stone do not exist as contacts, and that dev checkpoints don’t contain them either.
+
+I want to stay on Replit but make the platform safer.
+
+Hard constraints (very important):
+
+READ‑ONLY ONLY for now: do not run migrations, PITR, DELETE/UPDATE statements, or any destructive scripts.
+
+You can read code, schema, logs, and propose SQL, but do not execute anything that changes data until I explicitly ask.
+
+Assume Production is the source of truth for current state.
+
+What I want you to do now:
+
+Summarize the blast-radius report you already produced in 5–10 bullet points, from the perspective of “what’s broken vs still trustworthy,” focusing on:
+
+contacts, org charts, rich contact fields
+
+companies/account list
+
+opportunities/quotes/freight
+
+email history and suggested contacts
+
+Turn that into a concrete rebuild + hardening plan for THIS Replit project with tasks I can execute here, including:
+
+Add soft deletes to contacts (and companies if needed).
+
+Add a contact_audit_log table and wire it into contact mutation paths.
+
+Add a CONTACT_JOBS_ENABLED kill switch env flag, and identify exactly which jobs/cron paths must check it.
+
+Add an is_email_derived flag to companies and describe how to use it in the UI to hide stub accounts from the main customer list.
+
+Design a manual “Promote suggestion → real contact” flow from account_contact_suggestions so I can rebuild key accounts’ org charts.
+
+For each task, tell me:
+
+Which files and tables you would touch.
+
+The schema changes needed (as SQL, but remember: don’t run them yet).
+
+The minimal code changes (in small diffs or code blocks).
+
+Any gotchas or migration considerations I should be aware of.
+
+Output format (return exactly this):
+
+Section 1: Short summary of what’s broken vs what’s solid (max 10 bullets).
+
+Section 2: Task list with numbered tasks (1–10), each with:
+
+“Goal:”
+
+“Tables:”
+
+“Files to edit:”
+
+“Suggested SQL (read‑only for now):”
+
+“Code changes:”
+
+Section 3: “What to do before I hit Republish again” – a checklist I can run through manually.
+
+Stop after producing this plan and code suggestions. Do NOT run any SQL or scripts yet. If anything is unclear, ask me ONE clarifying question at the end.
