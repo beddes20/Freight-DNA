@@ -1,0 +1,165 @@
+Diagnosis: Area 3 is complete, so the next highest-value slice is now the real remaining trust gap you identified in planning: AccountsDriftingPortlet, which currently merges three inputs and can silently undercount when one source fails.
+
+Here’s the copy-and-paste Replit prompt for that next task.
+
+Freight-DNA — Dashboard Trust Hardening — Area 2 AccountsDrifting Trust Gap
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Dashboard trust work completed so far:
+
+sync alert visibility
+
+Award Health / Coverage Gaps freshness UI
+
+NBA freshness UI
+
+Trending / Margin as-of labels
+
+Pipeline Health Strip
+
+hardening guardrails (Section 1500)
+
+empty-state clarity for Today’s Five + Cold Contacts (Area 3)
+
+The main remaining trust gap from the planning bundle is:
+
+AccountsDriftingPortlet combines three independent client queries:
+
+/api/dashboard/stale-accounts
+
+/api/dashboard/cold-contacts
+
+/api/dashboard/meaningful-overdue
+
+if one source errors, the rep can get a shorter/incomplete list with no signal that one input is missing
+
+Goal:
+Make AccountsDriftingPortlet honest when one or more of its three inputs fail, without inventing a fake freshness signal and without changing the underlying account-selection logic.
+
+Guardrails:
+
+No schema changes.
+
+No server changes unless absolutely necessary.
+
+No scheduler changes.
+
+No changes to the ranking/merging logic for drifting accounts.
+
+Do not invent a freshness source for email-facts or drifting.
+
+Keep this slice additive and client-side if possible.
+
+Prefer a small, explicit degraded-input indicator over a large warning surface.
+
+Scope:
+
+In scope:
+
+client/src/pages/dashboard/Phase2Portlets.tsx
+
+AccountsDriftingPortlet
+
+associated tests / guardrails for the degraded-input branch
+
+Out of scope:
+
+email-facts freshness derivation
+
+server endpoint contracts
+
+Today’s Five / Cold Contacts
+
+any broader dashboard redesign
+
+Tasks:
+
+Read-only confirmation first
+
+Reconfirm the current structure of AccountsDriftingPortlet in client/src/pages/dashboard/Phase2Portlets.tsx.
+
+Reconfirm:
+
+the three queries used
+
+how their results are merged
+
+current empty behavior
+
+how isError / error / isLoading are currently handled (or ignored)
+
+Confirm this task can stay fully client-side.
+
+Add a small degraded-input indicator
+
+When any of the three source queries error:
+
+keep rendering the merged list from the available successful sources
+
+add a small, muted/degraded note near the portlet header or just above the list
+
+Suggested copy:
+
+Some drift signals are unavailable — results may be incomplete.
+
+If helpful, include a compact detail line naming the failing source(s), but only if that stays readable and not noisy.
+
+Do not use a full amber freshness banner unless it truly fits the existing visual rhythm; keep this lighter than the S6/S7 freshness banners.
+
+Keep honest empty behavior
+
+If all three queries succeed and the merged list is empty:
+
+keep the current intended empty behavior unless there is already a stronger dashboard empty-state convention in this component area
+
+If one or more queries fail and the merged list is empty:
+
+do not silently disappear
+
+instead render a small degraded/partial-data message so the user knows the absence of rows is not necessarily “all clear”
+
+Preserve merging logic
+
+Do not change:
+
+how accounts are deduped
+
+sort order
+
+thresholds
+
+the meaning of “drifting”
+
+This is a trust-surface change only.
+
+Tests
+
+Add or extend tests to assert:
+
+all-success + rows → existing render unchanged
+
+all-success + empty → existing intended empty behavior preserved
+
+one-source-error + rows → degraded-input note renders + rows still show
+
+one-source-error + empty → degraded-input note renders (no silent disappearance)
+
+If the current test setup is AST-based for dashboard contracts, use that where appropriate; otherwise use the smallest test style that fits the component.
+
+Output format:
+A. Short diagnosis
+B. Exact files changed
+C. Behavior changes
+D. Tests run and results
+E. Risks / reasons not to merge
+
+Important:
+
+This is an honesty / degraded-state slice, not a ranking or freshness slice.
+
+Do not add server-side freshness metadata here.
+
+If you discover the current component structure makes a clean degraded indicator awkward, stop and report the smallest safe refactor before editing.

@@ -1,4 +1,4 @@
-// dashboard-portlet-no-freshness: Inputs are derived from rep-verifiable sources (the rep's own touchpoints / contacts / opportunities) and are merged across multiple client queries with no shared upstream timestamp. There is no honest single freshness signal to surface here today — surfacing one would invent trust we don't have. The planned "Drifting trust" slice (Phase 1.5 Area 2) will add an explicit aggregate `isError` line when one of the input queries 500s; until then this file is opted out via this header. Pinned by Section 1500 of tests/code-quality-guardrails.test.ts.
+// dashboard-portlet-no-freshness: Inputs are derived from rep-verifiable sources (the rep's own touchpoints / contacts / opportunities) and are merged across multiple client queries with no shared upstream timestamp. There is no honest single freshness signal to surface here — surfacing one would invent trust we don't have. Phase 1.5 Area 2 (the "Drifting trust gap" slice) added the smaller-but-honest indicator instead: AccountsDriftingPortlet now accepts a `degradedSources` prop and renders an explicit "Some drift signals are unavailable — results may be incomplete" line whenever one of the three input queries (stale-accounts / cold-contacts / meaningful-overdue) errors. This file remains opted out of the freshness-primitive contract because the *positive* path still lacks an honest single timestamp; the degraded-input contract is pinned by Section 1502 of tests/code-quality-guardrails.test.ts. Existing portlet-no-freshness opt-out pinned by Section 1500.
 /**
  * Phase 2 Dashboard Portlets — action-oriented weekly workflows for AMs.
  *
@@ -101,18 +101,44 @@ interface DriftingRow {
   topScore: number;
 }
 
+/**
+ * Identifies which of the three drifting-input queries failed in the parent.
+ * Phase 1.5 Area 2 — names match the API path tail so the surfaced copy is
+ * easy to map back to the failing endpoint during incident triage.
+ */
+export type DriftingSource = "stale" | "cold" | "meaningful";
+
+const DRIFTING_SOURCE_LABEL: Record<DriftingSource, string> = {
+  stale: "stale accounts",
+  cold: "cold contacts",
+  meaningful: "meaningful-touch overdue",
+};
+
 interface AccountsDriftingProps {
   staleAccounts: StaleAccount[];
   coldContacts: ColdContactRow[];
   meaningfulOverdue: MeaningfulRow[];
+  /**
+   * Phase 1.5 Area 2 — Drifting trust gap. The list of input queries that
+   * errored in the parent. When non-empty, the portlet renders an explicit
+   * "Some drift signals are unavailable — results may be incomplete" note
+   * so the rep doesn't read a short/empty list as "all clear". Defaults to
+   * empty for backwards compatibility — callers that don't pass it get the
+   * pre-Area-2 behavior unchanged.
+   */
+  degradedSources?: ReadonlyArray<DriftingSource>;
   collapsed: boolean;
   onToggle: () => void;
   onCommit?: (payload: CommitPayload) => void;
 }
 
 export function AccountsDriftingPortlet({
-  staleAccounts, coldContacts, meaningfulOverdue, collapsed, onToggle, onCommit,
+  staleAccounts, coldContacts, meaningfulOverdue, degradedSources = [], collapsed, onToggle, onCommit,
 }: AccountsDriftingProps) {
+  const isDegraded = degradedSources.length > 0;
+  const degradedDetail = isDegraded
+    ? degradedSources.map(s => DRIFTING_SOURCE_LABEL[s]).join(", ")
+    : "";
   const [showAll, setShowAll] = useState(false);
 
   const map = new Map<string, DriftingRow>();
@@ -177,10 +203,38 @@ export function AccountsDriftingPortlet({
 
       {!collapsed && (
         <CardContent className="pt-0 px-4 pb-4">
+          {/* Phase 1.5 Area 2 — Degraded-input indicator. Lighter than the
+              Area 6/7 freshness banners by design (this is honesty about
+              missing inputs, not stale data). Always rendered above the
+              list/empty branch so an "empty due to errors" surface can
+              never look like "all clear". */}
+          {isDegraded && (
+            <div
+              className="mb-2 flex items-start gap-1.5 rounded border border-muted bg-muted/40 px-2 py-1.5"
+              data-testid="accounts-drifting-degraded"
+              role="status"
+            >
+              <AlertCircle className="h-3 w-3 text-muted-foreground shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-[11px] text-muted-foreground leading-snug">
+                  Some drift signals are unavailable — results may be incomplete.
+                </p>
+                <p className="text-[10px] text-muted-foreground/80 leading-snug" data-testid="accounts-drifting-degraded-detail">
+                  Missing: {degradedDetail}.
+                </p>
+              </div>
+            </div>
+          )}
           {total === 0 ? (
-            <p className="text-sm text-muted-foreground py-3">
-              No drifting accounts — all contacts and accounts have recent touch activity.
-            </p>
+            isDegraded ? (
+              <p className="text-sm text-muted-foreground py-3" data-testid="accounts-drifting-empty-degraded">
+                No accounts to show right now — but one or more drift signals failed to load, so this list may be incomplete. Refresh to retry.
+              </p>
+            ) : (
+              <p className="text-sm text-muted-foreground py-3" data-testid="accounts-drifting-empty-clear">
+                No drifting accounts — all contacts and accounts have recent touch activity.
+              </p>
+            )
           ) : (
             <div className="flex flex-col divide-y" data-testid="accounts-drifting-list">
               {visible.map(row => {

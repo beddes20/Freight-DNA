@@ -6549,3 +6549,144 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     'Cold Contacts must branch on `coldContacts.length === 0 ? <empty/> : <populated/>` so the empty case is rendered, not silently elided. Do not regress to `coldContacts.length > 0 && (<Card/>)`.',
   );
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1502 — AccountsDriftingPortlet degraded-input contract (Phase 1.5 Area 2)
+//
+// AccountsDriftingPortlet merges three independent client queries
+// (stale-accounts / cold-contacts / meaningful-overdue). Pre-Area-2,
+// if any of the three queries errored the rep would silently see a
+// shorter or empty list with no signal that one input was missing —
+// "empty due to error" looked identical to "all clear".
+//
+// This section pins the honest degraded-input contract:
+//   - The portlet exposes a `degradedSources?: ReadonlyArray<...>` prop.
+//   - When non-empty, an explicit "Some drift signals are unavailable
+//     — results may be incomplete." note renders inside the portlet
+//     body (independent of the empty/non-empty branch).
+//   - The empty branch splits into two distinct testids — the
+//     all-clear empty (degradedSources empty) and the degraded empty
+//     (degradedSources non-empty) — so the surface can never collapse
+//     a degraded-empty into a misleading "all clear" message.
+//   - dashboard.tsx captures `isError` for all three input queries and
+//     forwards them via the new `degradedSources` prop. (No isError
+//     capture = no degraded signal possible — silent regression.)
+//
+// New writers extending the merged-input pattern MUST extend this
+// section with the analogous degraded-input contract.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1502: AccountsDrifting degraded-input contract ──────────\n");
+
+  const PORTLET_SRC = readFile("client/src/pages/dashboard/Phase2Portlets.tsx");
+  const DASH_SRC = readFile("client/src/pages/dashboard.tsx");
+
+  // ── Portlet contract ─────────────────────────────────────────────────────
+  assert(
+    "Section 1502 — AccountsDriftingPortlet declares a degradedSources prop typed to the three known sources",
+    /degradedSources\?:\s*ReadonlyArray<\s*(?:DriftingSource|"stale"\s*\|\s*"cold"\s*\|\s*"meaningful")\s*>/.test(PORTLET_SRC),
+    'AccountsDriftingPortlet must expose `degradedSources?: ReadonlyArray<DriftingSource>` (or the equivalent literal union) so the parent can forward query failures.',
+  );
+  assert(
+    "Section 1502 — AccountsDriftingPortlet renders the degraded-input note under data-testid=\"accounts-drifting-degraded\"",
+    /data-testid=["']accounts-drifting-degraded["']/.test(PORTLET_SRC),
+    'The degraded-input note must carry data-testid="accounts-drifting-degraded" so it is observable to source-pin tests and incident triage.',
+  );
+  assert(
+    "Section 1502 — degraded-input note contains the contract copy",
+    /Some drift signals are unavailable[^<]*results may be incomplete/.test(PORTLET_SRC),
+    'The degraded-input note must include the contract copy "Some drift signals are unavailable — results may be incomplete." Do not soften this — reps need to know the list is partial.',
+  );
+  assert(
+    "Section 1502 — empty branch splits into clear vs degraded testids",
+    /data-testid=["']accounts-drifting-empty-clear["']/.test(PORTLET_SRC) &&
+      /data-testid=["']accounts-drifting-empty-degraded["']/.test(PORTLET_SRC),
+    'The empty render must distinguish "no rows AND all queries succeeded" (data-testid="accounts-drifting-empty-clear") from "no rows AND at least one query failed" (data-testid="accounts-drifting-empty-degraded"). Collapsing them re-introduces the trust gap Area 2 closed.',
+  );
+  // The degraded-empty copy must NOT use the words "all clear" or claim
+  // recent touch activity — that's the precise misleading "all clear"
+  // the slice was designed to prevent. We assert the degraded-empty
+  // copy is contained between its testid and its closing tag.
+  const degradedEmptyMatch = /data-testid=["']accounts-drifting-empty-degraded["'][^>]*>([\s\S]*?)<\/p>/.exec(PORTLET_SRC);
+  assert(
+    "Section 1502 — degraded-empty copy is honest (no \"all clear\" phrasing, no recent-activity claim)",
+    !!degradedEmptyMatch && !/all clear|recent touch activity/i.test(degradedEmptyMatch[1] ?? ""),
+    'The degraded-empty branch must NOT claim "all clear" or "recent touch activity" — that\'s exactly the misleading state Phase 1.5 Area 2 closed. Use language that names the partial-data condition.',
+  );
+
+  // ── Dashboard wiring contract ────────────────────────────────────────────
+  //
+  // Architect-fix (Phase 1.5 Area 2 review): the original whole-file `\bisError:
+  // foo\b` matches were too loose — a future refactor could leave the named
+  // identifier dangling in a comment or unrelated code and still pass. Each
+  // useQuery block is now sliced from its `queryKey: ["/api/..."]` line up to
+  // the next `useQuery(` call (or 1500 chars, whichever comes first), and
+  // isError is asserted inside that block. Same pattern as Section 1500c's
+  // route-body slicing.
+  function sliceUseQueryBlock(src: string, apiPath: string): string | null {
+    const escaped = apiPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Match `useQuery<...>({ ... queryKey: ["<apiPath>"] ... })` — capture from
+    // the useQuery< call up to the closing `})` of that block.
+    const re = new RegExp(`useQuery[^(]*\\([\\s\\S]*?queryKey:\\s*\\[["']${escaped}["']\\][\\s\\S]*?\\}\\)`);
+    const m = re.exec(src);
+    return m ? m[0] : null;
+  }
+
+  for (const { apiPath, errorIdent } of [
+    { apiPath: "/api/dashboard/cold-contacts", errorIdent: "coldContactsError" },
+    { apiPath: "/api/dashboard/meaningful-overdue", errorIdent: "meaningfulOverdueError" },
+    { apiPath: "/api/dashboard/stale-accounts", errorIdent: "staleAccountsError" },
+  ]) {
+    const block = sliceUseQueryBlock(DASH_SRC, apiPath);
+    assert(
+      `Section 1502 — dashboard.tsx — useQuery block for ${apiPath} resolved`,
+      block !== null,
+      `Could not locate the useQuery block for ${apiPath} in dashboard.tsx — has the route been moved or the call shape changed? Update Section 1502.`,
+    );
+    if (!block) continue;
+    assert(
+      `Section 1502 — ${apiPath} useQuery block destructures \`isError: ${errorIdent}\``,
+      new RegExp(`isError:\\s*${errorIdent}\\b`).test(block),
+      `The useQuery block for ${apiPath} must destructure \`isError: ${errorIdent}\` (inside the actual block, not just somewhere in the file). Without this, the failure cannot be forwarded into driftingDegradedSources.`,
+    );
+  }
+
+  assert(
+    "Section 1502 — dashboard.tsx forwards driftingDegradedSources into AccountsDriftingPortlet",
+    /<AccountsDriftingPortlet[\s\S]*?degradedSources=\{driftingDegradedSources\}[\s\S]*?\/>/.test(DASH_SRC),
+    'dashboard.tsx must pass `degradedSources={driftingDegradedSources}` into AccountsDriftingPortlet — capturing isError without forwarding it would silently regress the contract.',
+  );
+
+  // Slice the actual `driftingDegradedSources` construction block — assert
+  // the array starts empty, all three `push("<source>")` lines exist inside
+  // it, and each push is gated on its corresponding error flag.
+  // Architect-fix: replaces the previous loose three-name-order regex which
+  // would have passed even if the names appeared only in comments.
+  const constructionMatch = /const\s+driftingDegradedSources[\s\S]*?if\s*\(\s*meaningfulOverdueError\s*\)\s*driftingDegradedSources\.push\(["']meaningful["']\);?/.exec(DASH_SRC);
+  assert(
+    "Section 1502 — driftingDegradedSources construction block is present and contiguous",
+    !!constructionMatch,
+    'Could not find the contiguous `const driftingDegradedSources = [] ... if (meaningfulOverdueError) driftingDegradedSources.push("meaningful")` block. The construction must stay together so all three flags push in one place.',
+  );
+  if (constructionMatch) {
+    const block = constructionMatch[0];
+    for (const { flag, source } of [
+      { flag: "staleAccountsError", source: "stale" },
+      { flag: "coldContactsError", source: "cold" },
+      { flag: "meaningfulOverdueError", source: "meaningful" },
+    ]) {
+      assert(
+        `Section 1502 — driftingDegradedSources construction includes \`if (${flag}) push("${source}")\``,
+        new RegExp(`if\\s*\\(\\s*${flag}\\s*\\)\\s*driftingDegradedSources\\.push\\(["']${source}["']\\)`).test(block),
+        `The driftingDegradedSources construction block must contain \`if (${flag}) driftingDegradedSources.push("${source}");\`. Dropping a flag would cause a silent partial-data leak — the rep would see a short list with no degraded indicator.`,
+      );
+    }
+    // Pin that the array starts empty (otherwise we'd always be in the
+    // degraded branch — a different, equally-misleading regression).
+    assert(
+      "Section 1502 — driftingDegradedSources is initialized as an empty array",
+      /const\s+driftingDegradedSources\s*:\s*Array<[^>]+>\s*=\s*\[\s*\]/.test(block),
+      'driftingDegradedSources must be initialized as `[]` so the absence of errors yields a healthy (non-degraded) surface.',
+    );
+  }
+})();

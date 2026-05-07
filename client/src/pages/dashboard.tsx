@@ -157,11 +157,11 @@ export default function Dashboard() {
     queryKey: ["/api/contacts"],
   });
 
-  const { data: coldContacts = [] } = useQuery<Array<{ contact: Contact; company: { id: string; name: string }; daysSince: number; lastType: string | null }>>({
+  const { data: coldContacts = [], isError: coldContactsError } = useQuery<Array<{ contact: Contact; company: { id: string; name: string }; daysSince: number; lastType: string | null }>>({
     queryKey: ["/api/dashboard/cold-contacts"],
   });
 
-  const { data: meaningfulOverdue = [] } = useQuery<Array<{ contact: Contact; company: { id: string; name: string }; daysSinceLastMeaningful: number }>>({
+  const { data: meaningfulOverdue = [], isError: meaningfulOverdueError } = useQuery<Array<{ contact: Contact; company: { id: string; name: string }; daysSinceLastMeaningful: number }>>({
     queryKey: ["/api/dashboard/meaningful-overdue"],
   });
 
@@ -329,12 +329,21 @@ export default function Dashboard() {
     refetchOnWindowFocus: false,
   });
 
-  const { data: staleAccountsData } = useQuery<{ stale: StaleAccount[] }>({
+  const { data: staleAccountsData, isError: staleAccountsError } = useQuery<{ stale: StaleAccount[] }>({
     queryKey: ["/api/dashboard/stale-accounts"],
     enabled: isAm || isNam,
     staleTime: 300000,
   });
   const staleAccounts = staleAccountsData?.stale ?? [];
+
+  // Phase 1.5 Area 2 — Drifting trust gap: AccountsDriftingPortlet merges three
+  // independent queries (stale-accounts, cold-contacts, meaningful-overdue). If
+  // any source errors, the rep would silently see a shorter list. We forward
+  // the failed-source list so the portlet can render a small degraded note.
+  const driftingDegradedSources: Array<"stale" | "cold" | "meaningful"> = [];
+  if (staleAccountsError) driftingDegradedSources.push("stale");
+  if (coldContactsError) driftingDegradedSources.push("cold");
+  if (meaningfulOverdueError) driftingDegradedSources.push("meaningful");
 
   const { data: todaysFive = [], isLoading: todaysFiveLoading } = useQuery<TodaysFiveItem[]>({
     queryKey: ["/api/dashboard/todays-five"],
@@ -1356,6 +1365,7 @@ export default function Dashboard() {
             staleAccounts={staleAccounts}
             coldContacts={coldContacts}
             meaningfulOverdue={meaningfulOverdue}
+            degradedSources={driftingDegradedSources}
             collapsed={accountsDriftingCollapsed}
             onToggle={() => {
               const next = !accountsDriftingCollapsed;
