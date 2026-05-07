@@ -31,44 +31,7 @@ build = ["npm", "run", "build"]
 publicDir = "dist/public"
 
 [workflows]
-runButton = "Project"
-
-[[workflows.workflow]]
-name = "Project"
-mode = "parallel"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Start application"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "test:shared-inbox"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "typecheck"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "guardrails"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "storage-integration"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "test:freight-capture-funnel"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "test:lane-system-e2e"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "backfill-incident"
+runButton = "Start application"
 
 [[workflows.workflow]]
 name = "Start application"
@@ -94,12 +57,12 @@ isValidation = true
 name = "typecheck"
 author = "agent"
 
-[workflows.workflow.metadata]
-isValidation = true
-
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm run check"
+
+[workflows.workflow.metadata]
+isValidation = true
 
 [[workflows.workflow]]
 name = "guardrails"
@@ -127,12 +90,12 @@ isValidation = true
 name = "test:freight-capture-funnel"
 author = "agent"
 
-[workflows.workflow.metadata]
-outputType = "console"
-
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npx tsx tests/freight-capture-funnel.test.ts && npx tsx tests/cockpit-hardening.test.ts"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[workflows.workflow]]
 name = "test:lane-system-e2e"
@@ -149,12 +112,33 @@ isValidation = true
 name = "backfill-incident"
 author = "agent"
 
-[workflows.workflow.metadata]
-outputType = "console"
-
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "BACKFILL_CONCURRENCY=12 npx tsx tools/backfill-incident-window.ts"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "artifacts/mockup-sandbox: Component Preview Server"
+author = "agent"
+mode = "sequential"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+artifactId = "artifacts/mockup-sandbox"
+isCanvasWorkflow = true
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev"
+cwd = "./artifacts/mockup-sandbox"
+waitForPort = 23636
+router = "path"
+
+[workflows.workflow.tasks.env]
+PORT = "23636"
+BASE_PATH = "/__mockup/"
 
 [postMerge]
 path = "scripts/post-merge.sh"
