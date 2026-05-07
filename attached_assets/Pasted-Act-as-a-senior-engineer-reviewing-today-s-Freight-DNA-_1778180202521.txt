@@ -1,0 +1,58 @@
+Act as a senior engineer reviewing today's Freight-DNA changes before a production publish.
+
+GOAL
+I want a clear summary of everything that changed today so I can decide whether it's safe to deploy.
+
+CONSTRAINTS
+- Do NOT make any additional code changes.
+- Do NOT run migrations or any destructive commands.
+- Just inspect the repo and tell me what changed.
+
+WHAT TO DO
+
+1) Identify today's changes
+- Compare current workspace code against the last commit / checkpoint from before today (or the last commit message that looks like "yesterday's stable state").
+- Group changed files by type:
+  - backend logic (TS/JS)
+  - frontend/UI
+  - migrations/schema
+  - background jobs/schedulers/scripts
+  - configuration/env handling
+  - tests/docs
+
+2) Summarize changes by category
+For each category, list:
+- files touched
+- a 1–3 sentence summary of what was changed
+- whether the change is:
+  - LOW RISK (pure UI/read-only changes, logs, comments, tests)
+  - MEDIUM RISK (logic changes, new endpoints, new flags)
+  - HIGH RISK (schema/migrations, background jobs, anything that writes to contacts/companies/financials/freight)
+
+3) Call out especially sensitive areas
+Explicitly highlight any changes that touch:
+- contacts, org charts, or suggestions
+- companies/customers
+- financials / team performance
+- freight imports, available freight, lane work queue, engines
+- any script or job that can run against production
+- env vars / secrets
+Tell me what changed there and why it could be risky.
+
+4) List questions / unknowns
+For anything you can’t fully infer, list:
+- the file
+- your best guess of its purpose
+- what I should verify manually before deploying
+
+5) Output format
+Return your answer in this structure:
+
+1. Summary of today’s changes (bullet list)
+2. Low-risk changes
+3. Medium-risk changes
+4. High-risk or sensitive changes
+5. Open questions / things I should double-check
+6. Your recommendation: “OK to deploy if X and Y are checked” OR “Wait – Z needs review”
+
+Do not modify code. Just analyze and report.
