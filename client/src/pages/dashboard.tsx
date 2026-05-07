@@ -944,12 +944,14 @@ export default function Dashboard() {
             <p className="text-sm text-red-700 dark:text-red-400 mt-0.5">
               The automatic OneDrive sync for {syncAlert.month} could not complete: {syncAlert.error}
             </p>
-            <Link href="/financials">
-              <Button size="sm" variant="outline" className="mt-2 gap-1.5 text-red-700 border-red-300 hover:bg-red-100 dark:text-red-300 dark:border-red-800 dark:hover:bg-red-900/50" data-testid="button-upload-manually">
-                <Upload className="h-3.5 w-3.5" />
-                Upload manually
-              </Button>
-            </Link>
+            {(isAdmin || isDirector) && (
+              <Link href="/financials">
+                <Button size="sm" variant="outline" className="mt-2 gap-1.5 text-red-700 border-red-300 hover:bg-red-100 dark:text-red-300 dark:border-red-800 dark:hover:bg-red-900/50" data-testid="button-upload-manually">
+                  <Upload className="h-3.5 w-3.5" />
+                  Upload manually
+                </Button>
+              </Link>
+            )}
           </div>
           <button
             onClick={() => dismissSyncAlertMutation.mutate()}

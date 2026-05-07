@@ -1257,7 +1257,7 @@ export function registerDashboardRoutes(app: Express): void {
 
   // ─── Dashboard Summary ────────────────────────────────────────────────────
   // Consolidates 5 small independent calls into 1 parallel-fetched response:
-  //   urgentRfps, syncAlert (admin), missingMonthlyGoals (managers),
+  //   urgentRfps, syncAlert (all roles; CTA gated on client), missingMonthlyGoals (managers),
   //   oneOnOnePending (count), streak (current user)
   app.get("/api/dashboard/summary", requireAuth, async (req, res) => {
     try {
@@ -1291,9 +1291,8 @@ export function registerDashboardRoutes(app: Express): void {
             .map(r => ({ id: r.id, title: r.title, companyId: r.companyId, dueDate: r.dueDate }));
         })(),
 
-        // --- 2. Sync alert (admin only) ---
+        // --- 2. Sync alert (visible to all roles; banner CTA gated on the client) ---
         (async () => {
-          if (!isAdmin) return { failed: false };
           const failedMonth = await storage.getSetting("monthly_sync_failed");
           if (!failedMonth) return { failed: false };
           const errorMessage = await storage.getSetting("monthly_sync_failed_error") || "Unknown error";
