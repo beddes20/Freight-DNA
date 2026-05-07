@@ -1,0 +1,87 @@
+Act as a senior release engineer doing the final pre-publish gate for Freight-DNA.
+
+This is a targeted follow-up check. Do NOT repeat the full review. I only want the two remaining blockers resolved so I can decide whether to publish commit 3c5aa264.
+
+STRICT RULES
+- Read-only unless I explicitly approve a code change.
+- Do NOT modify code, migrations, env vars, app settings, or database data.
+- Do NOT run destructive SQL or write scripts.
+- You MAY inspect code, inspect workflow/test status, and run safe read-only verification commands.
+- If a blocker cannot be verified from this environment, tell me exactly what I need to check manually.
+
+FOCUS ONLY ON THESE 2 BLOCKERS
+
+BLOCKER 1 — contacts soft-delete schema parity
+Goal: determine whether production is definitely safe for the new contacts soft-delete code.
+
+Check the following:
+1. Confirm all prod code paths now reference:
+- contacts.deleted_at
+- contacts.deleted_by
+- contacts.delete_reason
+where applicable.
+
+2. Confirm whether there is ANY boot-time migration safety for these contacts columns:
+- search server/runMigrations.ts
+- search any other boot/init migration path
+- search migration files
+- search any deploy/startup script
+I already know 0016 only handles indexes, so do not stop there.
+
+3. Give me one final answer in exactly one of these forms:
+- SAFE: prod is protected because [specific mechanism]
+- NOT GUARANTEED: prod is only safe if the contacts columns were already added previously
+- UNKNOWN: cannot verify from this environment
+
+4. If the answer is NOT GUARANTEED or UNKNOWN, give me the exact manual verification I should run against prod, as briefly as possible. Prefer one SQL check like:
+SELECT column_name
+FROM information_schema.columns
+WHERE table_name = 'contacts'
+AND column_name IN ('deleted_at','deleted_by','delete_reason');
+
+5. Also tell me the fastest safe remediation path:
+- verify prod already has columns, OR
+- add an idempotent ADD COLUMN IF NOT EXISTS block to runMigrations.ts in a follow-up patch
+
+BLOCKER 2 — failing freight-critical tests
+Goal: determine whether the failing tests are still red on this exact commit or were just a prior flake.
+
+Check only these:
+- test:freight-capture-funnel
+- test:lane-system-e2e
+
+What to do:
+1. Inspect latest status for this exact HEAD if available.
+2. If allowed, re-run ONLY those two tests/workflows.
+3. Tell me whether each is:
+- PASSING
+- FAILING
+- NOT RE-RUN / UNKNOWN
+
+4. If failing, give me the shortest reason available from logs.
+5. If passing on re-run, explicitly say whether it looks like the earlier failure was likely a flake.
+
+FINAL OUTPUT FORMAT
+Return only this:
+
+1. Contacts schema blocker
+- Status: SAFE / NOT GUARANTEED / UNKNOWN
+- Reason:
+- Manual check needed:
+- Fastest remediation:
+
+2. Freight test blocker
+- freight-capture-funnel:
+- lane-system-e2e:
+- Notes:
+
+3. Final release call
+Choose exactly one:
+- PUBLISH NOW
+- PUBLISH AFTER MANUAL PROD SCHEMA CHECK
+- DO NOT PUBLISH
+
+4. Why
+A 3-5 bullet explanation only.
+
+Do not suggest unrelated improvements. Do not review anything else. Resolve these two blockers only.
