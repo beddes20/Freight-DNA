@@ -6452,6 +6452,35 @@ export async function runEmailIntelV1_5Migrations() {
     console.log(
       "[migrations] Task #1095 is_email_derived column + partial index ensured",
     );
+
+    // ── Task #1 / #1093 — Contacts soft-delete columns ─────────────────────
+    // Three columns on `contacts` so production read paths that filter
+    // `deleted_at IS NULL` (every IStorage `getContact*` method, plus
+    // chatbot / aiIntelligence / graphWebhook joins) do not 500 on a prod
+    // DB that has not yet had `drizzle-kit push:pg` run. Strictly
+    // idempotent so a fresh prod boot is safe. Migration
+    // `migrations/0016_contacts_partial_indexes.sql` adds the partial
+    // indexes on top of these columns; we re-create them here with
+    // IF NOT EXISTS so a cold prod boot also lands the indexes without
+    // waiting for the file-based migration runner.
+    await client.query(
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS deleted_at timestamptz`,
+    );
+    await client.query(
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS deleted_by varchar(255)`,
+    );
+    await client.query(
+      `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS delete_reason text`,
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS contacts_deleted_at_idx ON contacts (deleted_at) WHERE deleted_at IS NOT NULL`,
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS contacts_company_active_idx ON contacts (company_id) WHERE deleted_at IS NULL`,
+    );
+    console.log(
+      "[migrations] Task #1/#1093 contacts soft-delete columns + partial indexes ensured",
+    );
   } catch (err) {
     console.error("[migrations] Task #1026 lifecycle_stage migration error:", err);
   } finally {
