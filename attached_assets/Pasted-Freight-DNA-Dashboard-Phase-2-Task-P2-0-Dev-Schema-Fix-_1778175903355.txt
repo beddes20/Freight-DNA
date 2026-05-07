@@ -1,0 +1,131 @@
+Freight-DNA — Dashboard Phase 2 — Task P2.0 (Dev Schema Fix Prereq)
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Dashboard Phase 1.5 trust retrofit is complete and documented (docs/dashboard-trust-contract.md).
+
+Phase 2 plan is documented at docs/dashboard-phase2-plan.md.
+
+That plan recommends Track 1 (data-model cleanup) as the primary Phase 2 track, with a tiny Track 3 prerequisite:
+
+P2.0: one-command schema push to fix dev DB drift.
+
+Current dev DB issues:
+
+missing or mismatched tables/columns (e.g., cron_heartbeats, clerk_user_id, provider_message_id, last_inbox_notification_at, is_manual, etc.) cause several workflows to stay red and block full end-to-end verification of dashboard work.
+
+production already has the schema; drift is dev-only.
+
+Goal:
+Execute Task P2.0: bring the dev database schema back in line with the current migrations so Phase 2 data-model work (P2.1–P2.4) can be verified end-to-end.
+
+Guardrails:
+
+This task is schema-only and dev-only.
+
+No application code changes.
+
+No destructive actions against production databases.
+
+No backfills or data migrations beyond what the migration tool already expects.
+
+If there is any ambiguity about the DB target, stop and report instead of guessing.
+
+Scope:
+
+In scope:
+
+Dev DB schema for:
+
+cron_heartbeats
+
+financial-related tables (financial_uploads, etc.)
+
+email-related columns noted as missing
+
+any other tables/columns that the current codebase and tests expect but dev DB lacks
+
+Out of scope:
+
+application logic
+
+dashboard endpoints
+
+frontend components
+
+scheduler configuration
+
+Tasks:
+
+Identify the correct dev DB target
+
+Confirm which connection string / environment is the dev database that should be brought in sync.
+
+Do not use any production or staging DB for this task.
+
+Apply migrations / schema push
+
+Use the project’s standard migration tool to bring dev DB up to the current schema.
+
+If this is drizzle-kit, run the appropriate drizzle-kit push command for the dev DB.
+
+If a different tool is used, run the equivalent “apply all outstanding migrations to dev” command.
+
+Capture the exact command(s) used in the output.
+
+Re-run previously failing workflows
+
+Re-run the workflows that were failing solely due to missing schema:
+
+storage-integration
+
+test:lane-system-e2e
+
+backfill-incident
+
+test:freight-capture-funnel
+
+plus any others that previously logged missing-table/column errors for the dev DB.
+
+Confirm that:
+
+missing-table/column errors are resolved
+
+any remaining failures are not schema-related (if they are, report with details)
+
+Sanity-check dashboard-adjacent schema
+
+Confirm that:
+
+cron_heartbeats exists and is writable
+
+any financial and nba_cards related tables needed for freshness helpers are present
+
+No code changes; just confirm tables/columns exist and are accessible.
+
+Report status and unblock Phase 2
+
+Summarize:
+
+what commands were run
+
+which errors were resolved
+
+which workflows are now green
+
+whether there are any remaining schema issues that would block P2.1–P2.4
+
+Output format:
+A. Short diagnosis of the dev DB state before and after
+B. Commands run (with exact flags / env)
+C. Workflows re-run and their results
+D. Any remaining schema-related issues
+E. Explicit confirmation: “P2.0 prereq satisfied” or what’s still blocking
+
+Important:
+
+If you encounter any ambiguity about which DB to target or see signs of a non-dev DB, stop and report instead of proceeding.
+
+Do not modify production or staging schema in this task.
