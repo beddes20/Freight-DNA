@@ -1,0 +1,219 @@
+Freight-DNA — Dashboard Tab Trust & Hardening — Next Steps Bundle
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+The /dashboard tab is the role-aware home screen.
+
+Phase 1.5 work so far:
+
+Sync alert is visible to all relevant roles.
+
+Award Health & Coverage Gaps: freshness-aware UI (empty vs stale vs unknown).
+
+NBA: data-driven freshness (nba_cards.created_at) + stale/unknown UI.
+
+Trending & Margin: as-of upload labels + freshness states.
+
+Pipeline Health Strip: top-of-page summary for Financials, Recommendations, Freight.
+
+All of this shipped in small, revertible slices with tests and no schema or scheduler changes.
+
+Goal:
+Consolidate Phase 1.5 gains and address the remaining highest-impact trust gaps on the Dashboard tab, without widening scope into a full redesign.
+
+Guardrails:
+
+No schema changes.
+
+No destructive scripts or bulk deletes.
+
+No changes to core scoring/ranking logic unless explicitly called out.
+
+No scheduler changes unless explicitly called out and approved.
+
+Treat any feature touching contacts, companies, financials, freight pipelines, or jobs as high-risk.
+
+Prefer additive changes, feature flags, and clear reversibility.
+
+Scope:
+Focus on these areas (planning + targeted implementation):
+
+Freshness consistency audit
+
+Email-facts / drifting signals trust gap
+
+Dashboard defaults and empty-state clarity
+
+Auth/role gate correctness for dashboard trust surfaces
+
+Technical debt / guardrail strengthening
+
+Do not:
+
+Redesign dashboard layout.
+
+Change alias/fuzzy matching (e.g., aliasFallbackName, resolveCompany, normN) in this bundle.
+
+Touch RFP/coverage join logic here.
+
+Tasks
+1) Freshness consistency audit (read-only + small fixes)
+Goal: Ensure all freshness signals and labels across /dashboard are consistent in behavior, naming, and states.
+
+Tasks:
+
+Read-only:
+
+Inventory all uses of PortletFreshness, decidePortletState, PortletStateBanner, and AsOfLabel across:
+
+NBA
+
+Award Health
+
+Coverage Gaps
+
+Trending Accounts
+
+Margin Metrics
+
+Pipeline Health Strip
+
+Check for:
+
+Any portlet that still does a silent if (length === 0) return null without going through the freshness/state helpers.
+
+Any place where status === "unknown" renders as a warning/amber state.
+
+Any inconsistent “as-of” label wording.
+
+Implementation:
+
+For any portlet still doing silent return null on empty, propose and (if trivial) implement a migration to use decidePortletState + PortletStateBanner (or explicitly document why it’s different).
+
+Normalize “As of …” copy to a single pattern.
+
+Tests:
+
+Extend the existing portlet-state test suite to assert:
+
+unknown paths never use amber/warning tokens.
+
+No new raw if (x.length === 0) return null without an inline // allow: <reason> comment.
+
+2) Email-facts / Drifting trust gap (planning-first)
+Goal: Decide how to handle drifting accounts & email-driven signals when their upstream jobs fail or lag.
+
+Tasks:
+
+Read-only:
+
+Inspect how AccountsDriftingPortlet and any email-facts–driven surfaces currently:
+
+derive their data,
+
+react to partial failures (one of several queries 500s),
+
+interact with email-facts cron/ingest.
+
+Confirm whether there is already a reliable timestamp source (e.g., MAX(email_facts.extractedAt)) that could be used for freshness.
+
+Planning (no code unless trivial and additive):
+
+Propose one of:
+
+A: add a per-source degraded indicator for drifting when email-facts are incomplete, without adding noise.
+
+B: keep drifting as-is but add a small, explicit “email signals incomplete” line when inputs 500 or are missing.
+
+Keep it honest and minimal; do not invent a freshness signal.
+
+Output:
+
+Short plan for a future “Drifting trust” slice, with file list, behavior changes, and tests.
+
+3) Dashboard defaults & empty-state clarity
+Goal: Make the default view for each major role (AM/NAM/Director) feel intentional and unambiguous when the board is mostly empty but fresh.
+
+Tasks:
+
+Read-only:
+
+For each primary role (AM, NAM, Director), inspect the default dashboard layout and check:
+
+Does every “empty but fresh” scenario have clear copy?
+
+Is any critical portlet hidden entirely when it’s empty, without a label (e.g., Today’s Five)?
+
+Implementation (only where low-risk and consistent with existing patterns):
+
+For any high-value portlet that still disappears completely when empty-but-fresh, add a minimal “All clear”/“Nothing to work here today” message, using the same portlet-state primitives.
+
+Tests:
+
+Add or extend tests to assert that:
+
+in an “all fresh + empty” scenario, the dashboard still shows some indication that data is fresh and emptiness is expected.
+
+4) Auth/role gate correctness for trust surfaces
+Goal: Ensure all new trust surfaces (sync alert, freshness labels, pipeline strip) are visible to the right roles and hidden where they don’t make sense.
+
+Tasks:
+
+Read-only:
+
+Review role-gating for:
+
+Sync alert
+
+Pipeline Health Strip
+
+Per-portlet freshness banners
+
+As-of labels
+
+Confirm we:
+
+never show financial upload details to roles who shouldn’t see them,
+
+never hide freshness warnings from roles who do see those numbers.
+
+Implementation (small fixes only):
+
+If any trust surface is visible to a role that doesn’t see the underlying numbers, tighten the gate.
+
+If any trust surface is hidden from a role that consumes the data, loosen the gate (following your original audit logic).
+
+Tests:
+
+Add a small auth/role test suite checking:
+
+AM, NAM, Director, Admin, Logistics Manager see/hide the right trust surfaces.
+
+5) Guardrail / debt tightening
+Goal: Make it harder for future changes to silently regress the Dashboard into misleading states.
+
+Tasks:
+
+Add or extend guardrails to:
+
+Forbid new “bare array → object” response shape changes on dashboard endpoints without a matching normalization + test.
+
+Forbid new silent return null empties in dashboard portlets without an explicit // allow: comment.
+
+Enforce that all dashboard freshness helpers handle missing-table / DB error by returning unknown, not throwing.
+
+Consider adding a small “dashboard integrity” test that:
+
+hits key endpoints and asserts they include either freshness metadata or an explicit “no freshness” opt-out marker (to catch accidental half-wiring).
+
+Output format (from the agent)
+For this Next Steps bundle, respond with:
+
+A. Short diagnosis of current Dashboard trust state
+B. Proposed changes grouped under the 5 task areas above
+C. Exact files to touch for each area
+D. Recommended execution order (by impact vs risk)
+E. Any risks / reasons to split into separate PRs
+

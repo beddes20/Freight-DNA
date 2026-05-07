@@ -1,0 +1,322 @@
+Perfect. You received a comprehensive Available Freight Tab audit from your previous thread. Now you're asking me what to do next.
+
+1. Diagnosis
+You have a complete Phase 0–5 plan for Available Freight already written. The question is not "what's wrong" — that's documented — but which step to execute first and how to track it safely in Replit.
+
+The audit identified 8 high-risk patterns:
+
+Two import paths fighting (OneDrive scheduled pull vs Unified Daily Upload writer)
+
+Auto-provisioned audit table bypassing Drizzle migrations
+
+Email-derived stub companies polluting the AF customer list
+
+Multi-headed owner attribution causing "stolen load" bugs
+
+Snooze/SLA desync firing L1/L2 emails on invisible rows
+
+Auto-Pilot with no global kill switch
+
+Four failing test workflows (the safety net is down)
+
+No reconciliation between the two normalizers
+
+2. What is trustworthy vs not trustworthy
+Trustworthy:
+
+The 5-phase plan structure itself — it's operationally sound, correctly prioritizes read-only investigation, and respects the "no normalize broken data" rule.
+
+The risk assessment — all 8 patterns match known Freight-DNA anti-patterns.
+
+Treat with suspicion:
+
+Any change to AF code before the failing tests are fixed. The guardrail net is down.
+
+Any write to freight_opportunities or freight_daily_upload_fact before Phase 0 numbers are in.
+
+Auto-Pilot hourly tick — it's live, has no kill switch, and can send carrier emails at scale.
+
+Do not trust without verification:
+
+Current row counts in Available Freight — likely inflated by email-derived stubs and zombie rows.
+
+"Last import" freshness pill — only reflects OneDrive importer, not Unified Daily Upload.
+
+Customer attribution on any AF row tied to an is_email_derived=true company.
+
+3. Files / tables / jobs / routes involved
+Already documented in the audit. Key takeaway:
+
+5,330 LoC frontend (available-freight.tsx)
+
+Two competing writers (availableFreightImporter.ts + freightDailyUploadFact.ts)
+
+Three cron jobs (import 6:30 CT M–F, SLA sweep */15, auto-pilot hourly)
+
+Four failing workflows blocking confidence
+
+4. Recommended plan in small steps
+You already have Phases 0–5. Here's how to operationalize them in Replit:
+
+Step 1: Fix the failing workflows (blocking issue)
+Before anything else, get these four workflows green:
+
+backfill-incident
+
+test:freight-capture-funnel
+
+test:lane-system-e2e
+
+storage-integration
+
+Why first: These are the AF safety net. Without them, any change to the cockpit, importer, or auto-pilot is flying blind.
+
+Replit task: "AF Workflow Recovery — Get 4 failing tests green"
+
+Goal: Restore guardrails for Available Freight
+
+Scope: Read-only investigation of why each workflow failed + minimal fix to restore green
+
+Files: tests/freight-capture-funnel.test.ts, tests/lane-system-e2e.test.ts, workflow logs for backfill-incident and storage-integration
+
+Tables: None (investigation only)
+
+Risks: If backfill-incident failed mid-apply, there may be half-applied owner attribution — do not re-run until root cause is clear
+
+Safe first action: Pull workflow logs, identify failure mode, document in /admin/available-freight/imports or a diagnostic doc
+
+Step 2: Phase 0 read-only audit (no writes)
+Run the five audit queries the plan outlined:
+
+Replit task: "AF Phase 0 Read-Only Audit"
+
+Goal: Quantify email-derived pollution, snooze/SLA desync, import divergence, owner drift
+
+Scope: Five read-only SQL queries against dev/prod replica + write-up
+
+Files: New file scripts/af-phase0-audit.sql or .ts (read-only)
+
+Tables: freight_opportunities, freight_daily_upload_fact, companies, freight_opportunity_import_audit (SELECT only)
+
+Risks: None — read-only
+
+Safe first action: Draft the SQL, run against dev replica first, review results, then run against prod replica if safe
+
+The five queries:
+
+How many AF rows (last 14 days) reference companies.is_email_derived = true?
+
+How many open AF rows have snoozedUntil IS NOT NULL AND awaitingApprovalSince IS NOT NULL?
+
+For today, how many (orgId, lane, pickup) triples appear in freight_opportunities but NOT in freight_daily_upload_fact (and vice versa)?
+
+Distribution of freight_opportunity_import_audit.unmatched_companies (last 30 days)
+
+Count of rows where ownerUserId, delegatedToUserId, createdById, approvedById disagree
+
+Output: A diagnostic doc + reusable SQL script managers can re-run monthly.
+
+Step 3: Phase 1 labels & disclosures (low blast radius)
+Once Phase 0 numbers are in and workflows are green:
+
+Replit task: "AF Phase 1 — Email-Derived Labels + Always-On Hidden Counts"
+
+Goal: Make broken data visible without changing filters or scope
+
+Scope:
+
+Add "Email-derived customer" pill on AF rows where companies.is_email_derived = true
+
+Always render HiddenCountsDisclosure (not only on empty state)
+
+Split freshness pill into two tiles: "Daily Excel (Unified)" vs "OneDrive AF importer"
+
+Files:
+
+client/src/pages/available-freight.tsx (cockpit list render)
+
+client/src/components/freight/freshness-pill.tsx (or wherever freshness is rendered)
+
+client/src/components/freight/hidden-counts-disclosure.tsx
+
+Tables: None (UI-only change, reads from existing companies.is_email_derived join)
+
+Risks: Low — UI labeling only, no filter/scope change
+
+Safe first action: Add the email-derived pill first (smallest change), deploy to staging, spot-check 5 rows, then add always-on hidden counts
+
+Step 4: Phase 2 scope & filter defaults (higher impact)
+After Phase 1 ships and is validated:
+
+Replit task: "AF Phase 2 — Hide Email-Derived by Default + Snoozed-SLA Admin View"
+
+Goal: Clean the cockpit default view, surface snoozed-but-SLA-firing rows for managers
+
+Scope:
+
+Add ?includeEmailDerived=false (default) to cockpit list query
+
+Add admin toggle to opt back in
+
+Add "Snoozed but SLA-active" section to /admin/available-freight/imports
+
+(Optional) Auto-pause SLA when snoozedUntil is in the future
+
+Files:
+
+server/routes/freightOpportunityCockpit.ts (GET /api/freight-opportunities/cockpit)
+
+client/src/pages/admin-available-freight-imports.tsx
+
+server/freightOpportunitySlaService.ts (if pausing SLA on snooze)
+
+Tables: freight_opportunities (filter change only, no writes)
+
+Risks:
+
+Breaking change for reps — default scope now hides email-derived rows. Must coordinate messaging + train managers on the opt-in toggle.
+
+If auto-pausing SLA on snooze, must not break L1/L2 for legitimately snoozed-then-un-snoozed loads.
+
+Safe first action: Ship the filter + toggle first. Hold the SLA-pause logic until SLA desync is validated in Phase 0 audit.
+
+Step 5: Phase 3 kill switches & guardrails (infrastructure)
+Replit task: "AF Phase 3 — Kill Switches + Migrate Audit Table"
+
+Goal: Add incident-response levers + harden schema
+
+Scope:
+
+Add AVAILABLE_FREIGHT_AUTOPILOT_ENABLED and AVAILABLE_FREIGHT_IMPORTER_ENABLED env flags
+
+Wire into cron tick + manual import route (gated for scheduled, ungated for user-initiated)
+
+Migrate freight_opportunity_import_audit from auto-provisioned to Drizzle migration
+
+Add guardrails test: fail if AF importer writes a row with no matching freight_daily_upload_fact from same day
+
+Files:
+
+server/availableFreightScheduler.ts
+
+server/routes/myProcurement.ts (POST /api/available-freight/import)
+
+server/freightOpportunityAutoPilot.ts
+
+server/db/schema/*.ts (Drizzle migration for audit table)
+
+tests/code-quality-guardrails.test.ts (Section 1051-style check)
+
+Tables: freight_opportunity_import_audit (schema migration)
+
+Risks:
+
+Schema migration requires drizzle-kit push:pg before deploy and is not reversible without follow-up migration.
+
+Kill switches must drain in-flight Auto-Pilot sends safely ("pause new sends," not "abort mid-send").
+
+Safe first action: Add env flags + boot log first (no schema change). Deploy, verify flags print correctly, then add migration + guardrails test in a separate PR.
+
+Step 6: Phase 4 repair (data cleanup)
+Replit task: "AF Phase 4 — Tag & Review-Queue Email-Derived AF Rows"
+
+Goal: One-time backfill to tag legacy AF rows tied to email-derived companies
+
+Scope:
+
+Backfill: UPDATE freight_opportunities SET needs_review = true WHERE companyId IN (SELECT id FROM companies WHERE is_email_derived = true)
+
+Surface in /admin/available-freight/imports for accept / merge / hide workflow
+
+Files:
+
+scripts/af-backfill-email-derived.ts (one-time, reversible via soft flag)
+
+client/src/pages/admin-available-freight-imports.tsx (review queue UI)
+
+Tables: freight_opportunities (write — add needs_review flag or reuse existing status)
+
+Risks:
+
+If backfill is not WHERE-gated to exclude already-resolved rows, it will re-flag clean data.
+
+If backfill runs before Phase 1 labels ship, reps can't distinguish real vs email-derived in the UI.
+
+Safe first action: Draft the backfill script, run against dev replica with --dry-run, review row count, get manager sign-off before prod run.
+
+Step 7: Phase 5 reconciliation (long-term)
+Replit task: "AF Phase 5 — Nightly Drift Reconciler (OneDrive vs Unified)"
+
+Goal: Detect divergence between two import paths; surface in admin view
+
+Scope:
+
+Nightly read-only reconciler: diff freight_opportunities vs freight_daily_upload_fact by (orgId, lane, pickup_date)
+
+Write drift summary to freight_import_drift_log (new table)
+
+Surface in /admin/available-freight/imports
+
+Once trusted for 30 days, retire one of the two writers (likely OneDrive importer, since Unified Daily Upload is Task #1051 / Section 1051)
+
+Files:
+
+server/freightImportReconciler.ts (new service)
+
+server/db/schema/freight_import_drift_log.ts (new table)
+
+Cron: FREIGHT_IMPORT_RECONCILER_CRON=0 2 * * * (2 AM daily)
+
+Tables: freight_opportunities, freight_daily_upload_fact (read), freight_import_drift_log (write)
+
+Risks:
+
+High complexity — touches Unified Daily Upload (Section 1051 contract).
+
+If reconciler auto-corrects instead of surfacing drift, it becomes a third normalizer and you're back to the original problem.
+
+Safe first action: Phase 5 is last. Do not start until Phases 0–4 are shipped, stable, and validated for 2+ weeks.
+
+5. Risks / dependencies
+All documented in the original audit. Additional operational risk:
+
+Do not split Phase 0 and Step 1 (failing workflows). Fixing workflows is Phase 0. Without green tests, the Phase 0 audit queries are the only guardrail you have.
+
+6. Safe first action
+Start here (today, in Replit):
+
+Task: "AF Workflow Recovery — Get 4 failing tests green"
+Pull logs for backfill-incident, test:freight-capture-funnel, test:lane-system-e2e, storage-integration
+
+Identify failure mode for each (missing env var? schema drift? stale fixture? half-applied backfill?)
+
+Document findings in a diagnostic doc or /admin/available-freight/imports admin note
+
+Fix the smallest, safest thing blocking each workflow (e.g., restore missing env var, skip flaky assertion, revert bad fixture)
+
+Re-run workflows
+
+If green: proceed to Phase 0 audit queries
+
+If still red: escalate with context ("Workflow X fails because Y; fixing Y requires Z approval")
+
+Why this is safest:
+
+Read-only investigation (pulling logs)
+
+Minimal blast radius (workflow fixes are scoped to test env)
+
+Unblocks everything else — you cannot safely touch AF code until these are green
+
+7. What should NOT be republished yet
+All already documented in the audit. Reinforcing:
+
+❌ Do not redeploy OneDrive importer until Phase 0 numbers + Phase 3 kill switch are in
+
+❌ Do not redeploy Auto-Pilot until kill switch lands (Phase 3)
+
+❌ Do not ship cockpit list query changes until workflows are green
+
+❌ Do not re-run backfill-incident until you understand why it failed (half-applied = drift)
+
+❌ Do not republish manual import trigger while importer can adopt email-derived companies
