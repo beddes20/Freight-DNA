@@ -3161,9 +3161,20 @@ export async function createFreightOpportunityFromWonQuote(
       // Auto-create a minimal company tied to this org so the handoff always
       // succeeds for a valid won quote — the rep can enrich the company
       // record later from the CRM.
+      //
+      // Task #1095 — when the underlying quote came from an inbound email
+      // (the default `source`), flag the auto-created company so the
+      // Customers list hides it by default and the admin email-derived view
+      // can surface it via the explicit `is_email_derived` column. The
+      // `sourceReference` for an email-sourced quote is the provider message
+      // id, so it doubles as the seed message id.
+      const isEmailDerived = opp.source === "email";
       const [created] = await db.insert(companies).values({
         organizationId: orgId,
         name: customerName,
+        isEmailDerived,
+        emailDerivedAt: isEmailDerived ? new Date() : null,
+        emailDerivedSeedMessageId: isEmailDerived ? (opp.sourceReference ?? null) : null,
       }).returning({ id: companies.id });
       if (!created) {
         console.log(`[customer-quotes] AF handoff skipped (failed to auto-create company "${customerName}") quote=${opp.id}`);

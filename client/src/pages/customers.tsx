@@ -152,6 +152,10 @@ export default function Customers() {
   const [searchQuery, setSearchQuery] = useState(() => initParam("q", ""));
   const [dialogOpen, setDialogOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  // Task #1095 — when on, refetch with `includeEmailDerived=true` so admin
+  // cleanup work can see the inbound-email auto-created stub rows that the
+  // default Customers list hides.
+  const [showEmailDerived, setShowEmailDerived] = useState(false);
   const [showFilters, setShowFilters] = useState(() => {
     const p = new URLSearchParams(window.location.search);
     return ["rep", "industry", "touch"].some(k => p.has(k) && p.get(k) !== "all");
@@ -263,7 +267,15 @@ export default function Customers() {
   });
 
   const { data: companies, isLoading: companiesLoading, isError: companiesError, refetch: refetchCompanies } = useQuery<Company[]>({
-    queryKey: ["/api/companies"],
+    queryKey: ["/api/companies", { includeEmailDerived: showEmailDerived }],
+    queryFn: async () => {
+      const url = showEmailDerived
+        ? "/api/companies?includeEmailDerived=true"
+        : "/api/companies";
+      const res = await fetch(url, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
   });
 
   const { data: archivedCompanies, isLoading: archivedLoading, isError: archivedError, refetch: refetchArchived } = useQuery<Company[]>({
@@ -451,6 +463,17 @@ export default function Customers() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            {!showArchived && (
+              <Button
+                variant={showEmailDerived ? "default" : "outline"}
+                onClick={() => setShowEmailDerived(v => !v)}
+                className={showEmailDerived ? "" : "bg-white/10 border-white/20 text-white hover:bg-white/20"}
+                data-testid="toggle-show-email-derived"
+                title="Include companies that were auto-created from inbound emails (Task #1095)"
+              >
+                {showEmailDerived ? "Hide Email-Derived" : "Show Email-Derived"}
+              </Button>
+            )}
             <Button
               variant={showArchived ? "default" : "outline"}
               onClick={() => setShowArchived(v => !v)}
@@ -683,6 +706,11 @@ export default function Customers() {
                             </h3>
                             {company.archivedAt && (
                               <Badge variant="secondary" className="text-xs shrink-0">Archived</Badge>
+                            )}
+                            {company.isEmailDerived && (
+                              <Badge variant="outline" className="text-xs shrink-0 border-amber-400 text-amber-700 dark:text-amber-300" data-testid={`badge-email-derived-${company.id}`}>
+                                Email-derived
+                              </Badge>
                             )}
                           </div>
                           <p className="text-sm text-muted-foreground truncate">

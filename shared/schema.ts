@@ -57,10 +57,25 @@ export const companies = pgTable("companies", {
   operatingHours: text("operating_hours"),
   handoffNotes: text("handoff_notes"),
   onboardingMilestones: jsonb("onboarding_milestones"),
+  // Task #1095 — explicit flag set the moment a company row is auto-created
+  // from an inbound-email signal (sender domain we have never seen before).
+  // Replaces the fragile heuristic in `adminEmailDerivedCompanies.ts` (no
+  // contacts + no owner + no industry + not archived) which silently swept
+  // up real-but-thin customer rows. The Customers list filters out flagged
+  // rows by default; the admin email-derived view supports a `?source=flag`
+  // mode that filters purely on this column.
+  isEmailDerived: boolean("is_email_derived").notNull().default(false),
+  emailDerivedAt: timestamp("email_derived_at", { withTimezone: true }),
+  emailDerivedSeedMessageId: varchar("email_derived_seed_message_id"),
 }, (t) => ({
   orgIdx: index("companies_org_idx").on(t.organizationId),
   orgAssignedIdx: index("companies_org_assigned_idx").on(t.organizationId, t.assignedTo),
   orgNameIdx: index("companies_org_name_idx").on(t.organizationId, t.name),
+  // Partial index keeps the admin "show only flagged stubs" query fast even
+  // as the companies table grows — flagged rows are always a tiny minority.
+  emailDerivedIdx: index("companies_email_derived_idx")
+    .on(t.organizationId)
+    .where(sql`is_email_derived = true`),
 }));
 
 export const sharedRepSchema = z.object({

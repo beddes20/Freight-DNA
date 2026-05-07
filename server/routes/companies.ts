@@ -24,7 +24,10 @@ export function registerCompanyRoutes(app: Express): void {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      let allCompanies = await storage.getCompanies(req.session.organizationId!);
+      // Task #1095 — Customers list hides rows the inbound-email pipeline
+      // auto-created unless the caller explicitly opts in.
+      const includeEmailDerived = qStr(req.query.includeEmailDerived) === "true";
+      let allCompanies = await storage.getCompanies(req.session.organizationId!, { includeEmailDerived });
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         allCompanies = allCompanies.filter(c => visibleIds.includes(c.id));

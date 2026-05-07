@@ -482,7 +482,13 @@ export interface IStorage {
    */
   wouldCreateManagerCycle(userId: string, newManagerId: string, organizationId: string): Promise<boolean>;
 
-  getCompanies(organizationId: string): Promise<Company[]>;
+  /**
+   * Task #1095 — `includeEmailDerived` defaults to false so the main Customers
+   * list never surfaces auto-created stub rows from the inbound-email
+   * pipeline. Pass true from the admin email-derived view (and any other
+   * caller that explicitly wants the full set) to bypass the filter.
+   */
+  getCompanies(organizationId: string, opts?: { includeEmailDerived?: boolean }): Promise<Company[]>;
   getCompaniesByIds(ids: string[], organizationId: string): Promise<Company[]>;
   // Workflow OS — Task #930. Resolve a batch of free-text customer names
   // (e.g. `load_fact.customer_name`) to their matching `companies` rows so
@@ -1992,11 +1998,24 @@ export class DatabaseStorage implements IStorage {
     return false;
   }
 
-  async getCompanies(organizationId: string): Promise<Company[]> {
-    const key = `companies:${organizationId}`;
+  async getCompanies(
+    organizationId: string,
+    opts?: { includeEmailDerived?: boolean },
+  ): Promise<Company[]> {
+    // Task #1095 — by default we hide rows the inbound-email pipeline
+    // auto-created (sender domain we'd never seen before). Admin tooling
+    // and migrations can opt in via `includeEmailDerived: true`.
+    const includeEmailDerived = opts?.includeEmailDerived === true;
+    const key = `companies:${organizationId}:ied=${includeEmailDerived ? 1 : 0}`;
     const cached = cacheGet<Company[]>(key);
     if (cached) return cached;
-    const result = await db.select().from(companies).where(eq(companies.organizationId, organizationId));
+    const where = includeEmailDerived
+      ? eq(companies.organizationId, organizationId)
+      : and(
+          eq(companies.organizationId, organizationId),
+          eq(companies.isEmailDerived, false),
+        );
+    const result = await db.select().from(companies).where(where);
     cacheSet(key, result, 30_000);
     return result;
   }

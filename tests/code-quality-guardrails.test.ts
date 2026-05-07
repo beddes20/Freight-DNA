@@ -5076,6 +5076,95 @@ console.log("\n── Section 1051: Unified ReplitDailyUpload contract ──\n"
 })();
 
 
+// ── Section 1095: Email-derived companies hidden from main Customers ──────
+// Task #1095 introduced an explicit `companies.is_email_derived` boolean so
+// the inbound-email auto-create path can be filtered out of the default
+// Customers list (and surfaced via an admin opt-in toggle) without relying
+// solely on the legacy 0-contact heuristic. Contracts:
+//   1. The schema must declare the new column + partial index.
+//   2. `storage.getCompanies` must default-exclude `is_email_derived = true`.
+//   3. The companies list route must read `includeEmailDerived` from the
+//      query string and forward it to storage.
+//   4. The auto-create site in `customerQuotes.ts` must set
+//      `isEmailDerived: true` when the underlying quote came from email.
+//   5. The Customers page must render the toggle + per-row badge.
+//   6. The admin email-derived console must support `?source=flag`.
+(function section1095EmailDerivedFlag() {
+  console.log("\n── Section 1095: Email-derived companies flag + UI toggle ──");
+  const schemaSrc = readFile("shared/schema.ts");
+  const storageSrc = readFile("server/storage.ts");
+  const routesSrc = readFile("server/routes/companies.ts");
+  const quotesSrc = readFile("server/services/customerQuotes.ts");
+  const adminRouteSrc = readFile("server/routes/adminEmailDerivedCompanies.ts");
+  const customersPageSrc = readFile("client/src/pages/customers.tsx");
+  const adminPageSrc = readFile("client/src/pages/admin-email-derived-companies.tsx");
+
+  assert(
+    "shared/schema.ts — companies.is_email_derived column declared",
+    /isEmailDerived:\s*boolean\(\s*"is_email_derived"\s*\)/.test(schemaSrc),
+    "schema must declare boolean column is_email_derived",
+  );
+  assert(
+    "shared/schema.ts — partial index companies_email_derived_idx present",
+    /companies_email_derived_idx/.test(schemaSrc),
+    "schema must declare partial index for fast email-derived lookups",
+  );
+  assert(
+    "server/storage.ts — getCompanies accepts includeEmailDerived option",
+    /includeEmailDerived\?:\s*boolean/.test(storageSrc) &&
+      /eq\(\s*companies\.isEmailDerived\s*,\s*false\s*\)/.test(storageSrc),
+    "storage must default-exclude email-derived companies",
+  );
+  assert(
+    "server/routes/companies.ts — forwards includeEmailDerived from query string",
+    /includeEmailDerived/.test(routesSrc),
+    "GET /api/companies must honor ?includeEmailDerived=true",
+  );
+  assert(
+    "server/services/customerQuotes.ts — auto-create marks email-sourced companies",
+    /isEmailDerived[\s\S]{0,200}opp\.source\s*===\s*"email"/.test(quotesSrc) ||
+      /isEmailDerived\s*[:=][^,;]*opp\.source/.test(quotesSrc) ||
+      (/isEmailDerived/.test(quotesSrc) && /opp\.source\s*===\s*"email"/.test(quotesSrc)),
+    "auto-created company on won-quote handoff must set isEmailDerived when opp.source === 'email'",
+  );
+  assert(
+    "server/routes/adminEmailDerivedCompanies.ts — supports ?source=flag mode",
+    /source\s*===\s*"flag"/.test(adminRouteSrc) && /is_email_derived\s*=\s*true/.test(adminRouteSrc),
+    "admin email-derived route must support flag-only source mode",
+  );
+  assert(
+    "client/src/pages/customers.tsx — exposes Show Email-Derived toggle",
+    /data-testid="toggle-show-email-derived"/.test(customersPageSrc) &&
+      /includeEmailDerived=true/.test(customersPageSrc),
+    "customers page must expose the toggle and refetch with ?includeEmailDerived=true",
+  );
+  assert(
+    "client/src/pages/customers.tsx — renders per-row Email-derived badge",
+    /badge-email-derived-\$\{company\.id\}/.test(customersPageSrc),
+    "customers page must show the per-row Email-derived badge",
+  );
+  assert(
+    "client/src/pages/admin-email-derived-companies.tsx — renders source-mode switch",
+    /data-testid="source-mode-toggle"/.test(adminPageSrc) &&
+      /source-mode-flag/.test(adminPageSrc),
+    "admin page must render the heuristic↔flag toggle",
+  );
+  const migrationsSrc = readFile("server/runMigrations.ts");
+  assert(
+    "server/runMigrations.ts — adds is_email_derived column + partial index (idempotent)",
+    /ADD COLUMN IF NOT EXISTS\s+is_email_derived/.test(migrationsSrc) &&
+      /CREATE INDEX IF NOT EXISTS\s+companies_email_derived_idx/.test(migrationsSrc),
+    "migration runner must register the Task #1095 column + partial index so a fresh prod boot is safe",
+  );
+  assert(
+    "client/src/pages/customers.tsx — reads company.isEmailDerived without an `any` cast",
+    /\bcompany\.isEmailDerived\b/.test(customersPageSrc) &&
+      !/\(company as any\)\.isEmailDerived/.test(customersPageSrc),
+    "Customers page must use the typed Company.isEmailDerived field, not a cast",
+  );
+})();
+
+
 console.log(`\n── Results: ${passed} passed, ${failed} failed ──────────────────────────────────\n`);
 
 if (failures.length > 0) {

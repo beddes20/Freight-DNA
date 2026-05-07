@@ -101,9 +101,18 @@ export default function AdminEmailDerivedCompaniesPage(): JSX.Element {
   const { user } = useAuth();
   const [filter, setFilter] = useState("");
   const [bucketFilter, setBucketFilter] = useState<Bucket | "all">("all");
+  // Task #1095 — admin can flip between the legacy 0-contact heuristic and
+  // the new explicit `is_email_derived` flag. Default stays on heuristic so
+  // legacy stubs (created before the flag landed) remain visible.
+  const [sourceMode, setSourceMode] = useState<"heuristic" | "flag">("heuristic");
 
   const { data, isLoading, error } = useQuery<Resp>({
-    queryKey: ["/api/admin/email-derived-companies"],
+    queryKey: ["/api/admin/email-derived-companies", { source: sourceMode }],
+    queryFn: async () => {
+      const res = await fetch(`/api/admin/email-derived-companies?source=${sourceMode}`, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch");
+      return res.json();
+    },
     enabled: !!user && user.role === "admin",
   });
 
@@ -195,6 +204,31 @@ export default function AdminEmailDerivedCompaniesPage(): JSX.Element {
             </CardTitle>
           </CardHeader>
         </Card>
+      </div>
+
+      {/* Task #1095 — source mode switch (heuristic vs explicit flag) */}
+      <div className="flex items-center gap-2 text-sm" data-testid="source-mode-toggle">
+        <span className="text-muted-foreground">View source:</span>
+        <button
+          type="button"
+          onClick={() => setSourceMode("heuristic")}
+          className={`px-3 py-1 rounded-full border transition-colors ${
+            sourceMode === "heuristic" ? "bg-primary text-primary-foreground border-primary" : "bg-background hover:bg-muted"
+          }`}
+          data-testid="source-mode-heuristic"
+        >
+          Heuristic (legacy)
+        </button>
+        <button
+          type="button"
+          onClick={() => setSourceMode("flag")}
+          className={`px-3 py-1 rounded-full border transition-colors ${
+            sourceMode === "flag" ? "bg-primary text-primary-foreground border-primary" : "bg-background hover:bg-muted"
+          }`}
+          data-testid="source-mode-flag"
+        >
+          is_email_derived flag
+        </button>
       </div>
 
       {/* Bucket-count tiles double as filter chips */}

@@ -5,7 +5,17 @@
  * auto-created by the inbound-email → company pipeline (Tasks #1052 / #1056)
  * and never matured into real customers, classifies each one into a
  * triage bucket, and attaches name-similarity hints to existing real
- * companies. Match criteria for the stub list:
+ * companies.
+ *
+ * Task #1095 — supports two query modes via `?source=heuristic|flag`:
+ *   - `heuristic` (default, backward-compat): the original 0-contact /
+ *     no-owner / no-industry / not-archived predicate. Surfaces both newly-
+ *     flagged stubs AND legacy stubs that pre-date the explicit flag.
+ *   - `flag`: the new mode, filters purely on the explicit
+ *     `companies.is_email_derived` column. Cleaner signal once the
+ *     historical backfill TODO (see `replit.md` Gotchas) is run.
+ *
+ * Match criteria for the heuristic stub list:
  *
  *   - 0 rows in `contacts` for the company
  *   - `owner_rep_id IS NULL`
@@ -44,6 +54,7 @@ import { sql } from "drizzle-orm";
 import { db } from "../storage";
 import { requireAuth, getCurrentUser } from "../auth";
 import { isAdmin } from "../lib/roles";
+import { qStr } from "../lib/req";
 
 export type StubBucket = "real_incomplete" | "duplicate_candidate" | "low_value_stub";
 
@@ -117,6 +128,18 @@ export function registerAdminEmailDerivedCompaniesRoutes(app: Express): void {
 
       const orgId = user.organizationId;
 
+      // Task #1095 — `?source=flag` selects rows purely by the explicit
+      // `is_email_derived` column instead of the legacy heuristic. Default
+      // stays `heuristic` so existing dashboards keep working unchanged.
+      const source = qStr(req.query.source);
+      const sourceMode: "heuristic" | "flag" = source === "flag" ? "flag" : "heuristic";
+      const baseFilter = sourceMode === "flag"
+        ? sql`organization_id = ${orgId} AND is_email_derived = true`
+        : sql`organization_id = ${orgId}
+               AND owner_rep_id IS NULL
+               AND (industry IS NULL OR industry = '')
+               AND archived_at IS NULL`;
+
       // ── Stub rows + per-stub signals (single CTE) ────────────────────
       const rows = await db.execute<{
         company_id: string;
@@ -134,10 +157,7 @@ export function registerAdminEmailDerivedCompaniesRoutes(app: Express): void {
         WITH base AS (
           SELECT id, name, organization_id
             FROM companies
-           WHERE organization_id = ${orgId}
-             AND owner_rep_id IS NULL
-             AND (industry IS NULL OR industry = '')
-             AND archived_at IS NULL
+           WHERE ${baseFilter}
         ),
         contact_counts AS (
           SELECT company_id, COUNT(*)::int AS n
@@ -199,7 +219,7 @@ export function registerAdminEmailDerivedCompaniesRoutes(app: Express): void {
           LEFT JOIN threads        t  ON t.company_id  = b.id
           LEFT JOIN qo             qo ON qo.company_id = b.id
           LEFT JOIN fo             fo ON fo.company_id = b.id
-         WHERE COALESCE(cc.n, 0) = 0
+         WHERE ${sourceMode === "flag" ? sql`TRUE` : sql`COALESCE(cc.n, 0) = 0`}
          ORDER BY COALESCE(i.last_at, fo.first_at, qo.first_at, '1970-01-01'::timestamp) DESC,
                   b.name ASC
          LIMIT 1000

@@ -6430,6 +6430,28 @@ export async function runEmailIntelV1_5Migrations() {
     console.log(
       "[migrations] Task #1056 attribution_inference_source + attribution_evidence columns ensured",
     );
+
+    // ── Task #1095 — Email-derived companies flag ──────────────────────────
+    // Three columns + one partial index on `companies` so the inbound-email
+    // auto-create path (won-quote AF handoff in customerQuotes.ts) can mark
+    // its rows and the default `GET /api/companies` filter can hide them
+    // from the main Customers list. Strictly idempotent so a fresh prod
+    // boot is safe even before `drizzle-kit push:pg` is run.
+    await client.query(
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS is_email_derived boolean NOT NULL DEFAULT false`,
+    );
+    await client.query(
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS email_derived_at timestamptz`,
+    );
+    await client.query(
+      `ALTER TABLE companies ADD COLUMN IF NOT EXISTS email_derived_seed_message_id varchar(255)`,
+    );
+    await client.query(
+      `CREATE INDEX IF NOT EXISTS companies_email_derived_idx ON companies (organization_id) WHERE is_email_derived = true`,
+    );
+    console.log(
+      "[migrations] Task #1095 is_email_derived column + partial index ensured",
+    );
   } catch (err) {
     console.error("[migrations] Task #1026 lifecycle_stage migration error:", err);
   } finally {
