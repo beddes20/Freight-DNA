@@ -1,0 +1,172 @@
+You are working on Freight-DNA, a custom CRM + workflow platform for freight brokerage. In this task you are focused on the Goals tab.
+
+This task is investigation + Phase 1 visibility fixes only.
+Absolutely no destructive actions, no schema changes, and no republish without an explicit mini-plan and diff summary.
+
+Context (short)
+The Goals tab mixes:
+
+auto-tracked goals (margin, loads, margin %, touchpoints, contacts added) driven by financial uploads and activity; and
+
+manually updated goals.
+
+It shows goal cards, a leaderboard, comments, LM/LC development milestones, and sends weekly and monthly nudges.
+
+Key trust issues identified:
+
+No freshness or “as of {uploadDate}” indicators on auto values.
+
+Zero-vs-missing-vs-unmapped are visually indistinguishable.
+
+Pace uses a hidden totalDays = 365 fallback when date ranges are missing.
+
+Possible orphaned goals where amId is inactive/soft-deleted, potentially leaking into the leaderboard.
+
+Our immediate goal: improve clarity and trust signals without changing any core compute or schema.
+
+Hard guardrails
+Follow these strictly:
+
+No schema changes (no new columns, no migrations).
+
+No deletes or destructive scripts. Do not modify delete behavior.
+
+No changes to rep mapping logic in server/financialHelpers.ts or server/colResolver.ts in this task. They are read-only for now.
+
+No new background jobs, schedulers, or cron changes.
+
+No behavior changes to weeklyGoalRecap or monthlyGoalScheduler. Inspection only.
+
+Treat anything touching contacts, companies, org charts, financials, freight pipelines, or background jobs as high risk—default to read-only.
+
+If a requested change would violate these, stop and annotate it as “out of scope for this task.”
+
+Step 1 – Plan and confirm scope (required before edits)
+Read this prompt and then:
+
+Summarize in 3–5 bullets what you think the current Goals tab does.
+
+List the main trust issues you will focus on (freshness, zero-vs-missing, pace, orphan owners).
+
+List which files and routes you expect to touch in this task.
+
+Do not edit any files until you have written and shown:
+
+A short plan (5–10 bullets) with steps ordered from safest to riskiest.
+
+A file-by-file list of intended changes for Phase 1 (UI-only).
+
+Wait for that plan to be visible in the console before proceeding. You do not need human approval, but your own plan must be written first.
+
+Step 2 – Read-only investigation
+Perform read-only inspection of these files and flows:
+
+client/src/pages/goals.tsx
+
+Identify the components and logic for:
+
+Goal cards (progress, badges, pace label).
+
+Auto vs Manual badges.
+
+LM/LC “Development Milestones” view.
+
+Empty/unconfigured states for the Goals page.
+
+server/routes/goals.ts
+
+Find how /api/goals, /api/goals/:id/progress, and /api/goals/leaderboard enrich goals.
+
+Identify where currentValue and any auto-computed metrics are derived.
+
+Note any auto-revert logic (e.g., “completed → active” when uploads change).
+
+server/storage.ts
+
+Inspect getGoals, getLeaderboard, and any helpers that join goals with users or contacts.
+
+Specifically note: how inactive or soft-deleted users are filtered (or not) from results.
+
+server/financialHelpers.ts and server/colResolver.ts
+
+Understand how rep mapping works from financial uploads, especially:
+
+getRepFromRow, parseHistoricalRow, computeLoadsForRepGoal.
+
+How the “Operations User” column is resolved.
+
+Do not change any logic here.
+
+Schedulers:
+
+server/weeklyGoalRecapScheduler.ts, server/monthlyGoalScheduler.ts (inspection only, for awareness of dependencies).
+
+From this inspection, output (no edits yet):
+
+A short “confirmed vs needs-validation” list for:
+
+How auto currentValue is computed.
+
+Whether inactive/soft-deleted users can still appear in leaderboard results.
+
+Exactly where the totalDays = 365 fallback happens and how it surfaces in UI text.
+
+Step 3 – Phase 1 visibility fixes (UI-only, minimal edits)
+Now implement only these non-destructive, label/visibility changes in client/src/pages/goals.tsx and, if needed, small non-breaking DTO changes:
+
+Auto value freshness indicator
+
+Where goals are rendered with an “Auto” badge, add a small “as of {uploadDate}” label or subtext.
+
+Use an existing timestamp field already available from the server response (e.g., upload date or last financial upload date).
+
+If the data is not present in the client shape, you may:
+
+Extend the API response to include a read-only autoSourceDate or lastUploadAt field, pulling from existing tables or settings.
+
+This extension must not change business logic, only expose already-known timestamps.
+
+If such a timestamp truly does not exist anywhere without schema change, clearly document that and no-op this part.
+
+Stale upload banner (read-only freshness)
+
+If the API already exposes (or can safely expose) the latest financial upload timestamp, add a page-level banner on the Goals tab when that timestamp is older than a fixed threshold (e.g., 36–48 hours).
+
+Text example: “Latest financial upload is N days old — auto-tracked values may be stale.”
+
+The banner is read-only; it does not block usage or change any behavior.
+
+Pace label when date range is missing
+
+Locate the pace calculation that uses a totalDays = 365 fallback when startDate/endDate are missing or malformed.
+
+Change the display so that instead of showing a misleading pace, the UI renders an explicit label like “Date range not set” or “Pace unavailable – missing start/end dates.”
+
+Do not change stored values or goal dates; only adjust how pace is displayed in these error/missing cases.
+
+Owner inactive hint (UI only)
+
+If the existing data returned for a goal includes enough information to tell that the owner user (amId) is inactive or soft-deleted (e.g., a status field in joined user payload), then:
+
+Add a small pill/badge on the goal card: “Owner inactive”.
+
+For now, do not change leaderboard ranking logic or any filtering; we are only labeling.
+
+If the API response does not yet contain such status and adding it would require deeper refactors, document that fact and skip the badge in this task.
+
+Step 4 – Safety checks and summary
+Before finishing:
+
+List every file you modified with a short description of what changed in each (1–3 lines per file).
+
+Confirm that you did not:
+
+Change any database schema or migration files.
+
+Change financial or rep-mapping logic.
+
+Add or modify background jobs, schedulers, or delete behavior.
+
+Surface any follow-up items that you discovered which should not be implemented in this task but are important (e.g., need for lastComputedAt, soft-deletes for goals, kill switches).
+
+Output all of this in a concise engineering note so future threads can pick up the context.

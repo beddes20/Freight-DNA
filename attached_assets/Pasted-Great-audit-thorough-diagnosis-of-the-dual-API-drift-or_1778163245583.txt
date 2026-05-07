@@ -1,0 +1,43 @@
+Great audit—thorough diagnosis of the dual-API drift, orphan sessions, and trust-eroding patterns like stale summaries and silent zeros. This aligns perfectly with the core principles (protect trust, distinguish real vs inferred data, quarantine before delete).
+
+Priority Actions
+Phase 1 (read-only + labels): Immediate impact, zero risk. Labels "Days since opened" and tags suggestions as "Suggestion".
+
+Phase 1/3 combo: "Stop auto-creating sessions in list endpoints" with kill-switch—fixes orphans at source without data loss.
+
+Affected Components
+Read-only investigation (dev DB only):
+
+server/routes.ts (3071–3520: list endpoints calling getOrCreateActiveSession)
+
+server/routes/coaching.ts (full: /api/1on1/* prefix)
+
+server/storage.ts (getOrCreateActiveSession)
+
+DB queries for orphans (empty sessions, archived users)
+
+First PR (safe change):
+
+server/routes.ts: Add appSettings.oneOnOne.listEndpointsCreateSessions kill-switch; new getActiveSessionIfExists
+
+server/storage.ts: Implement getActiveSessionIfExists
+
+client/src/components/one-on-one-portlet.tsx: Label tweaks
+
+tests/code-quality-guardrails.test.ts: Ban getOrCreateActiveSession in loops
+
+Replit Agent Prompt (Phase 1 Safe Fix)
+text
+Apply ONLY these surgical changes to Freight-DNA—no rewrites, no schema changes:
+
+1. In server/storage.ts, add getActiveSessionIfExists(namId, amId) that SELECTs the active session but RETURNS NULL if none exists (no create).
+
+2. In server/routes.ts, for /api/one-on-one/pending-count, /per-pairing-counts, /action-items: IF appSettings.oneOnOne?.listEndpointsCreateSessions === false, use getActiveSessionIfExists instead of getOrCreateActiveSession. Skip pairs with no session. Default: true (backwards compatible).
+
+3. In client/src/components/one-on-one-portlet.tsx, change "Days since last 1:1" → "Days since session opened". Add " (no meeting yet)" if meetingDate IS NULL.
+
+4. In client/src/pages/one-on-one.tsx ~line 30 TAG_CONFIG, add isSuggestion: true flag. Render suggestions with "Suggestion" badge + different bg-color.
+
+Test: Verify team overview loads without creating new sessions (check DB). Deploy with flag=ON first.
+
+NO DB writes, NO deletes, NO UI overhauls.

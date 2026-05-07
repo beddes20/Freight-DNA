@@ -1,0 +1,54 @@
+Freight-DNA Dashboard Tab audit — read-only investigation first, no destructive actions, no schema changes, no writes.
+
+Context:
+This dashboard is a high-trust operating screen for freight brokerage reps and managers. We need to reduce misleading UI risk before any redesign. Protect trust first, minimize blast radius, and do not make sweeping edits.
+
+Goal:
+Validate whether the dashboard is currently capable of silently showing stale/broken data, and identify the smallest safe Phase 1 visibility fix.
+
+Working rules:
+- Read-only investigation first.
+- Plan before coding.
+- Show exactly which files would be touched before any edit.
+- No destructive scripts, no bulk deletes, no prod data mutation.
+- Treat dashboard endpoints, contacts, companies, financials, lane logic, and background jobs as high-risk.
+- If you find a risky issue, propose quarantine/visibility before deletion or rewrite.
+
+Tasks:
+1. Inspect these files read-only and summarize findings with exact line references if possible:
+   - server/routes/dashboard.ts
+   - server/monthlyDataRefreshScheduler.ts
+   - server/nbaPhase1Scheduler.ts
+   - server/emailFactsScheduler.ts
+   - server/availableFreightScheduler.ts
+   - client/src/pages/dashboard.tsx
+   - client/src/pages/dashboard/Phase2Portlets.tsx
+   - client/src/components/NbaDashboardPanel.tsx
+   - client/src/components/portlet-error-boundary.tsx
+
+2. Confirm or refute these audit claims:
+   - syncAlert is visible only to admins even when non-admin roles consume stale monthly data
+   - dashboard has two competing NBA surfaces on screen or behind overlapping role/flag paths
+   - briefing-health has a swallowed catch that can hide cold-contact failures
+   - trending / award health / coverage gaps use fuzzy or fallback matching that can create phantom accounts or false empty states
+   - empty states do not distinguish “nothing today” from “upstream data unavailable”
+
+3. Inspect project workflow/scheduler configuration and available logs/status in the repo or config:
+   - backfill-incident
+   - storage-integration
+   - test:freight-capture-funnel
+   - test:lane-system-e2e
+   - monthlyDataRefreshScheduler
+   - nbaPhase1Scheduler
+   - emailFactsScheduler
+   - availableFreightScheduler
+   Determine whether current failures could affect dashboard trust today.
+
+4. Produce output in this exact format:
+   A. Short diagnosis
+   B. Proposed plan in small steps
+   C. Exact files, routes, tables, jobs involved
+   D. Smallest safe code change to make first
+   E. Risks / dependencies / reasons not to republish yet
+
+5. Do not code yet unless you can isolate a one-file, low-risk visibility fix. If you believe the first safe fix is to un-gate syncAlert for all affected roles, show the exact file(s) and minimal diff plan only.
