@@ -27,10 +27,11 @@
  *   `source` reports the job that drove the composite verdict so the UI
  *   can attribute the stale signal precisely.
  */
-import { inArray } from "drizzle-orm";
+import { inArray, eq, sql } from "drizzle-orm";
 import { db } from "../storage";
 import {
   cronHeartbeats,
+  nbaCards,
   portletFreshnessSchema,
   type PortletFreshness,
 } from "../../shared/schema";
@@ -133,6 +134,76 @@ export async function getFreshnessForJobs(
   if (!parsed.success) {
     console.error("[portletFreshness] derived freshness failed schema:", parsed.error);
     return unknownFreshness(sourceLabel);
+  }
+  return parsed.data;
+}
+
+/**
+ * Phase 1.5 S7 — Data-driven NBA freshness.
+ *
+ * NBA does not heartbeat (the nightly Phase 1 engine in
+ * `server/nbaPhase1Scheduler.ts` is not wrapped in `withHeartbeat`, and
+ * we are explicitly NOT touching the scheduler in this slice). Instead
+ * we mirror the Task #1109a NBA freshness precedent used by
+ * `useCompanyDataFreshness`: derive freshness from the most recent
+ * `nba_cards.created_at` per org with a 24h staleness threshold.
+ *
+ *   - ok       — latest card timestamp is within `staleAfterMs` (default 24h)
+ *   - stale    — latest card timestamp exists but is older than threshold
+ *   - unknown  — org has zero NBA cards OR the read failed (defensive)
+ *
+ * Source label is the literal string "nba_cards.createdAt" so the UI
+ * can attribute the signal precisely (parallel to load_fact heartbeat
+ * job names used by `getFreshnessForJobs`).
+ *
+ * NOTE: `nba_cards.created_at` is stored as `text` (ISO-8601), so we
+ * pass it through Postgres `MAX()` — lexicographic max = chronological
+ * max for ISO-8601 strings. Date.parse() then converts to ms.
+ */
+const NBA_FRESHNESS_SOURCE = "nba_cards.createdAt";
+const NBA_DEFAULT_STALE_MS = 24 * 60 * 60 * 1000;
+
+export async function getFreshnessFromNbaCards(
+  orgId: string,
+  opts?: { staleAfterMs?: number },
+): Promise<PortletFreshness> {
+  const staleAfterMs = opts?.staleAfterMs ?? NBA_DEFAULT_STALE_MS;
+  if (!orgId) return unknownFreshness(NBA_FRESHNESS_SOURCE);
+
+  let latestIso: string | null;
+  try {
+    const rows = await db
+      .select({ latest: sql<string | null>`MAX(${nbaCards.createdAt})` })
+      .from(nbaCards)
+      .where(eq(nbaCards.orgId, orgId));
+    latestIso = rows[0]?.latest ?? null;
+  } catch (err) {
+    console.error("[portletFreshness] nba_cards read failed:", err);
+    return unknownFreshness(NBA_FRESHNESS_SOURCE);
+  }
+
+  if (!latestIso) return unknownFreshness(NBA_FRESHNESS_SOURCE);
+
+  const latestMs = Date.parse(latestIso);
+  if (!Number.isFinite(latestMs)) {
+    // Defensive: malformed timestamp string. Don't lie to reps with "ok".
+    return unknownFreshness(NBA_FRESHNESS_SOURCE);
+  }
+
+  const ageMs = Date.now() - latestMs;
+  const status: "ok" | "stale" = ageMs < staleAfterMs ? "ok" : "stale";
+
+  const candidate: PortletFreshness = {
+    source: NBA_FRESHNESS_SOURCE,
+    status,
+    lastUpdatedAt: new Date(latestMs).toISOString(),
+    nextExpectedAt: null,
+    consecutiveFailures: 0,
+  };
+  const parsed = portletFreshnessSchema.safeParse(candidate);
+  if (!parsed.success) {
+    console.error("[portletFreshness] nba freshness failed schema:", parsed.error);
+    return unknownFreshness(NBA_FRESHNESS_SOURCE);
   }
   return parsed.data;
 }

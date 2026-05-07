@@ -8,6 +8,9 @@ import type { NbaCardData } from "./NbaCard";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Brain, RefreshCw, ArrowDownAZ } from "lucide-react";
+import type { PortletFreshness } from "@shared/schema";
+import { decidePortletState } from "@/lib/portletState";
+import { PortletStateBanner } from "@/components/dashboard/PortletStateBanner";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -32,7 +35,13 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
   // candidate set so non-portfolio reps can actually triage by impact
   // (otherwise the server caps non-admin users at 5 cards).
   const triageActive = sortMode === "at_stake" || minAtStake > 0;
-  const { data: cards = [], isLoading, refetch } = useQuery<NbaCardData[]>({
+  // Phase 1.5 S7 — server now envelopes the response as
+  // { cards, freshness }. Tolerate BOTH the legacy bare-array shape AND
+  // the new object shape so the server can ship/roll back independently.
+  type NbaCardsResponse =
+    | NbaCardData[]
+    | { cards: NbaCardData[]; freshness: PortletFreshness | null };
+  const { data, isLoading, refetch } = useQuery<NbaCardsResponse>({
     queryKey: ["/api/nba/cards", triageActive ? "triage" : "default"],
     queryFn: async () => {
       const url = triageActive ? "/api/nba/cards?limit=50" : "/api/nba/cards";
@@ -42,6 +51,8 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
     },
     staleTime: 60_000,
   });
+  const cards: NbaCardData[] = Array.isArray(data) ? data : (data?.cards ?? []);
+  const freshness: PortletFreshness | null = Array.isArray(data) ? null : (data?.freshness ?? null);
 
   const runEngineMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/nba/run-engine", {}),
@@ -81,8 +92,37 @@ export function NbaDashboardPanel({ userRole, isAdmin }: NbaDashboardPanelProps)
     );
   }
 
-  // No cards — return nothing so the panel doesn't occupy space on the dashboard.
-  if (visible.length === 0) return null;
+  // Phase 1.5 S7 — distinguish "nothing today" from "recommendations may
+  // be stale" / "freshness unavailable". Only triggers when the visible
+  // list is empty AFTER the local optimistic-removal/at-stake filter, so
+  // the banner mirrors what the rep is actually seeing. Healthy + empty
+  // still hides as before; missing freshness collapses to legacy hide.
+  const portletState = decidePortletState(visible.length, freshness);
+  if (portletState === "hidden") return null;
+  if (portletState === "stale") {
+    return (
+      <PortletStateBanner
+        state="stale"
+        title="Recommendations may be stale"
+        body="No next-best actions are showing, but the recommendation refresh looks unhealthy."
+        lastUpdatedAt={freshness?.lastUpdatedAt ?? null}
+        source={freshness?.source ?? null}
+        testIdPrefix="nba"
+      />
+    );
+  }
+  if (portletState === "unknown") {
+    return (
+      <PortletStateBanner
+        state="unknown"
+        title="Recommendation freshness unavailable"
+        body="No next-best actions are showing, but dashboard freshness could not be verified."
+        lastUpdatedAt={freshness?.lastUpdatedAt ?? null}
+        source={freshness?.source ?? null}
+        testIdPrefix="nba"
+      />
+    );
+  }
 
   return (
     <div

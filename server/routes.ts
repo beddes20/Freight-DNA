@@ -9568,7 +9568,21 @@ ${recentNotes ? `\nRecent interaction notes (use for personalization):\n${recent
       const projected = activeCards.map(c =>
         projectNbaCard(c, { contacts, lanes, users: userMap }),
       );
-      res.json(projected);
+      // Phase 1.5 S7 — envelope cards with org-scoped data-driven freshness
+      // (max nba_cards.created_at, 24h threshold). Wrapped in its own
+      // try/catch so a freshness lookup failure NEVER takes down the
+      // primary cards payload — same defensive posture as the load-fact
+      // dashboard endpoints. Client tolerates both legacy bare-array and
+      // the new object shape.
+      const { getFreshnessFromNbaCards } = await import("./lib/portletFreshness");
+      let freshness: Awaited<ReturnType<typeof getFreshnessFromNbaCards>> | null;
+      try {
+        freshness = await getFreshnessFromNbaCards(currentUser.organizationId);
+      } catch (freshnessErr) {
+        console.error("[nba/cards GET] freshness lookup failed:", freshnessErr);
+        freshness = null;
+      }
+      res.json({ cards: projected, freshness });
     } catch (err) {
       console.error("[nba/cards GET]", getErrorMessage(err));
       res.status(500).json({ error: "Failed to fetch NBA cards" });

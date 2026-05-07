@@ -1,0 +1,251 @@
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — NBA Freshness via nba_cards.createdAt (Option B)
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+We successfully applied freshness UI to Award Health and Coverage Gaps using existing load-fact heartbeats.
+
+NBA does not map cleanly to that same heartbeat pattern.
+
+Read-only investigation found:
+
+no canonical NBA heartbeat job exists in server/lib/cronHeartbeat.ts
+
+server/nbaPhase1Scheduler.ts is not wrapped in withHeartbeat()
+
+GET /api/nba/cards is per-user and returns a bare NbaCardData[]
+
+the codebase already has an NBA freshness precedent using data recency, not heartbeat recency:
+
+useCompanyDataFreshness
+
+/api/companies/:id/data-freshness
+
+NBA freshness there is based on max(nbaCards.createdAt) with a 24h threshold
+
+We are explicitly choosing Option B:
+
+use data-driven freshness for NBA based on max(nba_cards.created_at)
+
+do not add a new NBA heartbeat job
+
+do not touch nbaPhase1Scheduler.ts
+
+Goal:
+Extend the existing dashboard freshness UI pattern to the NBA portlet using a data-driven freshness source that matches the current product logic and avoids scheduler changes.
+
+Guardrails:
+
+No schema changes.
+
+No scheduler changes.
+
+No changes to NBA scoring, ranking, or generation logic.
+
+No destructive scripts.
+
+Reuse the existing decidePortletState and PortletStateBanner primitives.
+
+Preserve the current cards-present rendering path exactly.
+
+Primary payload must still return even if freshness lookup fails.
+
+Scope:
+
+In scope:
+
+server/lib/portletFreshness.ts
+
+NBA route handler for GET /api/nba/cards
+
+client/src/components/NbaDashboardPanel.tsx
+
+focused tests for NBA freshness helper + NBA UI branch behavior
+
+Out of scope:
+
+server/nbaPhase1Scheduler.ts
+
+server/lib/cronHeartbeat.ts
+
+Award Health / Coverage Gaps
+
+Trending / Margin
+
+summary-level pipeline health strip
+
+Tasks:
+
+Read-only confirmation before editing
+
+Reconfirm:
+
+the exact route file and handler for GET /api/nba/cards
+
+the current response shape (bare array vs object)
+
+the exact client consumption path in NbaDashboardPanel.tsx
+
+the existing data model used to read nba_cards.createdAt
+
+Reconfirm the existing freshness precedent in:
+
+useCompanyDataFreshness
+
+/api/companies/:id/data-freshness
+
+Use that precedent as the contract baseline for stale vs fresh thresholding.
+
+Add NBA data-driven freshness helper
+
+File:
+
+server/lib/portletFreshness.ts
+
+Add:
+
+getFreshnessFromNbaCards(orgId: string, opts?: { staleAfterMs?: number }): Promise<PortletFreshness>
+
+Behavior:
+
+read the most recent nba_cards.createdAt for the org (or user scope if that is the correct route contract — confirm first)
+
+derive:
+
+ok if latest card timestamp is within 24h
+
+stale if latest card timestamp exists but is older than 24h
+
+unknown if no NBA cards exist or the read fails
+
+return:
+
+source: "nba_cards.createdAt"
+
+status
+
+lastUpdatedAt
+
+nextExpectedAt: null
+
+consecutiveFailures: 0
+
+Keep the same defensive posture as other freshness helpers:
+
+DB failure must degrade to unknown, not throw
+
+Wire freshness into the NBA endpoint
+
+File:
+
+the route file that owns GET /api/nba/cards
+
+Change response shape safely from:
+
+bare NbaCardData[]
+
+To:
+
+{ cards, freshness }
+
+Add a safe wrapper:
+
+if freshness lookup fails unexpectedly, still return { cards, freshness: null }
+
+Do not change card projection, filtering, or scoring.
+
+Add defensive client normalization + freshness UI to NBA panel
+
+File:
+
+client/src/components/NbaDashboardPanel.tsx
+
+Update query typing to tolerate both:
+
+legacy NbaCardData[]
+
+new { cards, freshness }
+
+Normalize:
+
+const cards = Array.isArray(data) ? data : (data?.cards ?? []);
+
+const freshness = Array.isArray(data) ? null : (data?.freshness ?? null);
+
+Reuse:
+
+decidePortletState(cards.length, freshness)
+
+PortletStateBanner
+
+Behavior:
+
+cards present → existing UI unchanged
+
+empty + stale → amber banner
+
+empty + unknown → neutral banner
+
+empty + ok → hidden
+
+missing freshness → hidden (legacy compatibility)
+
+NBA banner copy
+
+Stale:
+
+title: Recommendations may be stale
+
+body: No next-best actions are showing, but the recommendation refresh looks unhealthy.
+
+Unknown:
+
+title: Recommendation freshness unavailable
+
+body: No next-best actions are showing, but dashboard freshness could not be verified.
+
+Optional footer:
+
+show Last refresh: <relative time> when lastUpdatedAt exists
+
+Tests
+
+Add helper test coverage for getFreshnessFromNbaCards:
+
+no cards → unknown
+
+recent cards → ok
+
+cards older than 24h → stale
+
+DB/read failure → unknown
+
+Extend NBA UI branch tests:
+
+stale + empty → amber banner
+
+unknown + empty → neutral banner
+
+ok + empty → hidden
+
+cards present → normal render
+
+missing freshness → hidden
+
+If there is an existing AST contract pattern for portlet state coverage, reuse it.
+
+Output format:
+A. Short diagnosis
+B. Exact files changed
+C. Behavior changes
+D. Tests run and results
+E. Risks / reasons not to republish yet
+
+Important:
+
+Do not touch nbaPhase1Scheduler.ts in this task.
+
+Do not add a new heartbeat job or JOB_NAMES entry.
+
+If you discover the NBA route is actually user-scoped rather than org-scoped in a way that changes freshness semantics materially, stop and report before editing.

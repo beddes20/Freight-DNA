@@ -53,6 +53,7 @@ const AWARD_SRC = READ("pages/dashboard/AwardHealthPortlet.tsx");
 const GAPS_SRC = READ("pages/dashboard/CoverageGapsPortlet.tsx");
 const HELPER_SRC = READ("lib/portletState.ts");
 const BANNER_SRC = READ("components/dashboard/PortletStateBanner.tsx");
+const NBA_SRC = READ("components/NbaDashboardPanel.tsx");
 
 describe("AwardHealthPortlet — freshness banner contract", () => {
   it("imports the shared decideBannerState helper + banner component", () => {
@@ -125,6 +126,83 @@ describe("PortletStateBanner — shared component contract", () => {
 
   it("encodes the state on the rendered card for portlet specs to assert against", () => {
     expect(BANNER_SRC).toMatch(/data-portlet-state=\{state\}/);
+  });
+});
+
+describe("NbaDashboardPanel — freshness banner contract (Phase 1.5 S7)", () => {
+  it("imports the shared decideBannerState helper + banner component", () => {
+    expect(NBA_SRC).toMatch(/from\s+["']@\/lib\/portletState["']/);
+    expect(NBA_SRC).toMatch(/from\s+["']@\/components\/dashboard\/PortletStateBanner["']/);
+  });
+
+  it("normalizes both legacy bare-array and new envelope response shapes", () => {
+    expect(NBA_SRC).toMatch(/Array\.isArray\(data\)\s*\?\s*data\s*:\s*\(data\?\.cards/);
+    expect(NBA_SRC).toMatch(/freshness.*=.*Array\.isArray\(data\).*data\?\.freshness/);
+  });
+
+  it("calls decidePortletState with visible.length + freshness (mirrors what the rep actually sees)", () => {
+    expect(NBA_SRC).toMatch(/decidePortletState\(visible\.length,\s*freshness\)/);
+  });
+
+  it("renders a stale banner with the documented copy", () => {
+    expect(NBA_SRC).toMatch(/state=["']stale["']/);
+    expect(NBA_SRC).toMatch(/Recommendations may be stale/);
+    expect(NBA_SRC).toMatch(/recommendation refresh looks unhealthy/);
+  });
+
+  it("renders an unknown banner with the documented copy", () => {
+    expect(NBA_SRC).toMatch(/state=["']unknown["']/);
+    expect(NBA_SRC).toMatch(/Recommendation freshness unavailable/);
+    expect(NBA_SRC).toMatch(/dashboard freshness could not be verified/);
+  });
+
+  it("preserves the hide-on-empty branch for healthy upstream and missing freshness", () => {
+    expect(NBA_SRC).toMatch(/portletState === ["']hidden["']\)\s*return null/);
+  });
+
+  it("uses 'nba' as the testIdPrefix for both banner branches", () => {
+    expect(NBA_SRC).toMatch(/testIdPrefix=["']nba["']/);
+  });
+});
+
+describe("getFreshnessFromNbaCards — server helper contract (Phase 1.5 S7)", () => {
+  const SERVER_SRC = fs.readFileSync(
+    path.resolve(__dirname, "..", "..", "..", "..", "server", "lib", "portletFreshness.ts"),
+    "utf8",
+  );
+
+  it("exports the data-driven NBA freshness helper", () => {
+    expect(SERVER_SRC).toMatch(/export async function getFreshnessFromNbaCards/);
+  });
+
+  it("uses the canonical source label 'nba_cards.createdAt'", () => {
+    expect(SERVER_SRC).toMatch(/["']nba_cards\.createdAt["']/);
+  });
+
+  it("defaults the staleness threshold to 24h", () => {
+    expect(SERVER_SRC).toMatch(/24\s*\*\s*60\s*\*\s*60\s*\*\s*1000/);
+  });
+
+  it("derives latest timestamp via Postgres MAX on nbaCards.createdAt", () => {
+    expect(SERVER_SRC).toMatch(/MAX\(\$\{nbaCards\.createdAt\}\)/);
+  });
+
+  it("collapses zero rows and DB read failure to status='unknown' (NEVER throws)", () => {
+    // unknown branch on no rows
+    expect(SERVER_SRC).toMatch(/if \(!latestIso\) return unknownFreshness\(NBA_FRESHNESS_SOURCE\)/);
+    // try/catch around the DB read
+    expect(SERVER_SRC).toMatch(/\[portletFreshness\] nba_cards read failed/);
+  });
+
+  it("nba/cards route wires freshness via the safe await-import + try/catch envelope", () => {
+    const ROUTES_SRC = fs.readFileSync(
+      path.resolve(__dirname, "..", "..", "..", "..", "server", "routes.ts"),
+      "utf8",
+    );
+    expect(ROUTES_SRC).toMatch(/getFreshnessFromNbaCards.*currentUser\.organizationId/);
+    expect(ROUTES_SRC).toMatch(/res\.json\(\{ cards: projected, freshness \}\)/);
+    // Defensive: failure path must collapse to freshness:null, not 500
+    expect(ROUTES_SRC).toMatch(/\[nba\/cards GET\] freshness lookup failed/);
   });
 });
 
