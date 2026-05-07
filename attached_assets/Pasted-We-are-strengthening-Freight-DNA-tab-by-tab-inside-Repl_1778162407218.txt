@@ -1,0 +1,101 @@
+We are strengthening Freight-DNA tab by tab inside Replit.
+
+For this thread, audit the following tab/page thoroughly:
+[TAB NAME]
+
+I need a complete, uniform review so we can clean it up, protect it, and improve it without introducing risk.
+
+Use this process every time:
+
+## 1) Purpose
+Explain in plain English:
+- what this tab is supposed to do
+- who uses it
+- what business outcome it supports
+- what “good” looks like for this tab
+
+## 2) UI inventory
+Identify:
+- main widgets/cards/tables/filters/buttons on this tab
+- empty states, warning states, badges, freshness indicators, sync indicators
+- anything in the UI that looks misleading, stale, polluted, or broken
+
+## 3) Data inventory
+List all likely:
+- tables
+- views
+- joins
+- endpoints/routes
+- services
+- scheduled jobs / background jobs
+- imports / sync dependencies
+that power this tab
+
+For each one, explain:
+- what it contributes to the tab
+- whether it looks healthy, stale, broken, polluted, or uncertain
+
+## 4) Trust audit
+Tell me what on this tab is safe to trust right now vs not safe to trust right now.
+
+Use categories:
+- Safe
+- Needs validation
+- Misleading
+- Broken
+- Polluted by junk/test/stub data
+
+## 5) Failure modes
+Look for:
+- stale syncs
+- engine/job failures
+- broken joins
+- missing financial mappings
+- fake users/customers
+- contacts vs suggestions confusion
+- missing saved records
+- duplicate or orphaned records
+- dead buttons / dead-end UI
+- metrics showing zero because of missing data rather than true zero
+
+## 6) Root-cause surfaces
+Identify likely files, jobs, routes, or scripts responsible for problems on this tab.
+Be explicit about:
+- exact files to inspect
+- exact jobs/schedulers to inspect
+- exact tables/fields likely involved
+- confidence level for each hypothesis
+
+## 7) Cleanup plan
+Give me a phased plan:
+- Phase 1: safe visibility fixes (hide, label, quarantine)
+- Phase 2: data cleanup / mapping fixes
+- Phase 3: pipeline/job restoration
+- Phase 4: hardening / safeguards
+- Phase 5: UX improvements to rebuild trust
+
+## 8) Replit implementation plan
+Give me:
+- the exact files likely to change first
+- the safest first change
+- what should be read-only investigation first
+- what should not be republished yet
+- what feature flags / kill switches / soft-delete / audit logging might apply here
+
+## 9) Output format
+Return your answer in this structure:
+1. Tab purpose
+2. What looks wrong
+3. Data + dependency map
+4. What is trustworthy vs not
+5. Likely root causes
+6. Cleanup plan
+7. First 3 actions to take in Replit
+8. Risks before republishing
+
+Important rules:
+- Do not suggest destructive changes first
+- Prefer hide/quarantine/label before delete
+- Default to read-only investigation for prod-linked issues
+- Distinguish clearly between saved data, suggested/inferred data, and test/junk data
+- If something is uncertain, say so clearly instead of guessing
