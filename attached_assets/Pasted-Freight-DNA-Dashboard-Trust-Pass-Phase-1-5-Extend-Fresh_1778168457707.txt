@@ -1,0 +1,181 @@
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — Extend Freshness UI to NBA Portlet
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Phase 1.5 S6 is complete and publish-safe for:
+
+Award Health
+
+Coverage Gaps
+
+That slice introduced and validated:
+
+decidePortletState(rowCount, freshness)
+
+PortletStateBanner
+
+the pattern:
+
+rows present → unchanged render
+
+empty + stale → amber banner
+
+empty + unknown → neutral banner
+
+empty + ok → hidden
+
+missing freshness → hidden (legacy-compatible)
+
+The next highest-value trust improvement is NBA:
+
+reps use it as a daily action queue
+
+a silently stale/empty NBA portlet is more misleading than a silently empty secondary portlet
+
+Goal:
+Apply the same freshness transport + UI pattern to the NBA portlet so users can distinguish:
+
+“No recommendations right now”
+
+“Recommendations may be stale”
+
+“Recommendation freshness unavailable”
+
+Guardrails:
+
+No schema changes.
+
+No destructive scripts.
+
+No changes to NBA scoring, ranking, or card generation logic.
+
+No changes to scheduler intervals.
+
+Keep the scope to NBA only.
+
+Reuse the existing decidePortletState and PortletStateBanner primitives.
+
+Preserve legacy compatibility where feasible.
+
+Scope:
+
+In scope:
+
+NBA server response shape / freshness transport
+
+NBA client normalization
+
+NBA empty-vs-stale-vs-unknown UI handling
+
+focused tests for the NBA slice
+
+Out of scope:
+
+Award Health / Coverage Gaps (already done)
+
+Trending / Margin
+
+summary-level pipeline health strip
+
+any alias/fuzzy matching or financial joins
+
+Tasks:
+
+Read-only verification first
+
+Confirm the exact NBA endpoint path and response shape in the current codebase.
+
+Confirm the current client consumption site and current empty behavior.
+
+Confirm the canonical heartbeat/job name to use for NBA freshness.
+
+Confirm whether the endpoint already returns a bare array or object, and whether a defensive client normalizer is needed before changing the response shape.
+
+Server-side freshness wiring
+
+Add NBA freshness to the endpoint using the same defensive pattern used for Award Health / Coverage Gaps:
+
+main payload must still return even if freshness lookup fails
+
+heartbeat read failure must degrade to freshness: null, not a 500
+
+Use the canonical NBA heartbeat job constant (do not invent a string).
+
+Keep the response evolution safe for the current client.
+
+Client-side wiring
+
+Update the NBA client to:
+
+normalize the response shape if needed
+
+derive cards + freshness
+
+call decidePortletState(cards.length, freshness)
+
+Behavior:
+
+rows/cards present → existing render unchanged
+
+empty + stale → amber banner
+
+empty + unknown → neutral banner
+
+empty + ok → hidden
+
+missing freshness → hidden (legacy behavior)
+
+Copy:
+
+stale title: Recommendations may be stale
+
+stale body: No next-best actions are showing, but the recommendation refresh looks unhealthy.
+
+unknown title: Recommendation freshness unavailable
+
+unknown body: No next-best actions are showing, but dashboard freshness could not be verified.
+
+Reuse existing UI primitives
+
+Reuse:
+
+client/src/lib/portletState.ts
+
+client/src/components/dashboard/PortletStateBanner.tsx
+
+Do not create a new state helper or a second banner component unless there is a true NBA-specific blocker.
+
+Tests
+
+Extend the current freshness UI test suite to include the NBA portlet:
+
+stale + empty → amber banner path
+
+unknown + empty → neutral banner path
+
+ok + empty → hidden
+
+cards present → normal content
+
+missing freshness → hidden
+
+Add or extend any server-side contract test needed for the NBA endpoint’s new response shape.
+
+Keep tests focused on branch behavior and contract safety, not visuals.
+
+Output format:
+A. Short diagnosis
+B. Exact files changed
+C. Behavior changes
+D. Tests run and results
+E. Risks / reasons not to republish yet
+
+Important:
+
+If you discover that the NBA endpoint/portlet contract differs materially from Award Health / Coverage Gaps, stop and report before widening scope.
+
+Keep this slice small and revertible.
+
+Do not move on to Trending / Margin in this task.
