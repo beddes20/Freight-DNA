@@ -1,0 +1,133 @@
+Act as a senior platform hardening engineer for Freight-DNA.
+
+Goal:
+Run a Phase 1 Platform Safety Sweep focused on schema/runtime safety, drift prevention, and release reliability for the highest-risk surfaces.
+
+This is NOT a feature task.
+This is a controlled hardening/audit task modeled after the fixes we made today.
+
+CONTEXT
+Freight-DNA is a freight brokerage operating system under active development on Replit.
+Recent issues showed production/runtime code assuming schema/defaults that were not actually guaranteed in prod.
+Today’s model fixes included:
+- contacts soft-delete columns parity
+- quote_opportunities.source default parity
+- targeted idempotent boot-time migration guards
+- test stabilization to expose real failures instead of fake precondition noise
+
+USER PRIORITIES / CONSTRAINTS
+- Stay on Replit.
+- Prefer additive, idempotent, low-risk hardening.
+- Minimize surface area.
+- No broad rewires.
+- Email plumbing is frozen: do NOT modify Graph/webhook, capture-first/DROP-GATE, routing_status, classifier thresholds, LLM prompts, backfill/repair scripts, or quote_pipeline_drops semantics.
+- Email-adjacent read-only inspection is allowed.
+- Focus on highest leverage and smallest surface area first.
+
+PHASE 1 SURFACES TO AUDIT
+Audit these areas first:
+1. contacts
+2. companies
+3. quote_opportunities
+4. conversations / email-adjacent READ paths only
+5. lane workflows / lane-related feature flags
+6. one_on_one sessions / related settings
+7. dashboard / nba cards / portlet freshness payloads
+8. any feature-flagged background writer jobs touching the above
+
+OBJECTIVES
+For each audited surface, identify:
+A. Runtime schema assumptions
+- columns referenced directly by code
+- defaults assumed by inserts/tests
+- indexes assumed by query shape/perf-sensitive code
+- feature flags / app settings assumed by behavior
+
+B. Safety classification
+Classify every assumption as exactly one of:
+- GUARANTEED_AT_BOOT
+- GUARANTEED_BY_MIGRATION_FILE_ONLY
+- NOT_GUARANTEED
+- UNKNOWN
+
+C. Risk
+For each NOT_GUARANTEED or UNKNOWN item, explain:
+- what code path depends on it
+- what failure would happen if missing/misaligned
+- severity:
+  - BLOCKER
+  - HIGH
+  - MEDIUM
+  - LOW
+
+D. Safe remediation
+For each risky item, recommend the smallest safe fix:
+- idempotent runMigrations.ts guard
+- migration file correction
+- release preflight verification query
+- test setup fix
+- feature-flag default hardening
+- no action needed / document only
+
+TASK EXECUTION RULES
+1. Read code and existing migrations carefully.
+2. Do NOT change code until the audit/report is complete.
+3. Produce the report first.
+4. After the report, propose a Phase 1 implementation plan grouped into:
+- P0 blockers
+- P1 high-value safety fixes
+- P2 follow-up hardening
+5. Prefer:
+- ADD COLUMN IF NOT EXISTS
+- ALTER COLUMN SET DEFAULT
+- CREATE INDEX IF NOT EXISTS
+- explicit safe fallbacks
+- release preflight verification queries
+6. Avoid:
+- backfills unless absolutely required
+- behavior rewires
+- invasive refactors
+- changes to frozen email plumbing
+
+DELIVERABLE FORMAT
+
+1. Executive summary
+- 5-10 bullets max
+- how healthy the platform currently is
+- biggest remaining safety gaps
+- whether today’s fixes created a good pattern to replicate
+
+2. Audit table
+For each item include:
+- surface
+- assumption
+- evidence (file + line or migration reference)
+- classification
+- failure mode
+- severity
+- recommended fix
+
+3. P0 / P1 / P2 plan
+P0 = blockers / release risks
+P1 = high-value hardening
+P2 = useful follow-up hardening
+
+4. Proposed implementation order
+Give the safest execution order with stop rules.
+
+5. Optional follow-up patch plan
+If the audit clearly identifies 1-3 obvious idempotent fixes with minimal risk, propose them as a separate next task, but DO NOT implement yet.
+
+IMPORTANT STOP RULES
+- If a fix would require changing email plumbing behavior, stop and mark out of scope.
+- If a fix depends on unknown production state, recommend a preflight verification query instead of guessing.
+- If an item is ambiguous, mark UNKNOWN rather than assuming safety.
+
+Success criteria
+A strong result will:
+- inventory runtime schema assumptions for the Phase 1 surfaces
+- identify where boot-time guarantees are missing
+- show which release risks still exist
+- give a concrete, phased hardening roadmap we can execute over the next few days
+
+Do not start coding. Audit and report first.
