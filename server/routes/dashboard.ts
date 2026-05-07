@@ -5,7 +5,7 @@ import { requireAuth, getCurrentUser, getVisibleCompanyIds } from "../auth";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getCustomerFromRow } from "../colResolver";
 import { isExcludedRow, parseHistoricalRow, toMonthKey } from "../financialHelpers";
 import { cacheGet, cacheSet } from "../cache";
-import { getFreshnessForJobs, deriveFinancialUploadFreshness, formatAsOfUploadLabel } from "../lib/portletFreshness";
+import { getFreshnessForJobs, deriveFinancialUploadFreshness, formatAsOfUploadLabel, getFreshnessFromNbaCards } from "../lib/portletFreshness";
 import { JOB_NAMES } from "../lib/cronHeartbeat";
 import type { PortletFreshness } from "../../shared/schema";
 
@@ -1426,6 +1426,97 @@ export function registerDashboardRoutes(app: Express): void {
   // Returns awards for the AM's accounts that are old enough to have started
   // moving freight but show little or no load activity — signals stalled lanes.
   // Phase 1 constraint: uses company-level monthly loads as a proxy (no per-lane data).
+  // Phase 1.5 S9 — Top-of-dashboard "Pipeline health" strip.
+  //
+  // Aggregates the three already-trustworthy freshness signals into a
+  // single read-only summary. Each source is wrapped in its own try/catch
+  // so one failure can NEVER take down the strip — failed sources collapse
+  // to status="unknown" (Task #1109a invariant: never escalate to stale).
+  //
+  // Sources (all reuse existing helpers, no new derivation logic):
+  //   - financials  → deriveFinancialUploadFreshness (S8)
+  //   - nba         → getFreshnessFromNbaCards (S7)
+  //   - freight     → safeLoadFactFreshness (S2/S3, already in this file)
+  //
+  // Email-facts is intentionally OMITTED for this slice — its honest
+  // signal lives in the existing email-pipeline capture-audit pill, and
+  // re-rendering the same heartbeats here would be redundant noise. If a
+  // dedicated email-facts data signal lands later, it can be added here.
+  app.get("/api/dashboard/health", requireAuth, async (req, res) => {
+    try {
+      const user = await getCurrentUser(req);
+      if (!user) return res.status(401).json({ error: "Not authenticated" });
+      const orgId = req.session.organizationId!;
+
+      const unknownFinancials = deriveFinancialUploadFreshness({ uploadedAt: null, dataMonthKey: null });
+      const unknownNba = await getFreshnessFromNbaCards("");
+
+      const [financials, nba, freight] = await Promise.all([
+        // Financials — reuse the same derivation Trending + Margin use.
+        // Inline the org-level lookup so we don't share/leak per-route state.
+        (async (): Promise<PortletFreshness> => {
+          try {
+            const upload = await storage.getLatestFinancialUploadForOrg(orgId);
+            if (!upload || !upload.rows) return unknownFinancials;
+            const rows = upload.rows as any[];
+            if (rows.length === 0) {
+              return deriveFinancialUploadFreshness({ uploadedAt: upload.uploadedAt, dataMonthKey: null });
+            }
+            const cols = resolveColumns(rows);
+            let maxMonthKey: string | null = null;
+            for (const r of rows) {
+              if (isExcludedRow(r, cols)) continue;
+              const { monthKey } = parseHistoricalRow(r, cols);
+              if (monthKey && (!maxMonthKey || monthKey > maxMonthKey)) {
+                maxMonthKey = monthKey;
+              }
+            }
+            return deriveFinancialUploadFreshness({
+              uploadedAt: upload.uploadedAt,
+              dataMonthKey: maxMonthKey,
+            });
+          } catch (err) {
+            console.error("[dashboard/health] financials lookup failed:", err);
+            return unknownFinancials;
+          }
+        })(),
+
+        // NBA — getFreshnessFromNbaCards already collapses DB failures to
+        // unknown internally, but wrap defensively so a thrown error still
+        // doesn't take the strip down.
+        (async (): Promise<PortletFreshness> => {
+          try {
+            return await getFreshnessFromNbaCards(orgId);
+          } catch (err) {
+            console.error("[dashboard/health] nba lookup failed:", err);
+            return unknownNba;
+          }
+        })(),
+
+        // Freight (load_fact) — safeLoadFactFreshness already wraps + returns
+        // null on heartbeat read failure. Coerce null → unknown for a
+        // uniform contract on the wire (label remains the canonical
+        // composite of both daily import job names so the UI can attribute).
+        (async (): Promise<PortletFreshness> => {
+          const fr = await safeLoadFactFreshness();
+          if (fr) return fr;
+          return {
+            source: `${JOB_NAMES.loadFactImportMorning},${JOB_NAMES.loadFactImportAfternoon}`,
+            status: "unknown",
+            lastUpdatedAt: null,
+            nextExpectedAt: null,
+            consecutiveFailures: 0,
+          };
+        })(),
+      ]);
+
+      res.json({ financials, nba, freight });
+    } catch (err) {
+      console.error("[dashboard/health] top-level error:", err);
+      res.status(500).json({ error: "Failed to load dashboard health" });
+    }
+  });
+
   app.get("/api/dashboard/award-health", requireAuth, async (req, res) => {
     try {
       const user = await getCurrentUser(req);

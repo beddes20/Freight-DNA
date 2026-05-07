@@ -36,6 +36,7 @@ import { TaskDialog } from "@/components/task-dialog";
 import { ForcedFocusBanner } from "@/components/forced-focus-banner";
 import { ForcedFocusDialog } from "@/components/forced-focus-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
+import { PipelineHealthStrip } from "@/components/dashboard/PipelineHealthStrip";
 import InternalCommsPortlet from "@/components/internal-comms-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification, LaneCarrier } from "@shared/schema";
@@ -861,6 +862,9 @@ export default function Dashboard() {
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-3 sm:p-6">
+
+      {/* Phase 1.5 S9 — Pipeline health strip (read-only freshness summary) */}
+      <PipelineHealthStrip role={currentUser?.role} />
 
       {/* Task #639 — Today queue invitation banner */}
       <TryTodayQueueBanner />

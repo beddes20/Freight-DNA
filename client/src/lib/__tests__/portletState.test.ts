@@ -304,6 +304,109 @@ describe("Trending + Margin freshness labeling — server contract (Phase 1.5 S8
   });
 });
 
+describe("Pipeline health strip — UI contract (Phase 1.5 S9)", () => {
+  const STRIP_SRC = READ("components/dashboard/PipelineHealthStrip.tsx");
+
+  it("queries the dedicated /api/dashboard/health endpoint (does not piggyback on summary)", () => {
+    expect(STRIP_SRC).toMatch(/queryKey:\s*\[["']\/api\/dashboard\/health["']\]/);
+  });
+
+  it("hides the strip for logistics roles (logistics_manager, logistics_coordinator)", () => {
+    expect(STRIP_SRC).toMatch(/logistics_manager/);
+    expect(STRIP_SRC).toMatch(/logistics_coordinator/);
+    expect(STRIP_SRC).toMatch(/if \(isHidden\) return null/);
+  });
+
+  it("treats undefined role as hidden — closes the auth-load race (architect S9 review)", () => {
+    // The gate must NOT default to visible while role is undefined,
+    // otherwise logistics users briefly see + fetch the strip on first
+    // paint (useAuth resolves async).
+    expect(STRIP_SRC).toMatch(/if \(!role\) return true/);
+  });
+
+  it("disables the /api/dashboard/health query while hidden (no network leak for logistics)", () => {
+    expect(STRIP_SRC).toMatch(/enabled:\s*!isHidden/);
+  });
+
+  it("renders the three documented per-source chips with stable testIds", () => {
+    expect(STRIP_SRC).toMatch(/data-testid=\{`pipeline-health-\$\{testIdSuffix\}`\}/);
+    expect(STRIP_SRC).toMatch(/testIdSuffix:\s*["']financials["']/);
+    expect(STRIP_SRC).toMatch(/testIdSuffix:\s*["']nba["']/);
+    expect(STRIP_SRC).toMatch(/testIdSuffix:\s*["']freight["']/);
+  });
+
+  it("encodes per-source state on each chip for downstream specs", () => {
+    expect(STRIP_SRC).toMatch(/data-source-state=\{state\}/);
+  });
+
+  it("uses the rep-facing labels Financials / Recommendations / Freight", () => {
+    expect(STRIP_SRC).toMatch(/label:\s*["']Financials["']/);
+    expect(STRIP_SRC).toMatch(/label:\s*["']Recommendations["']/);
+    expect(STRIP_SRC).toMatch(/label:\s*["']Freight["']/);
+  });
+
+  it("never paints unknown as amber — unknown uses muted/italic, stale uses amber (Task #1109a)", () => {
+    // The unknown branch must NOT use amber.
+    expect(STRIP_SRC).toMatch(/state === ["']unknown["']\s*\?\s*["']bg-muted-foreground\/40["']/);
+    expect(STRIP_SRC).toMatch(/state === ["']unknown["']\s*\?\s*["']text-muted-foreground italic["']/);
+    // The stale branch keeps amber.
+    expect(STRIP_SRC).toMatch(/state === ["']stale["']\s*\?\s*["']bg-amber-500["']/);
+  });
+
+  it("dashboard.tsx mounts the strip and forwards the current user's role", () => {
+    const DASH_SRC = READ("pages/dashboard.tsx");
+    expect(DASH_SRC).toMatch(/from\s+["']@\/components\/dashboard\/PipelineHealthStrip["']/);
+    expect(DASH_SRC).toMatch(/<PipelineHealthStrip role=\{currentUser\?\.role\}/);
+  });
+});
+
+describe("Pipeline health strip — server contract (Phase 1.5 S9)", () => {
+  const DASH_ROUTES = fs.readFileSync(
+    path.resolve(__dirname, "..", "..", "..", "..", "server", "routes", "dashboard.ts"),
+    "utf8",
+  );
+
+  it("registers GET /api/dashboard/health behind requireAuth", () => {
+    expect(DASH_ROUTES).toMatch(/app\.get\(["']\/api\/dashboard\/health["'],\s*requireAuth/);
+  });
+
+  it("returns the documented additive contract { financials, nba, freight }", () => {
+    expect(DASH_ROUTES).toMatch(/res\.json\(\{ financials, nba, freight \}\)/);
+  });
+
+  it("each source is wrapped so one failure cannot take down the strip (per-source try/catch)", () => {
+    expect(DASH_ROUTES).toMatch(/\[dashboard\/health\] financials lookup failed/);
+    expect(DASH_ROUTES).toMatch(/\[dashboard\/health\] nba lookup failed/);
+  });
+
+  it("reuses the existing helpers — no new freshness derivation logic", () => {
+    expect(DASH_ROUTES).toMatch(/deriveFinancialUploadFreshness\(\{[\s\S]*?uploadedAt:\s*upload\.uploadedAt/);
+    expect(DASH_ROUTES).toMatch(/getFreshnessFromNbaCards\(orgId\)/);
+    expect(DASH_ROUTES).toMatch(/safeLoadFactFreshness\(\)/);
+  });
+
+  it("freight unknown fallback preserves the canonical load_fact source label (no lying as ok/stale)", () => {
+    expect(DASH_ROUTES).toMatch(/source: `\$\{JOB_NAMES\.loadFactImportMorning\},\$\{JOB_NAMES\.loadFactImportAfternoon\}`,\s*\n\s*status:\s*["']unknown["']/);
+  });
+
+  it("freight branch coerces safeLoadFactFreshness null → unknown (architect S9 isolation pin)", () => {
+    // The route must NEVER let safeLoadFactFreshness's null escape onto
+    // the wire — coerce to a unknown PortletFreshness so the per-source
+    // failure isolation story is provable from the contract.
+    const healthBlock = DASH_ROUTES.match(/app\.get\(["']\/api\/dashboard\/health["'][\s\S]*?res\.json\(\{ financials, nba, freight \}\)/);
+    expect(healthBlock).not.toBeNull();
+    expect(healthBlock![0]).toMatch(/const fr = await safeLoadFactFreshness\(\);[\s\S]*?if \(fr\) return fr;[\s\S]*?status:\s*["']unknown["']/);
+  });
+
+  it("does NOT add an emailFacts source in this slice (brief: omit if no honest signal)", () => {
+    // Hard-pin: the health endpoint payload must not silently grow an
+    // emailFacts field without a follow-up brief.
+    const healthBlock = DASH_ROUTES.match(/app\.get\(["']\/api\/dashboard\/health["'][\s\S]*?res\.json\(\{ financials, nba, freight \}\)/);
+    expect(healthBlock).not.toBeNull();
+    expect(healthBlock![0]).not.toMatch(/emailFacts/);
+  });
+});
+
 describe("portletState helper — Task #1109a contract", () => {
   it("never collapses unknown into stale", () => {
     // Statically assert the unknown branch returns "unknown", not "stale".

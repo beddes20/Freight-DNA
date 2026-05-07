@@ -1,0 +1,187 @@
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — Top-of-Dashboard Pipeline Health Strip
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Completed in Phase 1.5 so far:
+
+Award Health + Coverage Gaps freshness UI
+
+NBA freshness UI using data-driven freshness from nba_cards.created_at
+
+Trending Accounts + Margin Metrics “as of” / freshness labeling
+
+The dashboard now has multiple local trust signals, but there is still no single top-of-page summary telling a rep or director whether their dashboard inputs are broadly healthy.
+
+We want a small, honest, role-aware “Pipeline health” strip that summarizes freshness for the major dashboard data sources without becoming a noisy admin console.
+
+Goal:
+Add a lightweight top-of-dashboard “Pipeline health” strip that gives users a quick trust read on the dashboard’s key data inputs:
+
+Monthly financial upload freshness
+
+NBA freshness
+
+Load-fact / freight freshness
+
+Optional email-facts freshness only if there is already an honest source available; otherwise do not invent it
+
+Guardrails:
+
+No schema changes.
+
+No scheduler changes.
+
+No changes to dashboard calculations, rankings, or business logic.
+
+Keep this as a summary/read-only trust surface, not a control panel.
+
+Reuse existing freshness derivation paths where already implemented.
+
+Do not widen this into per-job admin monitoring.
+
+If any data source does not have a trustworthy freshness source yet, omit it rather than guessing.
+
+Scope:
+
+In scope:
+
+server summary payload additions needed for a top-level health strip
+
+top-of-dashboard UI strip on /dashboard
+
+role-aware display of the strip
+
+subtle green / amber / neutral status treatment
+
+Out of scope:
+
+feature work on individual portlets
+
+scheduler wrapping
+
+admin-only repair actions
+
+unrelated workflow remediation
+
+Tasks:
+
+Read-only confirmation first
+
+Identify all freshness signals already available and trustworthy from current code:
+
+financial upload freshness / asOfLabel from Trending + Margin work
+
+NBA freshness from max(nba_cards.created_at)
+
+load-fact freshness from the load-fact portlet freshness work
+
+email-facts freshness only if there is a real source already in code
+
+Confirm where the dashboard page can fetch or reuse these signals most cleanly:
+
+extend existing dashboard summary route if appropriate
+
+or add a focused dashboard-health summary object
+
+Do not duplicate freshness logic if the server already computes it elsewhere.
+
+Design the smallest honest summary contract
+
+Add only the minimum needed for the strip, for example:
+
+dashboardHealth: { financials, nba, freight, emailFacts? }
+
+Each item should expose:
+
+status: "ok" | "stale" | "unknown"
+
+label
+
+optional lastUpdatedAt
+
+Keep it additive.
+
+Do not remove or rename any existing summary payload fields.
+
+Server-side implementation
+
+Reuse existing helpers where possible:
+
+financial upload freshness helper from S8
+
+NBA freshness helper from S7
+
+load-fact freshness helper from S2/S3
+
+If email-facts does not yet have a trustworthy signal, leave it out of this slice.
+
+Make the summary endpoint defensive:
+
+any one source failing should degrade that source to unknown, not fail the whole strip payload
+
+Client-side implementation
+
+Add a small top-of-dashboard strip component near the header / sync-alert area.
+
+Keep it compact and practical:
+
+title: Pipeline health
+
+small dots/chips/rows for each source
+
+green for healthy, amber for stale, neutral grey for unknown
+
+Suggested labels:
+
+Financials
+
+Recommendations
+
+Freight
+
+Email signals only if included honestly
+
+Show a small relative-time or “as of” line only when available.
+
+Do not make this visually louder than the sync alert or the core portlets.
+
+Role-awareness
+
+Show only sources relevant to the user’s dashboard role where reasonable:
+
+AM/NAM: Recommendations, Freight, Financials if visible on their page
+
+Directors/Admins: Financials, Recommendations, Freight
+
+Keep rules simple; if role-aware logic adds too much complexity, show the same strip to all non-logistics roles first and report before widening.
+
+Tests
+
+Add/extend tests for:
+
+summary payload includes the new dashboard health block
+
+strip renders the correct statuses and labels
+
+unknown does not render as warning
+
+one failed source does not break the whole strip
+
+Keep tests focused on contract and behavior, not pixel styling.
+
+Output format:
+A. Short diagnosis
+B. Exact files changed
+C. Behavior changes
+D. Tests run and results
+E. Risks / reasons not to republish yet
+
+Important:
+
+If you discover the summary route is becoming too overloaded or the role logic becomes messy, stop and report before widening scope.
+
+Omit any source whose freshness cannot be stated honestly.
+
+Keep this slice small and additive.
