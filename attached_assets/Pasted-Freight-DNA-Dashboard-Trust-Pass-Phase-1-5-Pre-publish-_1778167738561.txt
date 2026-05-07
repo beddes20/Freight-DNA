@@ -1,0 +1,139 @@
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — Pre-publish verification for load-fact freshness slice
+
+Context:
+
+We already shipped the load-fact freshness transport slice for:
+
+Award Health
+
+Coverage Gaps
+
+That slice:
+
+implemented getFreshnessForJobs in server/lib/portletFreshness.ts
+
+changed both endpoints from bare arrays to { awards/gaps, freshness }
+
+added defensive client normalization so both portlets still render unchanged
+
+Current blocker:
+
+local/dev DB drift means cron_heartbeats is missing in this environment
+
+helper tests fall back to the defensive unknown branch
+
+contract tests skip cleanly instead of fully validating the new response shape against a real heartbeat row
+
+Goal:
+Do a pre-publish verification pass for the load-fact freshness slice in an environment with the correct schema, and decide whether it is safe to republish.
+
+Guardrails:
+
+Read-only verification first.
+
+No new code changes unless a real issue is found.
+
+No scheduler changes.
+
+No schema changes unless explicitly required to fix the verification environment.
+
+Do not touch unrelated red workflows caused by known dev-DB drift.
+
+Scope:
+
+In scope:
+
+server/lib/portletFreshness.ts
+
+server/routes/dashboard.ts
+
+client/src/pages/dashboard/AwardHealthPortlet.tsx
+
+client/src/pages/dashboard/CoverageGapsPortlet.tsx
+
+tests/portlet-freshness-helper.test.ts
+
+tests/portlet-freshness-contract.test.ts
+
+routes:
+
+GET /api/dashboard/award-health
+
+GET /api/dashboard/coverage-gaps
+
+Out of scope:
+
+NBA, Trending, Margin, Drifting, Relationship Advancement
+
+scheduler wrapping
+
+banner/UX work
+
+alias/fuzzy match logic
+
+Tasks:
+
+Environment verification
+
+Confirm whether the current target environment has the cron_heartbeats table.
+
+If not, identify the cleanest existing environment (or migration step) where the contract tests can run without introducing unrelated risk.
+
+Do not make ad hoc schema edits.
+
+Contract verification
+
+Run:
+
+typecheck
+
+helper test
+
+contract test
+
+In an environment with cron_heartbeats, verify:
+
+/api/dashboard/award-health returns { awards, freshness }
+
+/api/dashboard/coverage-gaps returns { gaps, freshness }
+
+freshness matches portletFreshnessSchema
+
+seeded stale heartbeat returns freshness.status === "stale"
+
+Manual smoke test
+
+Hit both endpoints directly and capture the exact response shape.
+
+Open dashboard as an AM user and confirm:
+
+Award Health still renders
+
+Coverage Gaps still renders
+
+no runtime crash from the response-shape change
+
+If possible, seed one stale load-fact heartbeat and confirm payload changes while UI remains stable.
+
+Decision
+
+Output whether this slice is:
+
+safe to republish now
+
+or blocked pending one specific verification step
+
+Output format:
+A. Short diagnosis
+B. Verification results by environment
+C. Exact commands run
+D. Pass/fail decision on republish
+E. Any blocker and the smallest next action
+
+Important:
+
+Do not widen scope.
+
+Do not “fix” unrelated failing workflows in this task.
+
+If verification passes, the next recommended task should be the first user-visible UI slice: render empty-vs-degraded state for Award Health and Coverage Gaps using the now-available freshness field.
