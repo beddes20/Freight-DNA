@@ -1,0 +1,48 @@
+Yes — this is the first explanation that actually hangs together technically. Replit Agent is saying the deploy blocker is a stale Drizzle snapshot/journal, and that matches the symptoms you saw: the failing DROP CONSTRAINT is not in your repo files, but is being synthesized from drift between schema metadata and real databases. Drizzle’s migration flow depends on meta/_journal.json and snapshots, and Postgres will error on DROP CONSTRAINT unless IF EXISTS is used.
+
+My read
+I think the diagnosis is credible, and the proposed fix is directionally right: add a small convergence migration so Replit’s deploy-time schema sync stops tripping over that tasks_opportunity_id_crm_opportunities_id_fk mismatch. The key idea — normalizing the FK to the canonical Drizzle name — fits the reported four-way drift between schema, snapshot, dev DB, and prod DB.
+
+The one thing I would tighten is the migration itself, because PostgreSQL supports DROP CONSTRAINT IF EXISTS, but does not support a plain ADD CONSTRAINT IF NOT EXISTS, so the “add” side needs a guard or it can fail if the constraint is already present.
+
+What to ask Replit Agent to do
+Tell it to apply the fix, but with this adjustment:
+
+Keep the DROP CONSTRAINT IF EXISTS.
+
+For the ADD CONSTRAINT, wrap it in a DO $$ ... IF NOT EXISTS (...) THEN ALTER TABLE ... ADD CONSTRAINT ... END IF; $$ block, because Postgres doesn’t provide a native ADD CONSTRAINT IF NOT EXISTS.
+
+Use this exact instruction:
+
+sql
+-- migrations/0018_tasks_opportunity_fk_idempotent.sql
+ALTER TABLE tasks
+  DROP CONSTRAINT IF EXISTS tasks_opportunity_id_crm_opportunities_id_fk;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint c
+    JOIN pg_class t ON c.conrelid = t.oid
+    WHERE t.relname = 'tasks'
+      AND c.conname = 'tasks_opportunity_id_crm_opportunities_id_fk'
+  ) THEN
+    ALTER TABLE tasks
+      ADD CONSTRAINT tasks_opportunity_id_crm_opportunities_id_fk
+      FOREIGN KEY (opportunity_id)
+      REFERENCES crm_opportunities(id)
+      ON DELETE SET NULL;
+  END IF;
+END $$;
+That keeps it genuinely idempotent across environments.
+
+Recommendation
+Yes — I would tell Replit Agent to apply the fix now, including the journal entry update it recommended, because that is the most concrete path you’ve had all day toward unblocking publish. Drizzle’s metadata files are part of its migration state, so correcting the SQL plus the journal is consistent with how the tool expects migrations to be tracked.
+
+I would not ask it to rebuild the whole snapshot tonight. The agent is right that a full snapshot catch-up is the riskier move.
+
+Exact response to send Agent
+Send this:
+
+“Apply the smallest safe fix, but make the migration fully idempotent for PostgreSQL. Use DROP CONSTRAINT IF EXISTS, and wrap the ADD CONSTRAINT in a DO $$ ... IF NOT EXISTS (...) THEN ALTER TABLE ... ADD CONSTRAINT ... END IF; $$ block, since Postgres doesn’t support plain ADD CONSTRAINT IF NOT EXISTS. Then add the matching _journal.json entry and verify on dev.”
