@@ -236,7 +236,13 @@ export function registerContactRoutes(app: Express): void {
       if (!(await canAccessCompany(currentUser, existing.companyId))) {
         return res.status(403).json({ error: "Access denied" });
       }
-      const deleted = await storage.deleteContact(pStr(req.params.id));
+      const reason = typeof req.body?.reason === "string" && req.body.reason.trim().length > 0
+        ? req.body.reason.trim().slice(0, 500)
+        : "user_delete_via_ui";
+      const deleted = await storage.deleteContact(pStr(req.params.id), {
+        userId: currentUser.id,
+        reason,
+      });
       if (!deleted) {
         return res.status(404).json({ error: "Contact not found" });
       }

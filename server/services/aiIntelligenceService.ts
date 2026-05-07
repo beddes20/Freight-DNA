@@ -7,7 +7,7 @@ import {
   accountLookAlikes, crossSellOpportunities, walletSharePlays,
   winLossPatterns, competitiveSignals, rfps, awards
 } from "@shared/schema";
-import { eq, and, desc, sql, inArray, gte, lte, count } from "drizzle-orm";
+import { eq, and, desc, sql, inArray, isNull, gte, lte, count } from "drizzle-orm";
 import OpenAI from "openai";
 
 function safeParseJSON(raw: string | null | undefined, fallback: any = {}): any {
@@ -48,7 +48,7 @@ async function getCompanyInOrg(companyId: string, orgId: string) {
 async function getContactInOrg(contactId: string, orgId: string) {
   const [contact] = await db.select().from(contacts)
     .innerJoin(companies, eq(contacts.companyId, companies.id))
-    .where(and(eq(contacts.id, contactId), eq(companies.organizationId, orgId)))
+    .where(and(eq(contacts.id, contactId), eq(companies.organizationId, orgId), isNull(contacts.deletedAt)))
     .limit(1);
   if (!contact) throw new Error("Contact not found or access denied");
   return contact.contacts;
@@ -153,7 +153,7 @@ export async function getRecentBriefs(orgId: string, companyId?: string, limit =
 // ─── 2. Sentiment Tracking ──────────────────────────────────────────────────
 export async function analyzeContactSentiment(orgId: string, companyId: string, contactId: string) {
   await getCompanyInOrg(companyId, orgId);
-  const contact = await db.select().from(contacts).where(and(eq(contacts.id, contactId), eq(contacts.companyId, companyId))).limit(1);
+  const contact = await db.select().from(contacts).where(and(eq(contacts.id, contactId), eq(contacts.companyId, companyId), isNull(contacts.deletedAt))).limit(1);
   if (!contact.length) throw new Error("Contact not found or does not belong to company");
 
   const contactEmail = contact[0].email;
@@ -227,7 +227,7 @@ export async function getCompanySentiment(orgId: string, companyId: string) {
 // ─── 3. Smart Follow-Up Timing ──────────────────────────────────────────────
 export async function analyzeFollowUpTiming(orgId: string, companyId: string, contactId: string) {
   await getCompanyInOrg(companyId, orgId);
-  const contact = await db.select().from(contacts).where(and(eq(contacts.id, contactId), eq(contacts.companyId, companyId))).limit(1);
+  const contact = await db.select().from(contacts).where(and(eq(contacts.id, contactId), eq(contacts.companyId, companyId), isNull(contacts.deletedAt))).limit(1);
   if (!contact.length) throw new Error("Contact not found or does not belong to company");
 
   const allTouches = await db.select()

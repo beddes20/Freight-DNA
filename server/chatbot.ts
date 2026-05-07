@@ -7,7 +7,7 @@ import { tracLaneDirectionSignal } from "./tracAlertEngine";
 import { computeIntelPayload } from "./routes/intel";
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
-import { eq, and, desc, gte, inArray, sql } from "drizzle-orm";
+import { eq, and, desc, gte, inArray, isNull, sql } from "drizzle-orm";
 import {
   companies, contacts, touchpoints, rfps, goals, tasks, users,
   chatConversations, chatMessages, appSuggestions, notifications,
@@ -505,7 +505,7 @@ async function buildEveryoneContext(requestingUserId: string): Promise<string> {
     const [allUsers, allCompanies, allContacts, allTouchpoints, allGoals, allTasks, allRfps] = await Promise.all([
       db.select().from(users).limit(200),
       db.select().from(companies).limit(500),
-      db.select().from(contacts).limit(2000),
+      db.select().from(contacts).where(isNull(contacts.deletedAt)).limit(2000),
       db.select().from(touchpoints).where(gte(touchpoints.date, thirtyDaysAgo)).limit(2000),
       db.select().from(goals).limit(200),
       db.select().from(tasks).where(eq(tasks.status, "open")).limit(200),
@@ -615,7 +615,7 @@ async function buildMyTeamContext(userId: string, userRole: string): Promise<str
 
     let contactList: (typeof contacts.$inferSelect)[] = [];
     if (companyIds.length > 0) {
-      contactList = await db.select().from(contacts).where(inArray(contacts.companyId, companyIds)).limit(500);
+      contactList = await db.select().from(contacts).where(and(inArray(contacts.companyId, companyIds), isNull(contacts.deletedAt))).limit(500);
     }
 
     const thirtyDaysAgo = new Date();
@@ -722,7 +722,7 @@ export async function getCompanyDetails(orgId: string, companyName: string): Pro
     if (!company) return `No company found matching "${companyName}".`;
 
     const [companyContacts, companyRfps, assignedUserRows] = await Promise.all([
-      db.select().from(contacts).where(eq(contacts.companyId, company.id)),
+      db.select().from(contacts).where(and(eq(contacts.companyId, company.id), isNull(contacts.deletedAt))),
       db.select().from(rfps).where(and(eq(rfps.companyId, company.id), eq(rfps.status, "open"))),
       company.assignedTo ? db.select({ name: users.name, role: users.role }).from(users).where(eq(users.id, company.assignedTo)) : Promise.resolve([]),
     ]);

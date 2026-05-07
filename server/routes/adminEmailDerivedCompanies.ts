@@ -143,6 +143,7 @@ export function registerAdminEmailDerivedCompaniesRoutes(app: Express): void {
           SELECT company_id, COUNT(*)::int AS n
             FROM contacts
            WHERE company_id IN (SELECT id FROM base)
+             AND deleted_at IS NULL
            GROUP BY company_id
         ),
         inbound AS (
@@ -214,7 +215,7 @@ export function registerAdminEmailDerivedCompaniesRoutes(app: Express): void {
            AND (
                  c.owner_rep_id IS NOT NULL
               OR (c.industry IS NOT NULL AND c.industry <> '')
-              OR EXISTS (SELECT 1 FROM contacts ct WHERE ct.company_id = c.id LIMIT 1)
+              OR EXISTS (SELECT 1 FROM contacts ct WHERE ct.company_id = c.id AND ct.deleted_at IS NULL LIMIT 1)
               OR c.archived_at IS NOT NULL
                )
       `);

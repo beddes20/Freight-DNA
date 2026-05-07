@@ -1,0 +1,103 @@
+Build tasks (in order)
+Task 1 – Add soft‑delete to contacts
+Why: Stops any future contact loss from being permanent.
+
+Add deleted_at, deleted_by, delete_reason columns to contacts.
+
+Change all delete paths to set deleted_at instead of DELETE.
+
+Make every SELECT that powers the UI add WHERE deleted_at IS NULL.
+
+You already have the detailed spec; this is the first safety net.
+
+Task 2 – Add CONTACT_JOBS_ENABLED kill switch
+Why: Lets you freeze all background writes while you clean up.
+
+Add env var CONTACT_JOBS_ENABLED (default true).
+
+At the top of every job that writes contacts/companies/suggestions, do:
+
+ts
+if (!contactJobsEnabled()) {
+  log('skipping tick: CONTACT_JOBS_ENABLED=false');
+  return;
+}
+Also gate the inbound email auto‑create company path with this flag.
+
+Then, while you’re doing cleanup and refactors, just set the flag to false in prod.
+
+Task 3 – Flag email‑derived companies and hide them
+Why: Cleans up the “weird customers” mess without deleting anything.
+
+Add is_email_derived (and optional email_derived_at) to companies.
+
+Wherever you auto‑create companies from emails, set is_email_derived=true.
+
+In the Customers list API, default filter to is_email_derived = false.
+
+Add an admin view / toggle to see is_email_derived = true rows when you want to clean them.
+
+This alone will make the Customers screen feel 10x saner.
+
+Task 4 – Implement a minimal contact_audit_log
+Why: Gives you a record of what changed on contacts from now on.
+
+Create contact_audit_log table with:
+
+contact_id, op, before_jsonb, after_jsonb, by_user_id, source, created_at.
+
+Wrap your contact insert/update/delete/restore code so it:
+
+Reads the current row.
+
+Writes the new row.
+
+Inserts an audit entry inside a transaction.
+
+You don’t need a fancy UI yet; just having the table is a big step.
+
+Task 5 – Build a simple “promote suggestion → contact” admin tool
+Why: Lets you rebuild Armstrong/Mohawk/etc. with control.
+
+Admin page where you:
+
+Select a company.
+
+See its account_contact_suggestions.
+
+Click “Promote” to create real contacts rows.
+
+Behind the scenes:
+
+Check no active contact with the same email exists.
+
+Insert the contact, write to contact_audit_log, and set suggestion status to promoted.
+
+Start with a single‑account, single‑click version; you can batch/promote later.
+
+Session checklist (every time you sit down to work on this)
+Before coding
+
+Set CONTACT_JOBS_ENABLED=false in prod while you’re changing contact/company logic.
+
+Create a Replit checkpoint.
+
+During coding
+
+Touch at most one of these per session:
+
+contacts schema
+
+companies schema
+
+background jobs
+
+Run typecheck/tests before thinking about publish.
+
+Before publish
+
+Verify SELECT COUNT(*) FROM contacts WHERE deleted_at IS NULL and SELECT COUNT(*) FROM companies still look sane.
+
+Confirm no script you touched can run against prod without I_REALLY_MEAN_PROD=yes.
+
+Post one sentence in your team channel: “Deploying X (soft‑delete + hide email‑derived customers); if you see anything weird with contacts/customers, DM me.”

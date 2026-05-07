@@ -117,13 +117,27 @@ export const contacts = pgTable("contacts", {
   roleType: text("role_type"),
   status: text("status").default("active"),
   isPrimary: boolean("is_primary").default(false),
+  // Soft-delete columns (Task 1, 2026-05-07 incident hardening). Hard
+  // deletes are forbidden; `deleteContact` writes these instead. Every
+  // SELECT against `contacts` must filter `deleted_at IS NULL` — see
+  // server/storage.ts and the call-site allow-list there. The future
+  // contact_audit_log (Task 4) records the full before/after; these
+  // columns exist so the row itself carries enough context to be
+  // restored without joining the audit log.
+  deletedAt: timestamp("deleted_at"),
+  deletedBy: varchar("deleted_by"),
+  deleteReason: text("delete_reason"),
 }, (t) => ({
   companyIdx: index("contacts_company_idx").on(t.companyId),
   emailIdx: index("contacts_email_idx").on(t.email),
+  deletedAtIdx: index("contacts_deleted_at_idx").on(t.deletedAt),
 }));
 
 export const insertContactSchema = createInsertSchema(contacts).omit({
   id: true,
+  deletedAt: true,
+  deletedBy: true,
+  deleteReason: true,
 });
 
 export type InsertContact = z.infer<typeof insertContactSchema>;

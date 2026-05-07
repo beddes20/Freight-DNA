@@ -1,4 +1,4 @@
-import { and, eq, sql, desc, or, gte } from "drizzle-orm";
+import { and, eq, sql, desc, or, gte, isNull } from "drizzle-orm";
 import { db } from "../storage";
 import {
   loadFact,
@@ -618,6 +618,11 @@ export async function getCorridorPattern(
           eq(accountContactLanePatternResponsibilities.orgId, orgId),
           eq(accountContactLanePatternResponsibilities.lanePatternId, best.id),
           sql`${accountContactLanePatternResponsibilities.status} <> 'dismissed'`,
+          // Task 1 hardening: drop responsibility rows whose contact is
+          // soft-deleted, so a tombstoned contact can't outrank an active
+          // one and yield a null contactName at LIMIT 1. Rows with no
+          // contactId (no contact assigned yet) still pass through.
+          sql`(${accountContactLanePatternResponsibilities.contactId} IS NULL OR ${contacts.deletedAt} IS NULL)`,
         ))
         .orderBy(
           // Prefer confirmed over suggested, then highest confidence.

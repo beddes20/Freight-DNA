@@ -534,7 +534,13 @@ getContactsByIds(ids: string[]): Promise<Contact[]>;
   createContact(contact: InsertContact): Promise<Contact>;
   bulkCreateContacts(contacts: InsertContact[]): Promise<Contact[]>;
   updateContact(id: string, contact: InsertContact): Promise<Contact | undefined>;
-  deleteContact(id: string): Promise<boolean>;
+  /**
+   * Soft-deletes a contact. Sets `deleted_at = now()` plus `deleted_by` and
+   * `delete_reason` so the row remains restorable. Returns false if the
+   * contact does not exist or is already soft-deleted. Hard deletes are
+   * forbidden — see Task 1 hardening notes in shared/schema.ts.
+   */
+  deleteContact(id: string, opts: { userId: string; reason: string }): Promise<boolean>;
 
   getLaneAttributionsByContact(contactId: string): Promise<ContactLaneAttribution[]>;
   getLaneAttributionsByCompany(companyId: string): Promise<ContactLaneAttribution[]>;
@@ -2295,8 +2301,15 @@ export class DatabaseStorage implements IStorage {
     ));
   }
 
+  // ── Contacts read paths ──────────────────────────────────────────────
+  // EVERY SELECT against `contacts` from this storage layer MUST include
+  // `isNull(contacts.deletedAt)` to honor the soft-delete contract
+  // introduced in the 2026-05-07 incident-hardening pass. If you need to
+  // read soft-deleted rows for a future restore/admin path, add a
+  // distinct method named `*IncludingDeleted` rather than weakening these.
+
   async getContacts(): Promise<Contact[]> {
-    return db.select().from(contacts);
+    return db.select().from(contacts).where(isNull(contacts.deletedAt));
   }
 
   async getContactsByOrg(organizationId: string): Promise<Contact[]> {
@@ -2304,22 +2317,25 @@ export class DatabaseStorage implements IStorage {
       .select({ c: contacts })
       .from(contacts)
       .innerJoin(companies, eq(companies.id, contacts.companyId))
-      .where(eq(companies.organizationId, organizationId))
+      .where(and(eq(companies.organizationId, organizationId), isNull(contacts.deletedAt)))
       .then((rows) => rows.map((r) => r.c));
   }
 
   async getContactsByCompany(companyId: string): Promise<Contact[]> {
-    return db.select().from(contacts).where(eq(contacts.companyId, companyId));
+    return db.select().from(contacts)
+      .where(and(eq(contacts.companyId, companyId), isNull(contacts.deletedAt)));
   }
 
   async getContactsByCompanyIds(companyIds: string[]): Promise<Contact[]> {
     if (companyIds.length === 0) return [];
-    return db.select().from(contacts).where(inArray(contacts.companyId, companyIds));
+    return db.select().from(contacts)
+      .where(and(inArray(contacts.companyId, companyIds), isNull(contacts.deletedAt)));
   }
 
   async getContactsByIds(ids: string[]): Promise<Contact[]> {
     if (ids.length === 0) return [];
-    return db.select().from(contacts).where(inArray(contacts.id, ids));
+    return db.select().from(contacts)
+      .where(and(inArray(contacts.id, ids), isNull(contacts.deletedAt)));
   }
 
   async logContactBaseHistory(contactId: string, fromBase: string | null, toBase: string, changedById: string): Promise<void> {
@@ -2343,7 +2359,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getContact(id: string): Promise<Contact | undefined> {
-    const [contact] = await db.select().from(contacts).where(eq(contacts.id, id));
+    const [contact] = await db.select().from(contacts)
+      .where(and(eq(contacts.id, id), isNull(contacts.deletedAt)));
     return contact;
   }
 
@@ -2369,6 +2386,11 @@ export class DatabaseStorage implements IStorage {
       if (contactList.length === 0) return [];
     }
     const companyIds = [...new Set(contactList.map(c => c.companyId))];
+    // Restorability guard (Task 1): include soft-deleted rows in the
+    // existing-key set so we don't insert a duplicate over a tombstone.
+    // A future "restore by clearing deleted_at" path is the right way to
+    // bring tombstoned identities back; bulk-insert must not silently
+    // create a new row that collides with one. See gotcha in replit.md.
     const existing = await db
       .select({ id: contacts.id, companyId: contacts.companyId, email: contacts.email, name: contacts.name })
       .from(contacts)
@@ -2393,13 +2415,24 @@ export class DatabaseStorage implements IStorage {
     const [updated] = await db
       .update(contacts)
       .set(contact)
-      .where(eq(contacts.id, id))
+      .where(and(eq(contacts.id, id), isNull(contacts.deletedAt)))
       .returning();
     return updated;
   }
 
-  async deleteContact(id: string): Promise<boolean> {
-    const result = await db.delete(contacts).where(eq(contacts.id, id)).returning();
+  async deleteContact(id: string, opts: { userId: string; reason: string }): Promise<boolean> {
+    // Soft delete: stamp the tombstone columns instead of removing the row.
+    // The WHERE clause guards against double-deletes (already-tombstoned
+    // rows return false). The contact_audit_log wrap-in lands in Task 4.
+    const result = await db
+      .update(contacts)
+      .set({
+        deletedAt: new Date(),
+        deletedBy: opts.userId,
+        deleteReason: opts.reason,
+      })
+      .where(and(eq(contacts.id, id), isNull(contacts.deletedAt)))
+      .returning({ id: contacts.id });
     return result.length > 0;
   }
 
@@ -3217,7 +3250,8 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(contacts).where(
       and(
         inArray(contacts.companyId, orgCompanyIds),
-        or(ilike(contacts.name, `%${query}%`), ilike(contacts.title, `%${query}%`))
+        or(ilike(contacts.name, `%${query}%`), ilike(contacts.title, `%${query}%`)),
+        isNull(contacts.deletedAt),
       )
     ).limit(8);
   }
@@ -3285,7 +3319,7 @@ export class DatabaseStorage implements IStorage {
       db.select().from(touchpoints).where(
         and(inArray(touchpoints.loggedById, teamMemberIds), gte(touchpoints.date, periodStart), lte(touchpoints.date, periodEnd))
       ),
-      db.select().from(contacts),
+      db.select().from(contacts).where(isNull(contacts.deletedAt)),
     ]);
 
     return teamMemberIds.map(uid => {
@@ -3583,6 +3617,7 @@ export class DatabaseStorage implements IStorage {
         LIMIT 1
       ) lt ON TRUE
       WHERE ${companyFilter}
+        AND c.deleted_at IS NULL
         AND (lt.last_date IS NULL OR lt.last_date < $1)
       ORDER BY days_since DESC
       LIMIT 20
@@ -3595,7 +3630,7 @@ export class DatabaseStorage implements IStorage {
     const companyIds = [...new Set(ranked.map((r: any) => r.company_id))];
 
     const [contactRows, companyRows] = await Promise.all([
-      db.select().from(contacts).where(inArray(contacts.id, contactIds)),
+      db.select().from(contacts).where(and(inArray(contacts.id, contactIds), isNull(contacts.deletedAt))),
       db.select().from(companies).where(inArray(companies.id, companyIds)),
     ]);
 
@@ -3635,7 +3670,7 @@ export class DatabaseStorage implements IStorage {
              ELSE GREATEST(0, (CURRENT_DATE - lm.last_date::date))
         END AS days_since
       FROM contacts c
-      JOIN companies co ON co.id = c.company_id
+      JOIN companies co ON co.id = c.company_id AND c.deleted_at IS NULL
       LEFT JOIN LATERAL (
         SELECT MAX(t.date) AS last_date
         FROM touchpoints t
@@ -3654,7 +3689,7 @@ export class DatabaseStorage implements IStorage {
     const companyIds = [...new Set(ranked.map((r: any) => r.company_id))];
 
     const [contactRows, companyRows] = await Promise.all([
-      db.select().from(contacts).where(inArray(contacts.id, contactIds)),
+      db.select().from(contacts).where(and(inArray(contacts.id, contactIds), isNull(contacts.deletedAt))),
       db.select().from(companies).where(inArray(companies.id, companyIds)),
     ]);
 
@@ -3675,7 +3710,7 @@ export class DatabaseStorage implements IStorage {
     const allCompanies = await db.select().from(companies).where(eq(companies.assignedTo, amId));
     if (allCompanies.length === 0) return 0;
     const companyIds = allCompanies.map(c => c.id);
-    const allContacts = await db.select().from(contacts).where(inArray(contacts.companyId, companyIds));
+    const allContacts = await db.select().from(contacts).where(and(inArray(contacts.companyId, companyIds), isNull(contacts.deletedAt)));
     return allContacts.filter(c => {
       if (!c.createdAt) return false;
       return c.createdAt >= startDate && c.createdAt <= endDate;
@@ -3859,7 +3894,7 @@ export class DatabaseStorage implements IStorage {
         }
 
         const drNewContacts = drCompanyIds.length > 0
-          ? (await db.select().from(contacts).where(inArray(contacts.companyId, drCompanyIds)))
+          ? (await db.select().from(contacts).where(and(inArray(contacts.companyId, drCompanyIds), isNull(contacts.deletedAt))))
               .filter(c => c.createdAt && c.createdAt >= periodStart && c.createdAt <= periodEnd).length
           : 0;
 
@@ -7489,7 +7524,8 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(companies.organizationId, orgId),
-          ilike(contacts.email, normalized)
+          ilike(contacts.email, normalized),
+          isNull(contacts.deletedAt),
         )
       )
       .limit(1);
@@ -8833,6 +8869,7 @@ export class DatabaseStorage implements IStorage {
       .where(and(
         eq(contacts.companyId, companyId),
         eq(contacts.email, email.toLowerCase()),
+        isNull(contacts.deletedAt),
       ))
       .limit(1);
     return contact;

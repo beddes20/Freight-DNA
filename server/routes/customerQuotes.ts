@@ -55,7 +55,7 @@ import { getStaleQuoteFollowUps, getStaleQuoteFollowUpCount, clearStaleFollowUpC
 import { publish as publishLiveSync } from "../services/liveSync";
 import { db, storage } from "../storage";
 import { quoteOpportunities } from "@shared/schema";
-import { and as andSql, eq as eqSql, inArray as inArraySql, sql as sqlExpr } from "drizzle-orm";
+import { and as andSql, eq as eqSql, inArray as inArraySql, isNull as isNullSql, sql as sqlExpr } from "drizzle-orm";
 
 // =============================================================================
 // Task #849 §6.1 — Quote-mutation ownership gate (security fix folded into S1).
@@ -629,6 +629,7 @@ export async function fetchAttributionRow(
     LEFT JOIN contacts ct ON (
       em.from_email IS NOT NULL
       AND lower(ct.email) = lower(em.from_email)
+      AND ct.deleted_at IS NULL
       AND EXISTS (
         SELECT 1 FROM companies co
         WHERE co.id = ct.company_id
@@ -1482,7 +1483,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
           )).limit(1);
           if (match) {
             accountId = match.id;
-            const cs = await db.select().from(contacts).where(eqSql(contacts.companyId, match.id)).limit(20);
+            const cs = await db.select().from(contacts).where(andSql(eqSql(contacts.companyId, match.id), isNullSql(contacts.deletedAt))).limit(20);
             toEmails = cs.map(c => c.email).filter((e): e is string => !!e).slice(0, 5);
           }
         } catch (lookupErr) {

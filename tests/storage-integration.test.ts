@@ -183,7 +183,7 @@ async function testContactsCrud(): Promise<void> {
   assert("updateContact — title updated", updatedContact?.title === "VP Logistics");
 
   // Delete
-  await storage.deleteContact(contact.id);
+  await storage.deleteContact(contact.id, { userId: "test-user", reason: "test_cleanup" });
   const afterDelete = await storage.getContact(contact.id);
   assert("deleteContact — record is gone", !afterDelete);
 

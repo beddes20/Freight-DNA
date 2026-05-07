@@ -1,0 +1,180 @@
+Prompt to paste into Replit Agent
+
+Act like a senior engineer helping me harden Freight‑DNA after a production incident.
+
+Goal for this session:
+Implement three safety/cleanup features in this codebase:
+
+Soft‑delete for contacts
+
+A CONTACT_JOBS_ENABLED kill switch for background jobs and auto‑create paths
+
+An is_email_derived flag on companies, and hide those by default from the main Customers list
+
+Important constraints:
+
+Read/write is allowed, but no destructive scripts (no TRUNCATE/DROP, no bulk deletes).
+
+Do not run any point‑in‑time restore.
+
+Keep schema changes in a proper migration (Drizzle or whatever the project uses).
+
+Explain what you’re changing as you go.
+
+Task 1 – Soft‑delete for contacts
+Implement:
+
+Schema changes (migration only, do not run raw ALTERs ad‑hoc):
+
+Add columns to contacts:
+
+deleted_at TIMESTAMPTZ NULL
+
+deleted_by VARCHAR NULL
+
+delete_reason TEXT NULL
+
+Add indexes:
+
+contacts_deleted_at_idx on deleted_at (partial index for non‑null)
+
+contacts_company_active_idx on (company_id) where deleted_at IS NULL
+
+Update the TypeScript schema:
+
+Update the contacts table definition (likely in shared/schema.ts or similar) to include deletedAt, deletedBy, deleteReason.
+
+Ensure the insert schema omits these so they are not required on create.
+
+Change delete behavior:
+
+Find the existing “delete contact” logic (probably in server/storage.ts and any DELETE /contacts/:id route).
+
+Replace any hard delete (db.delete(contacts), DELETE FROM contacts) with a soft delete:
+
+set deleted_at = NOW(), deleted_by = current user, delete_reason = provided reason.
+
+Return a boolean or the updated contact so the UI can confirm deletion.
+
+Filter out deleted contacts by default:
+
+Find all read paths that are used by the UI (e.g. getContact, getContactsByCompany, listContacts, org chart queries, NBA contact queries).
+
+Add WHERE deleted_at IS NULL to all of these.
+
+Be explicit and safe: it’s fine if some internal admin/debug query still sees deleted rows, but nothing user‑facing should.
+
+Please show me:
+
+The migration file you generate.
+
+The key code changes (before/after snippets) for the delete function and a representative SELECT helper that now filters on deleted_at IS NULL.
+
+Task 2 – CONTACT_JOBS_ENABLED kill switch
+Implement a global feature flag that can freeze any background job or request‑path that writes contacts/companies/suggestions.
+
+Add a small helper, e.g. server/lib/featureFlags.ts:
+
+contactJobsEnabled(): boolean should:
+
+Read process.env.CONTACT_JOBS_ENABLED.
+
+Treat "false" (case‑insensitive) as OFF, anything else as ON.
+
+Default to ON when the env var is missing.
+
+Identify all schedulers/jobs/request‑paths that write to:
+
+contacts
+
+companies (especially auto‑create from inbound emails)
+
+account_contact_suggestions and similar suggestion tables
+
+For each writer, at the top of the job or the relevant function:
+
+If !contactJobsEnabled(), log a short message and return without doing any writes.
+
+Also gate the inbound email company‑auto‑create logic:
+
+In the path where a new company is auto‑inserted based on sender domain, if contactJobsEnabled() is false:
+
+Do not auto‑create the company.
+
+Instead, return a status that indicates “needs manual routing” or similar.
+
+Log the flag at server boot (e.g. in server/index.ts):
+
+console.log("[boot] CONTACT_JOBS_ENABLED=" + contactJobsEnabled())
+
+Please show me:
+
+The helper function.
+
+A list of the jobs/paths you gated and the exact guard code you added at the top of each.
+
+Task 3 – is_email_derived on companies and hide them by default
+We want to mark and filter out email‑derived stub customers from the main customer list.
+
+Schema changes (migration):
+
+Add to companies:
+
+is_email_derived BOOLEAN NOT NULL DEFAULT FALSE
+
+email_derived_at TIMESTAMPTZ NULL
+
+(Optional but nice) email_derived_seed_message_id VARCHAR NULL
+
+Update TypeScript schema for companies to include these fields.
+
+Set the flag when auto‑creating companies from inbound email:
+
+Find the code that creates a new company when an inbound email comes from an unknown domain (likely in quoteEmailIngestion / inlineEmailClassifier or similar).
+
+When inserting these companies, set:
+
+is_email_derived = true
+
+email_derived_at = new Date()
+
+email_derived_seed_message_id from the email’s provider message id, if available.
+
+Update the Customers list API:
+
+Add an includeEmailDerived or similar parameter (default false).
+
+When it is false (the default), filter companies with:
+
+is_email_derived = false
+
+(and any existing archived/deleted filters)
+
+When it is true, return all companies (or specifically the email‑derived subset for an admin view).
+
+Update the Customers UI:
+
+Default view: only real customers (is_email_derived=false).
+
+Add a toggle/filter “Show email‑derived companies” for admin cleanup.
+
+Optional but useful: adjust the existing admin view you have for “email‑derived companies” so it filters purely on is_email_derived=true instead of any heuristic.
+
+Please show me:
+
+The migration file for companies.
+
+The code changes where companies are auto‑created and now marked as email‑derived.
+
+The API filter change and how the UI is wired (just the key snippets).
+
+Output format
+Return your work as:
+
+Summary of what you changed for each of the three tasks.
+
+Snippets of key code changes (just the important parts).
+
+Any follow‑up questions or TODOs you think I should decide on (e.g., what to use for delete_reason, how to backfill existing email‑derived companies, etc.).
+
+Stop after implementing these three tasks. Do not add contact promotion or audit log yet; we’ll do that in a separate session.

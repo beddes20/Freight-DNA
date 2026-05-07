@@ -1008,7 +1008,7 @@ async function processUserMailboxEmail(params: {
         WHERE r.id = (
           SELECT r2.id FROM play_runs r2
           JOIN plays p ON p.id = r2.play_id
-          LEFT JOIN contacts c ON c.id = r2.contact_id
+          LEFT JOIN contacts c ON c.id = r2.contact_id AND c.deleted_at IS NULL
           WHERE r2.org_id = ${orgId}
             AND r2.rep_user_id = ${monitoredMailbox.userId}
             AND r2.status IN ('open', 'suggested')

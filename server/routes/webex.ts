@@ -2670,7 +2670,7 @@ export function registerWebexRoutes(app: Express) {
         SELECT a.*, u.name AS rep_name, c.name AS contact_name, co.name AS company_name
         FROM webex_call_analytics a
         LEFT JOIN users u ON u.id = a.user_id
-        LEFT JOIN contacts c ON c.id = a.contact_id
+        LEFT JOIN contacts c ON c.id = a.contact_id AND c.deleted_at IS NULL
         LEFT JOIN companies co ON co.id = a.company_id
         WHERE a.org_id = $1
           AND a.start_time >= NOW() - ($2::int || ' days')::interval

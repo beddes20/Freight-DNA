@@ -64,7 +64,7 @@ async function fetchContactRows(orgId: string): Promise<SourceRow[]> {
   }>(sql`
     SELECT c.id, c.name, c.title, c.email, c.company_id, co.name AS company_name
     FROM contacts c LEFT JOIN companies co ON co.id = c.company_id
-    WHERE co.organization_id = ${orgId} LIMIT 5000
+    WHERE co.organization_id = ${orgId} AND c.deleted_at IS NULL LIMIT 5000
   `).catch(() => ({ rows: [] as any[] }));
   return rows.rows.map((c) => ({
     sourceKind: "contact",

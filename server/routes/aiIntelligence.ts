@@ -20,7 +20,7 @@ import {
 } from "../services/aiIntelligenceService";
 import { db } from "../storage";
 import { contacts, companies, orgChartGaps, warmIntroSuggestions, crossSellOpportunities, competitiveSignals, walletSharePlays, accountLookAlikes, relationshipCoachingInsights } from "@shared/schema";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, isNull } from "drizzle-orm";
 
 export function registerAIIntelligenceRoutes(app: Express) {
   app.get("/api/ai-intelligence/dashboard", requireAuth, async (req, res) => {
@@ -81,7 +81,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
         const contactRows = await db.select({ id: contacts.id, name: contacts.name })
           .from(contacts)
           .innerJoin(companies, eq(contacts.companyId, companies.id))
-          .where(and(inArray(contacts.id, contactIds), eq(companies.organizationId, user.organizationId)));
+          .where(and(inArray(contacts.id, contactIds), eq(companies.organizationId, user.organizationId), isNull(contacts.deletedAt)));
         for (const row of contactRows) contactMap[row.id] = row.name;
       }
       const enriched = data.map(d => ({ ...d, contactName: contactMap[d.contactId] || null }));
@@ -115,7 +115,7 @@ export function registerAIIntelligenceRoutes(app: Express) {
         const contactRows = await db.select({ id: contacts.id, name: contacts.name })
           .from(contacts)
           .innerJoin(companies, eq(contacts.companyId, companies.id))
-          .where(and(inArray(contacts.id, contactIds), eq(companies.organizationId, user.organizationId)));
+          .where(and(inArray(contacts.id, contactIds), eq(companies.organizationId, user.organizationId), isNull(contacts.deletedAt)));
         for (const row of contactRows) contactMap[row.id] = row.name;
       }
       const enriched = data.map(d => ({ ...d, contactName: contactMap[d.contactId] || null }));
