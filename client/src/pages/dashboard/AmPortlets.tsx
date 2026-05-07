@@ -6,6 +6,7 @@ import {
   Repeat2, MessageSquare, UserPlus, Activity, ArrowUpRight, ArrowDownRight,
 } from "lucide-react";
 import type { TrendingResponse, PersonalMetrics } from "./types";
+import { AsOfLabel } from "@/components/dashboard/AsOfLabel";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
 import { WaitingOnMePortlet } from "@/components/waiting-on-me-portlet";
@@ -75,6 +76,9 @@ export function AmPortlets({
                 {amTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
               </span>
             </div>
+            <div className="mt-1">
+              <AsOfLabel asOfLabel={amTrendingAccounts?.asOfLabel} freshness={amTrendingAccounts?.freshness} testId="am-trending-up-as-of-label" />
+            </div>
           </CardHeader>
           {!amTrendingUpCollapsed && (
             <CardContent className="pt-0">
@@ -113,6 +117,9 @@ export function AmPortlets({
               <span className="text-xs font-normal text-muted-foreground">
                 {amTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((amTrendingAccounts.monthFraction ?? 1) * 100)}% through ${amTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
               </span>
+            </div>
+            <div className="mt-1">
+              <AsOfLabel asOfLabel={amTrendingAccounts?.asOfLabel} freshness={amTrendingAccounts?.freshness} testId="am-trending-down-as-of-label" />
             </div>
           </CardHeader>
           {!amTrendingDownCollapsed && (

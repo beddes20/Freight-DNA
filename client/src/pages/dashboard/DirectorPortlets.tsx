@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { MarginGoalEditButton } from "./MarginGoalEditButton";
+import { AsOfLabel } from "@/components/dashboard/AsOfLabel";
 import type { SafeUser, TeamActivity, RelationshipsMovedData, TrendingResponse, MarginMetrics, MarginUserMetric, OpportunityLog } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
@@ -395,6 +396,13 @@ export function DirectorPortlets({
                 {trendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
               </span>
             </div>
+            <div className="mt-1">
+              <AsOfLabel
+                asOfLabel={trendingAccounts?.asOfLabel}
+                freshness={trendingAccounts?.freshness}
+                testId="trending-up-as-of-label"
+              />
+            </div>
           </CardHeader>
           {!trendingUpCollapsed && (
             <CardContent className="pt-0">
@@ -444,6 +452,13 @@ export function DirectorPortlets({
               <span className="text-xs font-normal text-muted-foreground">
                 {trendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((trendingAccounts.monthFraction ?? 1) * 100)}% through ${trendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
               </span>
+            </div>
+            <div className="mt-1">
+              <AsOfLabel
+                asOfLabel={trendingAccounts?.asOfLabel}
+                freshness={trendingAccounts?.freshness}
+                testId="trending-down-as-of-label"
+              />
             </div>
           </CardHeader>
           {!trendingDownCollapsed && (
@@ -507,6 +522,13 @@ export function DirectorPortlets({
                     </CardTitle>
                   </button>
                   <span className="text-xs font-normal text-muted-foreground">{monthLabel}</span>
+                </div>
+                <div className="mt-1">
+                  <AsOfLabel
+                    asOfLabel={marginMetrics?.asOfLabel}
+                    freshness={marginMetrics?.freshness}
+                    testId={`margin-${group}-as-of-label`}
+                  />
                 </div>
               </CardHeader>
               {!collapsed && (

@@ -7,6 +7,7 @@ import {
   UserCircle, ArrowUpRight, ArrowDownRight, AlertTriangle, Clock,
 } from "lucide-react";
 import { MarginGoalEditButton } from "./MarginGoalEditButton";
+import { AsOfLabel } from "@/components/dashboard/AsOfLabel";
 import type { SafeUser, TeamActivity, RelationshipsMovedData, TrendingResponse, MarginMetrics, OpportunityLog, AmRow, StaleAccount, PersonalMetrics } from "./types";
 import type { PortletType } from "@/components/dashboard-activity-sheet";
 import { SonarMarketPulsePortlet } from "@/components/sonar-market-pulse";
@@ -176,6 +177,9 @@ export function NamPortlets({
                 {namTrendingAccounts?.isPartialMonth ? `ahead of pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
               </span>
             </div>
+            <div className="mt-1">
+              <AsOfLabel asOfLabel={namTrendingAccounts?.asOfLabel} freshness={namTrendingAccounts?.freshness} testId="nam-trending-up-as-of-label" />
+            </div>
           </CardHeader>
           {!namTrendingUpCollapsed && (
             <CardContent className="pt-0">
@@ -213,6 +217,9 @@ export function NamPortlets({
               <span className="text-xs font-normal text-muted-foreground">
                 {namTrendingAccounts?.isPartialMonth ? `behind pace · ${Math.round((namTrendingAccounts.monthFraction ?? 1) * 100)}% through ${namTrendingAccounts.curMonthLabel}` : "vs. 3-mo avg"}
               </span>
+            </div>
+            <div className="mt-1">
+              <AsOfLabel asOfLabel={namTrendingAccounts?.asOfLabel} freshness={namTrendingAccounts?.freshness} testId="nam-trending-down-as-of-label" />
             </div>
           </CardHeader>
           {!namTrendingDownCollapsed && (
@@ -252,6 +259,9 @@ export function NamPortlets({
               </CardTitle>
             </button>
             <span className="text-xs font-normal text-muted-foreground">{new Date().toLocaleString("default", { month: "long", year: "numeric" })}</span>
+          </div>
+          <div className="mt-1">
+            <AsOfLabel asOfLabel={namMarginMetrics?.asOfLabel} freshness={namMarginMetrics?.freshness} testId="nam-margin-ams-as-of-label" />
           </div>
         </CardHeader>
         {!amMarginCollapsed && (

@@ -1,0 +1,194 @@
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — Trending + Margin Freshness Labeling
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Phase 1.5 freshness work already completed:
+
+Award Health + Coverage Gaps now show stale vs unknown vs healthy-empty correctly.
+
+NBA now shows “Recommendations may be stale” / “Recommendation freshness unavailable” using data-driven freshness from max(nba_cards.created_at).
+
+The next dashboard trust gap is director/admin-facing financial surfaces:
+
+Trending Accounts
+
+Margin Metrics
+
+Current issue:
+
+these surfaces can show real-looking numbers with no visible “as of” signal
+
+if uploads lag, users may read last month as if it were current
+
+even when sync-alert is visible, the charts/cards themselves still do not state what month/data currency they represent
+
+Goal:
+Add clear, low-noise freshness labeling to Trending Accounts and Margin Metrics so users can see the actual data recency/source without changing any underlying math.
+
+Guardrails:
+
+No schema changes.
+
+No scheduler changes.
+
+No changes to financial math, trend logic, goals logic, or ranking.
+
+No edits to alias/fuzzy matching logic.
+
+Keep this slice to labeling/trust UI only.
+
+Prefer additive metadata and UI labels over refactoring endpoint payloads broadly.
+
+Do not build the summary-level pipeline health strip in this task.
+
+Scope:
+
+In scope:
+
+server freshness/source labeling for:
+
+GET /api/dashboard/trending-accounts
+
+GET /api/dashboard/margin-metrics
+
+client rendering of:
+
+“as of <month/date>”
+
+freshness / stale / unknown labeling if available
+
+Out of scope:
+
+Award Health / Coverage Gaps / NBA
+
+pipeline health strip
+
+financial formula changes
+
+monthly sync scheduler changes
+
+upload workflow fixes
+
+Tasks:
+
+Read-only confirmation first
+
+Confirm the exact current response shapes and client consumption for:
+
+GET /api/dashboard/trending-accounts
+
+GET /api/dashboard/margin-metrics
+
+Confirm what date/source metadata is already available in those route handlers:
+
+latest upload month key
+
+upload timestamp
+
+monthly_sync_failed
+
+any existing success marker like monthly_sync_succeeded_<key>
+
+Confirm whether these routes already have enough information to expose:
+
+asOfLabel
+
+freshness.status
+
+freshness.lastUpdatedAt
+without changing existing computed values.
+
+Design the smallest additive contract
+
+Add only the minimum metadata needed to make the UI honest.
+
+Preferred response additions:
+
+asOfLabel (example: May 2026 upload or Computed from April 2026 upload)
+
+optional freshness object shaped consistently with existing PortletFreshness where practical
+
+Do not rename/remove existing fields.
+
+Do not restructure the main data payload more than necessary.
+
+Trending Accounts labeling
+
+Server:
+
+expose the actual upload month/date the trend calculation used
+
+expose stale/unknown freshness if it can be derived honestly from the current route context
+
+Client:
+
+render a small trust label near the portlet title/subtitle, e.g.:
+
+As of April 2026 upload
+
+or Data may be stale — last monthly refresh April 2026
+
+Keep it subtle but visible.
+
+If freshness cannot be determined cleanly, show the as-of label only rather than inventing a stale state.
+
+Margin Metrics labeling
+
+Server:
+
+expose the actual upload month/date / freshness source used for current margin calculations
+
+Client:
+
+render the same style of trust label near the margin card header or subheader
+
+Keep math and thresholds unchanged.
+
+Copy rules
+
+Use plain operational language.
+
+Preferred examples:
+
+As of April 2026 upload
+
+Data may be stale — last monthly refresh April 2026
+
+Freshness unavailable
+
+Do not imply a system failure unless the route can actually support that claim.
+
+Tests
+
+Add or extend tests covering:
+
+response still includes all prior fields
+
+new metadata fields are present when expected
+
+client renders the new trust label without affecting existing numbers
+
+Keep tests focused on:
+
+contract safety
+
+label rendering
+
+no regression to existing calculations
+
+Output format:
+A. Short diagnosis
+B. Exact files changed
+C. Behavior changes
+D. Tests run and results
+E. Risks / reasons not to republish yet
+
+Important:
+
+If you discover that these routes do not have a trustworthy freshness source today, stop and report before coding.
+
+In that case, propose the smallest honest fallback (likely “as of upload month” only).
+
+Do not widen this into the summary-level pipeline health strip.

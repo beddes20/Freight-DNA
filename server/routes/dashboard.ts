@@ -5,7 +5,7 @@ import { requireAuth, getCurrentUser, getVisibleCompanyIds } from "../auth";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getCustomerFromRow } from "../colResolver";
 import { isExcludedRow, parseHistoricalRow, toMonthKey } from "../financialHelpers";
 import { cacheGet, cacheSet } from "../cache";
-import { getFreshnessForJobs } from "../lib/portletFreshness";
+import { getFreshnessForJobs, deriveFinancialUploadFreshness, formatAsOfUploadLabel } from "../lib/portletFreshness";
 import { JOB_NAMES } from "../lib/cronHeartbeat";
 import type { PortletFreshness } from "../../shared/schema";
 
@@ -96,7 +96,17 @@ export function registerDashboardRoutes(app: Express): void {
 
       const orgId = req.session.organizationId!;
       const upload = await storage.getLatestFinancialUploadForOrg(orgId);
-      if (!upload || !upload.rows) return res.json({ up: [], down: [] });
+      if (!upload || !upload.rows) {
+        // Phase 1.5 S8 — even the empty-upload case carries an honest
+        // freshness signal so the client renders "Freshness unavailable"
+        // instead of silently empty.
+        return res.json({
+          up: [],
+          down: [],
+          asOfLabel: null,
+          freshness: deriveFinancialUploadFreshness({ uploadedAt: null, dataMonthKey: null }),
+        });
+      }
 
       const rows: any[] = upload.rows as any[];
       const cols = resolveColumns(rows);
@@ -218,7 +228,23 @@ export function registerDashboardRoutes(app: Express): void {
         return { name, delta: d.delta, isNew: d.isNew, companyId };
       });
 
-      res.json({ up, down, monthFraction, isPartialMonth, curMonthLabel });
+      // Phase 1.5 S8 — additive trust metadata. Pure derivation from data
+      // the route already has: upload.uploadedAt + curMonthKey. Never
+      // throws, never replaces existing fields.
+      //
+      // IMPORTANT: when the upload row exists but rows[] yielded NO month
+      // keys (empty/excluded data), `curMonthKey` falls back to the calendar
+      // month inside the math path. We must NOT advertise that as honest
+      // freshness — collapse to `dataMonthKey: null` so the helper returns
+      // status='unknown', mirroring the margin-metrics route.
+      const trendingDataMonthKey = sortedMonthKeys.length > 0 ? curMonthKey : null;
+      const asOfLabel = formatAsOfUploadLabel(trendingDataMonthKey);
+      const freshness = deriveFinancialUploadFreshness({
+        uploadedAt: upload.uploadedAt,
+        dataMonthKey: trendingDataMonthKey,
+      });
+
+      res.json({ up, down, monthFraction, isPartialMonth, curMonthLabel, asOfLabel, freshness });
     } catch (err) {
       console.error("Error computing trending accounts:", err);
       res.status(500).json({ error: "Failed to compute trending accounts" });
@@ -806,7 +832,18 @@ export function registerDashboardRoutes(app: Express): void {
       const namMetrics = isNamRole ? [] : buildMetrics(namRoles);
       const amMetrics = buildMetrics(amRoles);
       console.log(`[margin-metrics] role=${user.role} nams=${namMetrics.length} ams=${amMetrics.length} scopedUserIds=${scopedUserIds ? scopedUserIds.size : 'null'} byRepIdKeys=${Object.keys(byRepId).length} curMonthKey=${curMonthKey}`);
-      const mmResult = { nams: namMetrics, ams: amMetrics };
+      // Phase 1.5 S8 — additive trust metadata. `dataMonthKey` is null when
+      // no upload exists at all (rows array empty), which honestly maps to
+      // "freshness unavailable". Caching the enriched object is safe because
+      // it's a fixed-shape POJO — the next 15 min of requests hit the same
+      // metadata.
+      const dataMonthKey = sortedUploadKeys.length > 0 ? curMonthKey : null;
+      const asOfLabel = formatAsOfUploadLabel(dataMonthKey);
+      const freshness = deriveFinancialUploadFreshness({
+        uploadedAt: upload?.uploadedAt ?? null,
+        dataMonthKey,
+      });
+      const mmResult = { nams: namMetrics, ams: amMetrics, asOfLabel, freshness };
       cacheSet(mmCacheKey, mmResult, 15 * 60 * 1000);
       res.json(mmResult);
     } catch (err) {

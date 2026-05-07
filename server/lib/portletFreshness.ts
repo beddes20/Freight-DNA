@@ -209,6 +209,108 @@ export async function getFreshnessFromNbaCards(
 }
 
 /**
+ * Phase 1.5 S8 — Data-driven freshness for monthly financial-upload-backed
+ * portlets (Trending Accounts, Margin Metrics).
+ *
+ * Monthly uploads have no scheduler/heartbeat — the signal IS the upload
+ * itself. Two honest inputs are available in every route handler that
+ * already calls `storage.getLatestFinancialUploadForOrg`:
+ *
+ *   - `uploadedAt`     — ISO-8601 timestamp on `financial_uploads.uploadedAt`
+ *   - `dataMonthKey`   — most recent "YYYY-MM" present in the upload rows
+ *                         (already computed by both routes for math purposes)
+ *
+ * Status:
+ *   - ok       — dataMonthKey is the calendar current month or one month back
+ *                (typical "current upload + last full month" cadence)
+ *   - stale    — dataMonthKey is two or more calendar months old
+ *   - unknown  — no upload at all OR malformed inputs (defensive)
+ *
+ * `lastUpdatedAt` always carries the upload's own timestamp when present so
+ * the banner can render "Last refresh: Xd ago".
+ *
+ * Pure / synchronous — no DB. Caller passes the data the route already has,
+ * so this helper cannot break the primary payload.
+ */
+const FINANCIAL_UPLOAD_SOURCE = "financial_uploads.uploadedAt";
+
+export function deriveFinancialUploadFreshness(opts: {
+  uploadedAt?: string | null;
+  dataMonthKey?: string | null;
+  now?: Date;
+}): PortletFreshness {
+  const { uploadedAt, dataMonthKey } = opts;
+  const now = opts.now ?? new Date();
+
+  if (!uploadedAt && !dataMonthKey) return unknownFreshness(FINANCIAL_UPLOAD_SOURCE);
+
+  const lastUpdatedAt = uploadedAt && Number.isFinite(Date.parse(uploadedAt))
+    ? new Date(Date.parse(uploadedAt)).toISOString()
+    : null;
+
+  if (!dataMonthKey || !/^\d{4}-\d{2}$/.test(dataMonthKey)) {
+    // No usable month-key → can't make an honest stale/ok call.
+    return {
+      source: FINANCIAL_UPLOAD_SOURCE,
+      status: "unknown",
+      lastUpdatedAt,
+      nextExpectedAt: null,
+      consecutiveFailures: 0,
+    };
+  }
+
+  const [dy, dm] = dataMonthKey.split("-").map(Number);
+  // Validate month bounds — "2026-13" matches the regex but is not a real
+  // month. Reject defensively rather than silently rolling into next year.
+  if (!Number.isFinite(dy) || !Number.isFinite(dm) || dm < 1 || dm > 12) {
+    return {
+      source: FINANCIAL_UPLOAD_SOURCE,
+      status: "unknown",
+      lastUpdatedAt,
+      nextExpectedAt: null,
+      consecutiveFailures: 0,
+    };
+  }
+  const dataIdx = dy * 12 + (dm - 1);
+  const nowIdx = now.getFullYear() * 12 + now.getMonth();
+  const monthsBack = nowIdx - dataIdx;
+
+  // Tolerate the typical "we don't have the in-progress month yet" case:
+  // 0 = current calendar month, 1 = last calendar month → both ok.
+  // 2+ = at least one full month is missing → stale.
+  // negative (future-dated) = treat as ok; not our place to scold the data.
+  const status: "ok" | "stale" = monthsBack >= 2 ? "stale" : "ok";
+
+  const candidate: PortletFreshness = {
+    source: FINANCIAL_UPLOAD_SOURCE,
+    status,
+    lastUpdatedAt,
+    nextExpectedAt: null,
+    consecutiveFailures: 0,
+  };
+  const parsed = portletFreshnessSchema.safeParse(candidate);
+  if (!parsed.success) {
+    console.error("[portletFreshness] financial-upload freshness failed schema:", parsed.error);
+    return unknownFreshness(FINANCIAL_UPLOAD_SOURCE);
+  }
+  return parsed.data;
+}
+
+/**
+ * Format a "YYYY-MM" key into an "As of <Month YYYY> upload" trust label
+ * for Trending Accounts / Margin Metrics. Returns null if the key is not
+ * a parseable monthKey — caller should suppress the label rather than
+ * render garbage.
+ */
+export function formatAsOfUploadLabel(monthKey?: string | null): string | null {
+  if (!monthKey || !/^\d{4}-\d{2}$/.test(monthKey)) return null;
+  const [y, m] = monthKey.split("-").map(Number);
+  if (m < 1 || m > 12) return null;
+  const monthName = new Date(y, m - 1, 1).toLocaleString("en-US", { month: "long" });
+  return `As of ${monthName} ${y} upload`;
+}
+
+/**
  * Batch-read heartbeats for many jobs in a single SELECT, used by
  * /api/dashboard/summary to avoid N+1. Returns one PortletFreshness per
  * input job name (status="unknown" when no row exists).

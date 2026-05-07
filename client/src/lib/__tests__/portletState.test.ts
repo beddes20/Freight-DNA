@@ -206,6 +206,104 @@ describe("getFreshnessFromNbaCards — server helper contract (Phase 1.5 S7)", (
   });
 });
 
+describe("Trending + Margin freshness labeling — UI contract (Phase 1.5 S8)", () => {
+  const ASOF_SRC = READ("components/dashboard/AsOfLabel.tsx");
+  const TYPES_SRC = READ("pages/dashboard/types.ts");
+  const DIR_SRC = READ("pages/dashboard/DirectorPortlets.tsx");
+  const NAM_SRC = READ("pages/dashboard/NamPortlets.tsx");
+  const AM_SRC = READ("pages/dashboard/AmPortlets.tsx");
+
+  it("AsOfLabel exports a function with asOfLabel + freshness + testId props", () => {
+    expect(ASOF_SRC).toMatch(/export function AsOfLabel/);
+    expect(ASOF_SRC).toMatch(/asOfLabel\?:/);
+    expect(ASOF_SRC).toMatch(/freshness\?:/);
+    expect(ASOF_SRC).toMatch(/testId:\s*string/);
+  });
+
+  it("AsOfLabel uses the documented copy for stale + unknown branches", () => {
+    expect(ASOF_SRC).toMatch(/Data may be stale — last monthly refresh/);
+    expect(ASOF_SRC).toMatch(/Freshness unavailable/);
+  });
+
+  it("AsOfLabel never escalates unknown → stale (Task #1109a invariant)", () => {
+    // The unknown-state tone arm must use the neutral muted tone, not amber.
+    expect(ASOF_SRC).toMatch(/state === ["']unknown["']\s*\?\s*["']text-muted-foreground italic["']/);
+    // Belt-and-suspenders: the unknown copy ("Freshness unavailable") must
+    // be assigned alongside state='unknown', never alongside state='stale'.
+    expect(ASOF_SRC).toMatch(/state\s*=\s*["']unknown["'][\s\S]*?Freshness unavailable/);
+  });
+
+  it("AsOfLabel emits data-asof-state on the rendered span for portlet specs", () => {
+    expect(ASOF_SRC).toMatch(/data-asof-state=\{state\}/);
+  });
+
+  it("TrendingResponse + MarginMetrics types include optional asOfLabel + freshness", () => {
+    expect(TYPES_SRC).toMatch(/TrendingResponse[^=]*=.*asOfLabel\?:\s*string\s*\|\s*null.*freshness\?:\s*PortletFreshness/);
+    expect(TYPES_SRC).toMatch(/MarginMetrics[^=]*=.*asOfLabel\?:\s*string\s*\|\s*null.*freshness\?:\s*PortletFreshness/);
+  });
+
+  it("DirectorPortlets renders an AsOfLabel for trending-up, trending-down, and both margin groups", () => {
+    expect(DIR_SRC).toMatch(/from\s+["']@\/components\/dashboard\/AsOfLabel["']/);
+    expect(DIR_SRC).toMatch(/testId=["']trending-up-as-of-label["']/);
+    expect(DIR_SRC).toMatch(/testId=["']trending-down-as-of-label["']/);
+    expect(DIR_SRC).toMatch(/testId=\{`margin-\$\{group\}-as-of-label`\}/);
+  });
+
+  it("NamPortlets renders an AsOfLabel for both trending cards and the AM-margin card", () => {
+    expect(NAM_SRC).toMatch(/from\s+["']@\/components\/dashboard\/AsOfLabel["']/);
+    expect(NAM_SRC).toMatch(/testId=["']nam-trending-up-as-of-label["']/);
+    expect(NAM_SRC).toMatch(/testId=["']nam-trending-down-as-of-label["']/);
+    expect(NAM_SRC).toMatch(/testId=["']nam-margin-ams-as-of-label["']/);
+  });
+
+  it("AmPortlets renders an AsOfLabel for both trending cards", () => {
+    expect(AM_SRC).toMatch(/from\s+["']@\/components\/dashboard\/AsOfLabel["']/);
+    expect(AM_SRC).toMatch(/testId=["']am-trending-up-as-of-label["']/);
+    expect(AM_SRC).toMatch(/testId=["']am-trending-down-as-of-label["']/);
+  });
+});
+
+describe("Trending + Margin freshness labeling — server contract (Phase 1.5 S8)", () => {
+  const SERVER_FRESH = fs.readFileSync(
+    path.resolve(__dirname, "..", "..", "..", "..", "server", "lib", "portletFreshness.ts"),
+    "utf8",
+  );
+  const DASH_ROUTES = fs.readFileSync(
+    path.resolve(__dirname, "..", "..", "..", "..", "server", "routes", "dashboard.ts"),
+    "utf8",
+  );
+
+  it("exports the pure financial-upload freshness derivation + label formatter", () => {
+    expect(SERVER_FRESH).toMatch(/export function deriveFinancialUploadFreshness/);
+    expect(SERVER_FRESH).toMatch(/export function formatAsOfUploadLabel/);
+  });
+
+  it("uses the canonical source label 'financial_uploads.uploadedAt'", () => {
+    expect(SERVER_FRESH).toMatch(/["']financial_uploads\.uploadedAt["']/);
+  });
+
+  it("treats two-or-more months back as stale (1 month is the typical-cadence boundary)", () => {
+    expect(SERVER_FRESH).toMatch(/monthsBack\s*>=\s*2/);
+  });
+
+  it("trending-accounts route includes asOfLabel + freshness in the response", () => {
+    expect(DASH_ROUTES).toMatch(/res\.json\(\{ up, down, monthFraction, isPartialMonth, curMonthLabel, asOfLabel, freshness \}\)/);
+  });
+
+  it("trending-accounts collapses empty-rows fallback to null dataMonthKey (architect feedback) — never advertises calendar-month fallback as 'ok'", () => {
+    expect(DASH_ROUTES).toMatch(/trendingDataMonthKey = sortedMonthKeys\.length > 0 \? curMonthKey : null/);
+    expect(DASH_ROUTES).toMatch(/dataMonthKey: trendingDataMonthKey/);
+  });
+
+  it("margin-metrics route includes asOfLabel + freshness in the cached/returned object", () => {
+    expect(DASH_ROUTES).toMatch(/const mmResult = \{ nams: namMetrics, ams: amMetrics, asOfLabel, freshness \}/);
+  });
+
+  it("trending-accounts no-upload branch still returns an honest unknown freshness", () => {
+    expect(DASH_ROUTES).toMatch(/return res\.json\(\{[\s\S]*?up: \[\],[\s\S]*?freshness: deriveFinancialUploadFreshness/);
+  });
+});
+
 describe("portletState helper — Task #1109a contract", () => {
   it("never collapses unknown into stale", () => {
     // Statically assert the unknown branch returns "unknown", not "stale".
