@@ -6158,3 +6158,87 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "user-driven contact CRUD must stay UNGATED; gate auto-create writers instead",
   );
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1106: 1:1 list endpoints must NOT auto-create sessions in loops
+// (Phase 1 safe fixes). The three list endpoints — pending-count,
+// per-pairing-counts, action-items — were silently calling
+// getOrCreateActiveSession for every (manager, report) pair on every request,
+// inserting empty rows into one_on_one_sessions and skewing the "Days since
+// last 1:1" metric. Phase 1 introduces the storage.getActiveSessionIfExists
+// read-only sibling + an appSettings kill switch
+// `oneOnOne.listEndpointsCreateSessions`. This guardrail locks in:
+//   • storage.ts exposes `getActiveSessionIfExists` on IStorage AND its impl.
+//   • The three list endpoint blocks in server/routes.ts read the kill-switch
+//     setting and never call getOrCreateActiveSession unconditionally.
+// New list/loop endpoints joining one_on_one_sessions must be added here.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── 1106. 1:1 list endpoints — no auto-create in loops ───────────────\n");
+
+  const storageSrc = readFile("server/storage.ts");
+  assert(
+    "storage.ts — IStorage declares getActiveSessionIfExists",
+    /getActiveSessionIfExists\(namId:\s*string,\s*amId:\s*string\):\s*Promise<OneOnOneSession\s*\|\s*null>/.test(storageSrc),
+    "IStorage must declare getActiveSessionIfExists(namId, amId): Promise<OneOnOneSession | null>",
+  );
+  assert(
+    "storage.ts — implements async getActiveSessionIfExists",
+    /async\s+getActiveSessionIfExists\s*\(/.test(storageSrc),
+    "Storage class must implement async getActiveSessionIfExists",
+  );
+
+  const routesSrc = readFile("server/routes.ts");
+
+  const LIST_ENDPOINT_PATHS = [
+    "/api/one-on-one/pending-count",
+    "/api/one-on-one/per-pairing-counts",
+    "/api/one-on-one/action-items",
+  ];
+
+  for (const apiPath of LIST_ENDPOINT_PATHS) {
+    // Locate the endpoint handler block. We slice from the route registration
+    // line to the next top-level `app.` registration so the assertion is
+    // scoped to the one handler we care about.
+    const startMarker = `app.get("${apiPath}"`;
+    const startIdx = routesSrc.indexOf(startMarker);
+    assert(
+      `routes.ts — registers ${apiPath}`,
+      startIdx !== -1,
+      `Could not find app.get("${apiPath}", ...) in server/routes.ts`,
+    );
+    if (startIdx === -1) continue;
+    const tail = routesSrc.slice(startIdx + startMarker.length);
+    const nextRouteIdx = tail.search(/\n\s{2,4}app\.[a-z]+\(/);
+    const block = nextRouteIdx === -1 ? tail : tail.slice(0, nextRouteIdx);
+
+    assert(
+      `routes.ts — ${apiPath} reads oneOnOne.listEndpointsCreateSessions setting`,
+      block.includes("oneOnOne.listEndpointsCreateSessions"),
+      `${apiPath} handler must read the appSettings kill-switch flag`,
+    );
+    assert(
+      `routes.ts — ${apiPath} calls getActiveSessionIfExists when flag is off`,
+      block.includes("getActiveSessionIfExists"),
+      `${apiPath} handler must call storage.getActiveSessionIfExists when the kill-switch is disabled`,
+    );
+
+    // The auto-create call may still appear (default-on path) but ONLY when
+    // gated behind the kill switch — i.e. it must occur inside a ternary /
+    // conditional alongside getActiveSessionIfExists. Reject any unconditional
+    // bare `await storage.getOrCreateActiveSession(` call within the block.
+    const lines = block.split("\n");
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.includes("getOrCreateActiveSession")) continue;
+      // Allow it on a ternary branch (line starts with `?` or `:`) which is
+      // how the kill switch is wired.
+      const isTernaryBranch = trimmed.startsWith("?") || trimmed.startsWith(":");
+      assert(
+        `routes.ts — ${apiPath} only invokes getOrCreateActiveSession inside the kill-switch ternary`,
+        isTernaryBranch,
+        `Found unconditional getOrCreateActiveSession call in ${apiPath} handler — must be gated by the listEndpointsCreateSessions flag`,
+      );
+    }
+  }
+})();

@@ -1,0 +1,98 @@
+Task #1106 — Freight-DNA — 1:1's tab Phase 1 safe fixes
+
+Follow these working rules exactly for this task:
+
+- Plan before coding.
+- Think in small, testable steps.
+- Minimize blast radius.
+- Prefer targeted edits over sweeping rewrites.
+- Show me exactly which files you will touch before making changes.
+- Do not make destructive changes.
+- No schema changes, no migrations, no deletes, no bulk updates.
+- Do not republish automatically.
+- Treat anything touching 1:1 sessions, pairings, reminders, counts, or manager views as high-risk.
+- Default to read-only investigation first.
+- If anything is ambiguous, state the assumption explicitly.
+
+Context:
+Freight-DNA is a freight brokerage CRM/workflow system. The 1:1’s tab must preserve trust. We are fixing Phase 1 trust issues only. This is not a cleanup rewrite.
+
+Goal:
+Implement only these Phase 1 safe fixes for Task #1106:
+
+1) Add a read-only storage method:
+- Add `getActiveSessionIfExists(namId, amId)` as a sibling to `getOrCreateActiveSession`.
+- It must never insert.
+- Declare it on `IStorage` and implement it in `server/storage.ts`.
+
+2) Add a kill-switch to the three 1:1 list endpoints in `server/routes.ts`:
+- `/api/one-on-one/pending-count`
+- `/api/one-on-one/per-pairing-counts`
+- `/api/one-on-one/action-items`
+- Use `appSettings.oneOnOne.listEndpointsCreateSessions`
+- Legacy/default behavior remains ON unless the flag is the literal string `"false"`.
+- When the flag is `"false"`, these list endpoints must use `getActiveSessionIfExists(...)` instead of `getOrCreateActiveSession(...)`.
+- If no active session exists, skip or return zero/null-safe behavior without creating rows.
+- Do not change endpoint response shapes unless absolutely necessary for compatibility.
+
+3) Update dashboard portlet trust copy in:
+- `client/src/components/one-on-one-portlet.tsx`
+- Replace “Days since last 1:1” with “Days since session opened”
+- Add `: N`
+- Append ` (no meeting yet)` only when `meetingDate` is null
+- Add/keep stable testid:
+  `text-days-since-session-opened-{namId}-{amId}`
+
+4) Differentiate suggestions from saved topics in:
+- `client/src/pages/one-on-one.tsx`
+- In `SuggestedTopicsPanel`, render suggestion rows with a visibly different amber-tinted treatment
+- Add a per-row “Suggestion” badge
+- Testid format:
+  `badge-suggestion-{i}`
+- Do not change saved-topic visuals
+
+5) Add guardrails in:
+- `tests/code-quality-guardrails.test.ts`
+- Add a Task #1106 section that fails if any of the three list endpoint handlers call `getOrCreateActiveSession` outside the kill-switch branch/ternary
+- Assert that `getActiveSessionIfExists` is both declared and implemented
+
+Required workflow:
+1. First inspect the relevant files and summarize the current implementation.
+2. Then give me:
+   - short diagnosis
+   - exact files to be touched
+   - small-step implementation plan
+   - risks / assumptions
+3. Only then make the code changes.
+4. After changes, run targeted validation and report:
+   - which files changed
+   - whether tests passed
+   - whether the three endpoints still preserve current response shape
+   - whether any new session rows are created when the flag is `"false"`
+5. Stop and wait. Do not republish.
+
+Implementation constraints:
+- No API prefix consolidation in this task
+- No archived-user filtering changes in this task
+- No soft-delete in this task
+- No scheduler changes in this task
+- No AI summary cache changes in this task
+- No refactors outside the minimum code needed
+- No unrelated lint/style churn
+
+Validation expectations:
+- Verify the code path with the flag unset/default behavior
+- Verify the code path with the flag set to literal `"false"`
+- Confirm that overview/list reads do not silently create new 1:1 sessions when the flag is `"false"`
+- Confirm new UI copy renders correctly
+- Confirm suggestion rows are visually distinct from saved topics
+- Confirm guardrail tests cover the intended call sites
+
+Output format:
+1. Diagnosis
+2. Plan
+3. Files / routes / tests touched
+4. Implementation summary
+5. Risks / reasons not to republish yet
+
+Do not skip the planning step.

@@ -374,8 +374,29 @@ function SessionView({ pairing, teamMembers }: { pairing: Pairing; teamMembers: 
 
   const topics = sessionData?.topics || [];
 
+  // Task #1106 — replaces the misleading "Days since last 1:1" copy. The
+  // counter measures days since the session row was opened (auto-create
+  // included), not days since a real meeting. Append "(no meeting yet)" so
+  // reps can tell at a glance whether the cadence has actually been met.
+  const sessionOpenedAt = sessionData?.session?.startDate ?? null;
+  const daysSinceSessionOpened = sessionOpenedAt
+    ? Math.floor((Date.now() - new Date(sessionOpenedAt).getTime()) / 86400000)
+    : null;
+  const hasMeetingDate = !!sessionData?.session?.meetingDate;
+  const sessionAgeLabel = daysSinceSessionOpened !== null
+    ? `Days since session opened: ${daysSinceSessionOpened}${hasMeetingDate ? "" : " (no meeting yet)"}`
+    : null;
+
   return (
     <div className="space-y-3" data-testid={`session-view-${pairing.namId}-${pairing.amId}`}>
+      {sessionAgeLabel && (
+        <p
+          className="text-[11px] text-muted-foreground"
+          data-testid={`text-days-since-session-opened-${pairing.namId}-${pairing.amId}`}
+        >
+          {sessionAgeLabel}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <div className="flex-1 flex items-center gap-2">
           <Input

@@ -3092,8 +3092,18 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       }
 
+      // Task #1106 — kill switch. Default behavior (flag missing or any value
+      // other than the literal "false") preserves the legacy auto-create path.
+      // When explicitly disabled, list endpoints become read-only and silently
+      // skip pairs that don't yet have a session.
+      const createSessionsFlag = await storage.getSetting("oneOnOne.listEndpointsCreateSessions");
+      const listEndpointsCreate = (createSessionsFlag ?? "true").trim().toLowerCase() !== "false";
+
       const counts = await Promise.all(pairs.map(async ({ namId, amId }) => {
-        const session = await storage.getOrCreateActiveSession(namId, amId);
+        const session = listEndpointsCreate
+          ? await storage.getOrCreateActiveSession(namId, amId)
+          : await storage.getActiveSessionIfExists(namId, amId);
+        if (!session) return 0;
         const topics = await storage.getTopicsBySession(session.id);
         return topics.filter(t => t.status === "pending").length;
       }));
@@ -3134,8 +3144,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         withUserName: string; addedByName: string;
       }> = [];
 
+      // Task #1106 — kill switch (mirror of pending-count). Default preserves
+      // legacy auto-create behavior; explicit "false" makes the endpoint
+      // read-only and silently skips pairs without an existing session.
+      const createSessionsFlag = await storage.getSetting("oneOnOne.listEndpointsCreateSessions");
+      const listEndpointsCreate = (createSessionsFlag ?? "true").trim().toLowerCase() !== "false";
+
       const pairResults = await Promise.all(pairs.map(async ({ namId, amId }) => {
-        const session = await storage.getOrCreateActiveSession(namId, amId);
+        const session = listEndpointsCreate
+          ? await storage.getOrCreateActiveSession(namId, amId)
+          : await storage.getActiveSessionIfExists(namId, amId);
+        if (!session) return [];
         const topics = await storage.getTopicsBySession(session.id);
         const actionItems = topics.filter(t => t.status === "pending" && (t.tag === "action_item" || t.tag === "Action Item"));
         return actionItems.map(topic => {
@@ -3190,8 +3209,17 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
         if (user.managerId) pairs.push({ namId: user.managerId, amId: user.id });
       }
 
+      // Task #1106 — kill switch (mirror of pending-count / action-items).
+      // Default preserves legacy auto-create behavior; "false" makes the
+      // endpoint read-only and reports 0 for pairs without a session.
+      const createSessionsFlag = await storage.getSetting("oneOnOne.listEndpointsCreateSessions");
+      const listEndpointsCreate = (createSessionsFlag ?? "true").trim().toLowerCase() !== "false";
+
       const results = await Promise.all(pairs.map(async ({ namId, amId }) => {
-        const session = await storage.getOrCreateActiveSession(namId, amId);
+        const session = listEndpointsCreate
+          ? await storage.getOrCreateActiveSession(namId, amId)
+          : await storage.getActiveSessionIfExists(namId, amId);
+        if (!session) return { namId, amId, pendingCount: 0 };
         const topics = await storage.getTopicsBySession(session.id);
         const pending = topics.filter(t => t.status === "pending").length;
         return { namId, amId, pendingCount: pending };

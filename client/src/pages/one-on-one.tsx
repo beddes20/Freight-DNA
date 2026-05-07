@@ -691,9 +691,25 @@ function SuggestedTopicsPanel({
         <span className="ml-1 font-normal text-indigo-500">— tap to add to agenda</span>
       </div>
       {visible.map((s, i) => (
-        <div key={i} className="flex items-start gap-2 group" data-testid={`suggestion-${i}`}>
+        <div
+          key={i}
+          // Task #1106 — distinct amber tint + per-row "Suggestion" badge so
+          // AI/system suggestions can never visually blend with saved
+          // (committed) agenda items below. Saved-topic visuals are
+          // unchanged.
+          className="flex items-start gap-2 group rounded-md border border-amber-200 dark:border-amber-800/50 bg-amber-50/70 dark:bg-amber-950/30 px-2 py-1.5"
+          data-testid={`suggestion-${i}`}
+        >
           <span className="text-sm mt-0.5 shrink-0">{typeIcon[s.type] ?? "💡"}</span>
           <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <span
+                className="inline-flex items-center rounded-sm bg-amber-200/80 text-amber-900 dark:bg-amber-800/60 dark:text-amber-100 px-1.5 py-0 text-[9px] font-semibold uppercase tracking-wide"
+                data-testid={`badge-suggestion-${i}`}
+              >
+                Suggestion
+              </span>
+            </div>
             <p className="text-xs text-foreground leading-snug">{s.text}</p>
           </div>
           <div className="flex gap-1 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">

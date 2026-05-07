@@ -642,6 +642,15 @@ getContactsByIds(ids: string[]): Promise<Contact[]>;
   getActiveSession(namId: string, amId: string): Promise<OneOnOneSession | undefined>;
   getActiveSessionsForManager(namId: string): Promise<OneOnOneSession[]>;
   getOrCreateActiveSession(namId: string, amId: string): Promise<OneOnOneSession>;
+  /**
+   * Task #1106 — Phase 1 read-only sibling of getOrCreateActiveSession.
+   * Returns the active 1:1 session for a (namId, amId) pair or null without
+   * inserting a row. List endpoints (pending-count / per-pairing-counts /
+   * action-items) call this when the appSettings flag
+   * `oneOnOne.listEndpointsCreateSessions` is `false` so that simply rendering
+   * the team overview no longer pollutes one_on_one_sessions with empty rows.
+   */
+  getActiveSessionIfExists(namId: string, amId: string): Promise<OneOnOneSession | null>;
   getSessionsForSubordinates(subordinateIds: string[], orgId: string): Promise<Array<{
     session: OneOnOneSession;
     namUser: { id: string; name: string; role: string };
@@ -3086,6 +3095,15 @@ export class DatabaseStorage implements IStorage {
       startDate: new Date().toISOString(),
     }).returning();
     return session;
+  }
+
+  // Task #1106 — read-only sibling. NEVER inserts. Used by list endpoints when
+  // the appSettings kill-switch `oneOnOne.listEndpointsCreateSessions` is
+  // `false` so rendering the team overview can no longer auto-create empty
+  // sessions for every manager–report pair.
+  async getActiveSessionIfExists(namId: string, amId: string): Promise<OneOnOneSession | null> {
+    const existing = await this.getActiveSession(namId, amId);
+    return existing ?? null;
   }
 
   async getSessionsByUser(userId: string): Promise<OneOnOneSession[]> {
