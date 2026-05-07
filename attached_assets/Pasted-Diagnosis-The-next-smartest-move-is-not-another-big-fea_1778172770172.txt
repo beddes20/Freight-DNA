@@ -1,0 +1,182 @@
+Diagnosis: The next smartest move is not another big feature slice. It’s to lock in what Phase 1.5 already accomplished so trust doesn’t quietly regress, then clean up the small inconsistencies you found. So the next task should be Area 5.1 + Area 1 together: add the dashboard freshness guardrail and annotate the two intentional return null structural exceptions. That gives you the best risk/impact ratio.
+
+Here’s the copy-and-paste prompt for Replit.
+
+Freight-DNA — Dashboard Trust Hardening — Area 5.1 + Area 1
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Phase 1.5 already shipped the dashboard trust primitives:
+
+PortletFreshness
+
+decidePortletState
+
+PortletStateBanner
+
+AsOfLabel
+
+PipelineHealthStrip
+
+Read-only audit confirms:
+
+the core trust primitives are solid,
+
+the biggest remaining risk is regression, not missing infrastructure,
+
+two length === 0 → return null sites remain intentionally for structural UI reasons:
+
+client/src/pages/dashboard.tsx (~line 1485) — LM check-in card group with no direct reports
+
+client/src/pages/dashboard/DirectorPortlets.tsx (~line 272) — director filter toggle with no directors in org
+
+We want to harden the dashboard against future trust regressions before doing more UI work.
+
+Goal:
+Implement the first hardening slice:
+
+Add a dashboard-specific guardrail that catches new silent-empty patterns and untracked freshness usage.
+
+Annotate the two current intentional structural exceptions with explicit // allow: comments.
+
+Consolidate the “unknown must never look amber/warning” assertion into one universal test.
+
+Guardrails:
+
+No schema changes.
+
+No server business-logic changes.
+
+No scheduler changes.
+
+No UI behavior changes for reps.
+
+Keep this slice test/annotation focused.
+
+Minimize blast radius.
+
+Scope:
+
+In scope:
+
+tests/code-quality-guardrails.test.ts
+
+client/src/pages/dashboard.tsx
+
+client/src/pages/dashboard/DirectorPortlets.tsx
+
+client/src/lib/__tests__/portletState.test.ts
+
+Out of scope:
+
+any dashboard endpoint behavior changes
+
+drifting portlet changes
+
+empty-state UI copy changes
+
+role-gate logic changes
+
+feature flag work
+
+Tasks:
+
+Add explicit allow-comments to the two intentional structural exceptions
+
+In:
+
+client/src/pages/dashboard.tsx
+
+client/src/pages/dashboard/DirectorPortlets.tsx
+
+Add inline // allow: <reason> comments on the two existing length === 0 → return null sites.
+
+The reason text should make clear these are structural UI scaffolding, not data/freshness-driven portlets.
+
+Do not change runtime behavior at those sites.
+
+Add a new dashboard guardrail section
+
+File:
+
+tests/code-quality-guardrails.test.ts
+
+Add a new section (use the next clean section number; the planning note suggested “Section 1500 — Dashboard freshness envelope contract”).
+
+This section should do all of the following: a. Silent-empty guardrail
+
+Scan the dashboard client tree (client/src/pages/dashboard/** and related dashboard components if needed).
+
+Fail on any new if (X.length === 0) return null pattern unless:
+
+it has an inline // allow: <reason> comment on the same line or immediately preceding line.
+
+b. Freshness primitive usage / opt-out guardrail
+
+For dashboard portlet files, assert either:
+
+the file uses the established trust primitives (decidePortletState, PortletStateBanner, AsOfLabel, or equivalent existing freshness handling),
+
+OR the file has a top-of-file opt-out comment such as:
+
+// dashboard-portlet-no-freshness: <reason>
+
+Keep this practical — don’t make it so strict that legitimate structural files fail.
+
+c. Existing freshness-route regression pin
+
+For dashboard routes that already return freshness metadata (the ones already implemented in Phase 1.5), add a regression pin so future edits can’t silently strip freshness / asOfLabel fields.
+
+This can be AST/text-based if that is the existing pattern in this test file.
+
+Consolidate the “unknown must never look amber” assertion
+
+File:
+
+client/src/lib/__tests__/portletState.test.ts
+
+Replace the current per-file duplicated regex/assertions with one universal assertion that covers:
+
+AsOfLabel.tsx
+
+PortletStateBanner.tsx
+
+PipelineHealthStrip.tsx
+
+The test should clearly assert:
+
+the unknown branch never uses amber/warning tokens
+
+stale and unknown remain visually distinct
+
+Keep this slice behavior-neutral
+
+No UI or server behavior changes beyond comments and tests.
+
+If the new guardrail surfaces existing violations beyond the two known structural ones, stop and report before widening scope.
+
+Tests to run:
+
+npm run check
+
+npx tsx tests/code-quality-guardrails.test.ts
+
+npx vitest run client/src/lib/__tests__/portletState.test.ts
+
+Output format:
+A. Short diagnosis
+B. Exact files changed
+C. What the new guardrail enforces
+D. Tests run and results
+E. Any violations found / reasons not to merge
+
+Important:
+
+This is a hardening slice, not a feature slice.
+
+Do not bundle any empty-state copy work or drifting-portlet work into this task.
+
+If the guardrail introduces too many false positives, stop and report with the smallest proposed refinement.
+

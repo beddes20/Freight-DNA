@@ -1,3 +1,4 @@
+// dashboard-portlet-no-freshness: Inputs are derived from rep-verifiable sources (the rep's own touchpoints / contacts / opportunities) and are merged across multiple client queries with no shared upstream timestamp. There is no honest single freshness signal to surface here today — surfacing one would invent trust we don't have. The planned "Drifting trust" slice (Phase 1.5 Area 2) will add an explicit aggregate `isError` line when one of the input queries 500s; until then this file is opted out via this header. Pinned by Section 1500 of tests/code-quality-guardrails.test.ts.
 /**
  * Phase 2 Dashboard Portlets — action-oriented weekly workflows for AMs.
  *

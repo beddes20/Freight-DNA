@@ -1482,6 +1482,7 @@ export default function Dashboard() {
       {(() => {
         if (!currentUser || currentUser.role === "logistics_manager") return null;
         const allLms = lmDirectReports.map(lm => lm);
+        // allow: structural-scaffolding (no LM direct reports for this manager) — not a freshness/portlet branch; whole card group has nothing to render. Pinned by Section 1500 of tests/code-quality-guardrails.test.ts.
         if (allLms.length === 0) return null;
         return (
           <Card data-testid="card-lm-daily-checkins-group">

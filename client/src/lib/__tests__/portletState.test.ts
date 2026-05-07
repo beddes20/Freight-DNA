@@ -415,3 +415,71 @@ describe("portletState helper — Task #1109a contract", () => {
     expect(decidePortletState(0, fresh("unknown"))).not.toBe("stale");
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────
+// Universal "unknown must never look amber" assertion (Task #1109a)
+//
+// Phase 1.5 Area 1 consolidation — replaces the per-file amber-tone
+// regexes that previously lived inside the AsOfLabel / PortletStateBanner
+// / PipelineHealthStrip describe blocks with one block that spans all
+// three trust-surface components. The per-component contract assertions
+// elsewhere in this file remain (copy, testIds, etc.) — this block is
+// strictly about the visual-tone invariant.
+//
+// Rule (per Task #1109a):
+//   1. Each file MUST have a literal `state === "unknown"` branch.
+//   2. The unknown branch MUST NOT use any text-amber*/bg-amber*/border-amber*
+//      utility token.
+//   3. The stale branch MAY (and does) use amber tokens — they remain
+//      visually distinct.
+// ─────────────────────────────────────────────────────────────────────────
+describe("universal: unknown branch must never use amber tokens (Task #1109a)", () => {
+  const TRUST_SURFACES: Array<{ label: string; src: string }> = [
+    { label: "AsOfLabel.tsx", src: READ("components/dashboard/AsOfLabel.tsx") },
+    { label: "PortletStateBanner.tsx", src: READ("components/dashboard/PortletStateBanner.tsx") },
+    { label: "PipelineHealthStrip.tsx", src: READ("components/dashboard/PipelineHealthStrip.tsx") },
+  ];
+
+  const AMBER_TOKEN = /\b(?:text|bg|border)-amber-\d/;
+  // "stale context" tokens that legitimize the use of amber on a given
+  // line. Covers both ternary styles: `state === "stale" ? amber : ...`
+  // (AsOfLabel, PipelineHealthStrip) and `isStale ? amber : ...`
+  // (PortletStateBanner — derived as `state === "stale"` upstream).
+  const STALE_CONTEXT = /state\s*===\s*["']stale["']|\bisStale\b|state:\s*["']stale["']/;
+
+  for (const { label, src } of TRUST_SURFACES) {
+    it(`${label} declares an explicit unknown branch`, () => {
+      // Either a 3-state ternary OR a binary stale/non-stale split where
+      // unknown is implicitly the non-stale arm (PortletStateBanner).
+      expect(src).toMatch(/state\s*===\s*["']unknown["']|state:\s*["']unknown["']|state\s*===\s*["']stale["']|\bisStale\b/);
+    });
+
+    it(`${label} retains a stale branch — stale and unknown remain visually distinct`, () => {
+      expect(src).toMatch(STALE_CONTEXT);
+    });
+
+    it(`${label} every amber token is co-located with stale context (no unknown→amber leak)`, () => {
+      const lines = src.split("\n");
+      const offenders: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        if (!AMBER_TOKEN.test(lines[i])) continue;
+        // Look at the line itself plus 3 lines on either side — covers
+        // multi-line ternaries like
+        //   state === "stale"
+        //     ? "bg-amber-500/10 ..."
+        //     : ...
+        const window = lines.slice(Math.max(0, i - 3), Math.min(lines.length, i + 4)).join("\n");
+        if (!STALE_CONTEXT.test(window)) {
+          offenders.push(`L${i + 1}: ${lines[i].trim().slice(0, 200)}`);
+        }
+      }
+      if (offenders.length > 0) {
+        throw new Error(
+          `${label} — found ${offenders.length} amber token(s) without nearby stale-context. ` +
+          `Task #1109a says unknown must NEVER look amber.\n` +
+          offenders.join("\n"),
+        );
+      }
+    });
+  }
+});

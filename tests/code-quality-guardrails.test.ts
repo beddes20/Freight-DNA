@@ -6242,3 +6242,255 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     }
   }
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1500 — Dashboard freshness envelope contract (Phase 1.5 Area 5.1)
+//
+// Locks in what Phase 1.5 already accomplished so trust can't quietly regress.
+// Three sub-checks, all AST/text-based to match the rest of this file's style:
+//
+//   a. SILENT-EMPTY GUARDRAIL — every `if (X.length === 0) return null` in
+//      the dashboard client tree (client/src/pages/dashboard.tsx,
+//      client/src/pages/dashboard/**, client/src/components/dashboard/**,
+//      client/src/components/NbaDashboardPanel.tsx) MUST carry an inline
+//      `// allow: <reason>` comment on the same line OR the immediately
+//      preceding line. Two structural exceptions ship today (LM check-in
+//      group + director filter toggle); both are annotated.
+//
+//   b. FRESHNESS PRIMITIVE / OPT-OUT GUARDRAIL — every dashboard file
+//      whose name matches /Portlet[s]?\.tsx$/ MUST either (i) import one
+//      of the established trust primitives (`decidePortletState`,
+//      `PortletStateBanner`, `AsOfLabel`, `PortletFreshness`), or (ii)
+//      carry a top-of-file `// dashboard-portlet-no-freshness: <reason>`
+//      opt-out comment. The opt-out is the explicit "I know, here's why"
+//      escape hatch — not a free pass; reviewers should challenge any
+//      new opt-out.
+//
+//   c. FRESHNESS-ROUTE REGRESSION PIN — dashboard endpoints that already
+//      return freshness today MUST keep returning it. This catches the
+//      "developer rewrites the route and silently strips `freshness`"
+//      regression at PR-review time.
+//
+// New writers MUST extend this section: a new dashboard portlet adds
+// itself to either the freshness-using list or the opt-out list, and a
+// new dashboard freshness route adds itself to the regression-pin list.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1500: Dashboard freshness envelope contract ─────────────\n");
+
+  // ── Roots to scan ────────────────────────────────────────────────────────
+  const DASHBOARD_TREE_ROOTS: ReadonlyArray<string> = [
+    "client/src/pages/dashboard",
+    "client/src/components/dashboard",
+  ];
+  const EXTRA_DASHBOARD_FILES: ReadonlyArray<string> = [
+    "client/src/pages/dashboard.tsx",
+    "client/src/components/NbaDashboardPanel.tsx",
+  ];
+
+  function collectDashboardFiles(): string[] {
+    const out: string[] = [];
+    for (const root of DASHBOARD_TREE_ROOTS) {
+      const abs = path.join(ROOT, root);
+      if (!fs.existsSync(abs)) continue;
+      for (const f of walkFiles(abs, ".tsx")) {
+        out.push(path.relative(ROOT, f));
+      }
+    }
+    for (const f of EXTRA_DASHBOARD_FILES) {
+      if (fs.existsSync(path.join(ROOT, f))) out.push(f);
+    }
+    return out;
+  }
+
+  const dashboardFiles = collectDashboardFiles();
+  assert(
+    "Section 1500 — dashboard tree discovered",
+    dashboardFiles.length >= 5,
+    `Expected to scan at least 5 dashboard tsx files, found ${dashboardFiles.length}`,
+  );
+
+  // ── (a) SILENT-EMPTY GUARDRAIL ──────────────────────────────────────────
+  // Detects both single-line and multi-line forms by collapsing whitespace
+  // before scanning. We slide a small window (current line + next 2 lines)
+  // so a hostile reformat that splits the `if` across lines —
+  //   if (allLms.length === 0)
+  //     return null;
+  // — is still caught.
+  const SILENT_EMPTY_RE = /if\s*\(\s*[^()]*\.length\s*===?\s*0\s*\)\s*return\s+null/;
+  const ALLOW_TAG_RE = /\/\/\s*allow:/i;
+
+  let silentEmptyViolations = 0;
+  let silentEmptyAllowed = 0;
+  for (const rel of dashboardFiles) {
+    const src = readFile(rel);
+    const lines = src.split("\n");
+    const seenStarts = new Set<number>();
+    for (let i = 0; i < lines.length; i++) {
+      // Collapse this line + up to two following lines into one whitespace-
+      // normalized blob, then test. This catches both formats.
+      const window2 = lines.slice(i, Math.min(lines.length, i + 3)).join(" ").replace(/\s+/g, " ");
+      if (!SILENT_EMPTY_RE.test(window2)) continue;
+      // Don't double-count the same logical match across overlapping windows.
+      if (seenStarts.has(i)) continue;
+      // Mark the next two lines as "consumed" if the multi-line form matched.
+      seenStarts.add(i + 1);
+      seenStarts.add(i + 2);
+
+      // An allow-tag is honored on the if-line, the line above it, OR
+      // any of the next two lines (which may carry the "return null;" tail
+      // in the multi-line form and so are a natural anchor too).
+      const allowWindow = lines.slice(Math.max(0, i - 1), Math.min(lines.length, i + 3)).join("\n");
+      if (ALLOW_TAG_RE.test(allowWindow)) {
+        silentEmptyAllowed++;
+        continue;
+      }
+      silentEmptyViolations++;
+      assert(
+        `Section 1500a — ${rel}:${i + 1} silent-empty without allow-tag`,
+        false,
+        `Found "if (X.length === 0) return null" (single- or multi-line) without an inline "// allow: <reason>" comment within the if/return block. ` +
+        `Either route the empty case through decidePortletState + PortletStateBanner, or add an inline "// allow: <reason>" comment explaining why this is structural-scaffolding rather than a freshness branch. ` +
+        `Offending line: ${lines[i].trim().slice(0, 200)}`,
+      );
+    }
+  }
+  assert(
+    `Section 1500a — silent-empty allow-tags account for the two known structural sites (found ${silentEmptyAllowed})`,
+    silentEmptyAllowed >= 2,
+    "Expected at least 2 annotated structural-scaffolding allow-tags (LM check-in group + director filter toggle).",
+  );
+  assert(
+    `Section 1500a — no unannotated silent-empty patterns in the dashboard tree`,
+    silentEmptyViolations === 0,
+    `Found ${silentEmptyViolations} new "if (X.length === 0) return null" without an allow-tag.`,
+  );
+
+  // ── (b) FRESHNESS PRIMITIVE / OPT-OUT GUARDRAIL ────────────────────────
+  // Targets files whose name encodes the "portlet" intent. We intentionally
+  // do NOT scan every dashboard component — only files matching
+  // /Portlet[s]?\.tsx$/ — to keep the contract about portlets, not chrome.
+  const PORTLET_FILE_RE = /Portlet[s]?\.tsx$/;
+  // Require an actual IMPORT of one of the trust primitives — a bare token
+  // mention in a type alias or comment doesn't prove the file is wired up.
+  // Matches both default-style and named-style imports of any primitive.
+  const TRUST_PRIMITIVE_IMPORT_RE = /import\s*(?:type\s*)?\{[^}]*\b(?:decidePortletState|PortletStateBanner|AsOfLabel|PortletFreshness)\b[^}]*\}\s*from/;
+  const OPT_OUT_RE = /\/\/\s*dashboard-portlet-no-freshness:\s*\S/;
+
+  const portletFiles = dashboardFiles.filter((rel) => PORTLET_FILE_RE.test(rel));
+  assert(
+    `Section 1500b — discovered portlet files (found ${portletFiles.length})`,
+    portletFiles.length >= 4,
+    `Expected to scan at least 4 portlet files (Aw/CG/Am/Nam/Director/Phase2), found ${portletFiles.length}.`,
+  );
+
+  for (const rel of portletFiles) {
+    const src = readFile(rel);
+    const usesPrimitive = TRUST_PRIMITIVE_IMPORT_RE.test(src);
+    // Opt-out comment must appear in the top 30 lines so it functions as a
+    // file-level header, not buried mid-file.
+    const head = src.split("\n").slice(0, 30).join("\n");
+    const hasOptOut = OPT_OUT_RE.test(head);
+    assert(
+      `Section 1500b — ${rel} imports a trust primitive OR has a top-of-file opt-out`,
+      usesPrimitive || hasOptOut,
+      `Portlet file must either IMPORT one of decidePortletState / PortletStateBanner / AsOfLabel / PortletFreshness (a bare token mention is not enough — wire the primitive in or document why), ` +
+      `or carry a top-of-file "// dashboard-portlet-no-freshness: <reason>" header explaining why no honest freshness signal exists.`,
+    );
+  }
+
+  // ── (c) FRESHNESS-ROUTE REGRESSION PIN ─────────────────────────────────
+  // Each entry below is an existing dashboard endpoint that returns
+  // freshness today. The contract is: this endpoint MUST keep returning
+  // freshness (or asOfLabel for the financial-upload-backed routes). New
+  // freshness-emitting routes get appended here.
+  //
+  // Architect-fix (Phase 1.5 Area 5.1 review): assertions are scoped to
+  // each route's HANDLER BODY — sliced from the route registration line
+  // up to (but not including) the next top-level `app.<verb>(` line in
+  // the same source. A whole-file pattern check would let a future edit
+  // strip freshness from one route while leaving the word `freshness`
+  // elsewhere in the file, silently passing this guardrail.
+  const DASH_ROUTES_SRC = readFile("server/routes/dashboard.ts");
+  const NBA_ROUTES_SRC = readFile("server/routes.ts"); // /api/nba/cards lives in routes.ts
+
+  function sliceRouteBlock(src: string, apiPath: string): string | null {
+    // Tolerate either single or double quotes in the route registration.
+    const startMarker = new RegExp(`app\\.get\\(\\s*["']${apiPath.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}["']`);
+    const startMatch = startMarker.exec(src);
+    if (!startMatch) return null;
+    const startIdx = startMatch.index;
+    const tail = src.slice(startIdx + startMatch[0].length);
+    // Next top-level `app.<verb>(` registration — scoped to ≤4-space
+    // indentation to avoid stopping at nested chained calls.
+    const nextRouteIdx = tail.search(/\n\s{0,4}app\.[a-z]+\(/);
+    return nextRouteIdx === -1 ? tail : tail.slice(0, nextRouteIdx);
+  }
+
+  type RouteContract = {
+    label: string;
+    src: string;
+    apiPath: string;
+    /** All of these patterns must appear inside THIS route's handler body
+     *  (not just somewhere in the file). */
+    must: ReadonlyArray<RegExp>;
+  };
+
+  const FRESHNESS_ROUTE_CONTRACTS: ReadonlyArray<RouteContract> = [
+    {
+      label: "GET /api/dashboard/award-health",
+      src: DASH_ROUTES_SRC,
+      apiPath: "/api/dashboard/award-health",
+      must: [/\bfreshness\b/],
+    },
+    {
+      label: "GET /api/dashboard/coverage-gaps",
+      src: DASH_ROUTES_SRC,
+      apiPath: "/api/dashboard/coverage-gaps",
+      must: [/\bfreshness\b/],
+    },
+    {
+      label: "GET /api/dashboard/trending-accounts",
+      src: DASH_ROUTES_SRC,
+      apiPath: "/api/dashboard/trending-accounts",
+      must: [/\basOfLabel\b/, /\bfreshness\b/],
+    },
+    {
+      label: "GET /api/dashboard/margin-metrics",
+      src: DASH_ROUTES_SRC,
+      apiPath: "/api/dashboard/margin-metrics",
+      must: [/\basOfLabel\b/, /\bfreshness\b/],
+    },
+    {
+      label: "GET /api/dashboard/health",
+      src: DASH_ROUTES_SRC,
+      apiPath: "/api/dashboard/health",
+      must: [/\bfinancials\b/, /\bnba\b/, /\bfreight\b/],
+    },
+    {
+      label: "GET /api/nba/cards",
+      src: NBA_ROUTES_SRC,
+      apiPath: "/api/nba/cards",
+      must: [/res\.json\(\{\s*cards:[^}]*freshness/],
+    },
+  ];
+
+  for (const c of FRESHNESS_ROUTE_CONTRACTS) {
+    const block = sliceRouteBlock(c.src, c.apiPath);
+    assert(
+      `Section 1500c — ${c.label} handler block resolved`,
+      block !== null,
+      `Could not locate app.get("${c.apiPath}", ...) in the source — has the route been renamed/moved? Update Section 1500c.`,
+    );
+    if (!block) continue;
+    for (const pat of c.must) {
+      assert(
+        `Section 1500c — ${c.label} — handler body contains ${pat}`,
+        pat.test(block),
+        `Required pattern ${pat} missing from THIS route's handler body — a recent edit may have stripped freshness/asOfLabel. ` +
+        `(Whole-file presence is not enough; the pattern must appear inside the route's own handler block.) ` +
+        `Restore the envelope or update Section 1500c with a deprecation reason.`,
+      );
+    }
+  }
+})();

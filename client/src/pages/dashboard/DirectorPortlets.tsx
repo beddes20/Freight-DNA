@@ -269,6 +269,7 @@ export function DirectorPortlets({
       {/* Director filter toggle — admin only */}
       {isAdmin && (() => {
         const directors = allUsers.filter(u => u.role === "director");
+        // allow: structural-scaffolding (org has no director-role users) — not a freshness/portlet branch; the toggle has no choices to offer. Pinned by Section 1500 of tests/code-quality-guardrails.test.ts.
         if (directors.length === 0) return null;
         return (
           <div className="flex items-center gap-2" data-testid="director-filter-toggle">
