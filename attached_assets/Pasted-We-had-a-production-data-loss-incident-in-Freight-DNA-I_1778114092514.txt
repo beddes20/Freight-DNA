@@ -1,0 +1,129 @@
+We had a production data-loss incident in Freight-DNA. I need you to perform a full blast-radius analysis so I know what else broke, what data is missing, and what we need to rebuild.
+
+Important constraints:
+
+Read-only investigation only unless you explicitly ask for approval first.
+
+Do not run PITR, migrations, deletes, updates, or any destructive action.
+
+Do not modify production data.
+
+You may inspect code, schema, logs, queries, and compare dev/prod behavior, but stay read-only.
+
+What I need from you:
+
+1) Inventory the critical data domains
+List every major data area in the app that matters to operations, for example:
+
+companies / accounts
+
+contacts
+
+org charts / reporting relationships
+
+opportunities / top opportunities
+
+notes / next steps / relationship data
+
+activities / timelines
+
+imports / enrichment / sync results
+
+linked records / join tables
+
+user-entered vs system-generated data
+
+For each area, tell me:
+
+the underlying table(s)
+
+the main UI/page(s) that depend on it
+
+whether it appears healthy, partially broken, or likely missing data
+
+2) Find missing or suspicious data patterns
+Using read-only SQL and code inspection, identify:
+
+tables with unexpectedly low row counts
+
+tables with many nulls in important columns
+
+companies that exist with missing child records
+
+orphaned rows (records pointing to missing parents)
+
+relationships that used to power org charts but are now absent
+
+contact/company/opportunity counts that look inconsistent with expected usage
+
+any clear signs of bulk deletion, overwrites, failed imports, or schema drift
+
+3) Compare what the product expects vs what the DB actually has
+For each major feature:
+
+explain what records/fields the code expects
+
+explain whether those records/fields currently exist in prod
+
+flag any features that may silently fail because the required data is gone
+
+4) Trace likely root-cause surfaces
+Review logs, tasks, jobs, automations, imports, and recent code paths that could have touched production data.
+I want a list of likely risk areas such as:
+
+bulk syncs/imports
+
+dedupe jobs
+
+enrichment jobs
+
+org-chart generation logic
+
+background scripts
+
+admin tools
+
+agent-generated scripts
+
+schema changes or backfills
+
+For each one, tell me:
+
+what it does
+
+which tables it touches
+
+whether it could plausibly have caused data loss or unlinking
+
+5) Give me a rebuild plan
+At the end, provide a concise report with:
+
+Confirmed missing data areas
+
+Possibly affected areas that need manual verification
+
+Unaffected areas
+
+Most likely causes
+
+Highest-priority rebuild steps
+
+Guardrails we should add immediately (soft deletes, audit logging, export backups, kill switch, etc.)
+
+6) Output format
+I want the final answer in this structure:
+
+Executive summary
+
+Affected data domains
+
+Suspected blast radius by feature
+
+Likely root-cause surfaces
+
+Immediate rebuild priorities
+
+Hardening recommendations
+
+If you need to run SQL, show me the exact read-only queries you are using or summarize the results clearly. If you hit uncertainty, say so explicitly instead of guessing.
+
