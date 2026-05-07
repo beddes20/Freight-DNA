@@ -1,5 +1,11 @@
 // Phase 1.5 S9 — Top-of-dashboard "Pipeline health" trust strip.
 //
+// Trust contract: this component is one of the trust primitives listed in
+// docs/dashboard-trust-contract.md §2. It is a *pure read* of the three
+// underlying freshness signals — it must never invent trust the underlying
+// primitives don't already expose, and it must preserve the unknown-vs-stale
+// distinction (Section 1500 / Task #1109a).
+//
 // Compact read-only summary of the three trustworthy freshness signals
 // already wired in earlier slices:
 //

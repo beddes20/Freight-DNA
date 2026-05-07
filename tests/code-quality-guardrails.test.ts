@@ -6690,3 +6690,53 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     );
   }
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1503 — Dashboard Trust Contract discoverability
+//
+// docs/dashboard-trust-contract.md is the single onboarding document a future
+// engineer or agent should open to understand which dashboard surfaces are
+// freshness-aware, which are intentionally opted out, the trust primitives
+// (decidePortletState / PortletStateBanner / AsOfLabel / PipelineHealthStrip),
+// the unknown-vs-stale invariant, and the opt-out sentinel rule.
+//
+// This section is intentionally tiny — its only job is to keep the doc
+// discoverable from the two places a future maintainer is most likely to
+// touch when modifying a trust surface (the merged-multi-query opt-out file
+// and the trust strip itself), and to fail loudly if the doc is renamed
+// without updating those references.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1503: Dashboard Trust Contract discoverability ──────────\n");
+
+  const DOC_PATH = "docs/dashboard-trust-contract.md";
+  const DOC_SRC = readFile(DOC_PATH);
+
+  assert(
+    `Section 1503 — ${DOC_PATH} exists and is non-trivial`,
+    DOC_SRC.length > 1000,
+    `The Dashboard Trust Contract doc at ${DOC_PATH} must exist and be substantive (>1KB). It's the single onboarding document for dashboard trust rules — if you're removing it, also remove this section and update any source-adjacent references.`,
+  );
+  assert(
+    `Section 1503 — ${DOC_PATH} documents the unknown-vs-stale invariant`,
+    /unknown[\s\S]{0,120}never[\s\S]{0,40}stale/i.test(DOC_SRC),
+    `${DOC_PATH} must explicitly document that "unknown must never be presented as stale" — this is the inviolable Section 1500 / Task #1109a invariant.`,
+  );
+  assert(
+    `Section 1503 — ${DOC_PATH} references the dashboard-portlet-no-freshness opt-out sentinel`,
+    /dashboard-portlet-no-freshness/.test(DOC_SRC),
+    `${DOC_PATH} must explain the \`// dashboard-portlet-no-freshness:\` opt-out sentinel — it's the contract for non-freshness-aware portlets.`,
+  );
+
+  for (const refFile of [
+    "client/src/pages/dashboard/Phase2Portlets.tsx",
+    "client/src/components/dashboard/PipelineHealthStrip.tsx",
+  ]) {
+    const src = readFile(refFile);
+    assert(
+      `Section 1503 — ${refFile} references docs/dashboard-trust-contract.md`,
+      /docs\/dashboard-trust-contract\.md/.test(src),
+      `${refFile} must include a comment pointing maintainers to docs/dashboard-trust-contract.md. If you've renamed the doc, update the reference here AND in Section 1503's path constant.`,
+    );
+  }
+})();

@@ -1,0 +1,188 @@
+Diagnosis: Great — you’ve now closed the main honesty gaps on the Dashboard tab. The next useful step is not another behavior tweak; it’s a small documentation / contract slice so future threads and future agents don’t have to rediscover what is intentionally freshness-aware, what is intentionally opt-out, and what role gates apply.
+
+Here’s the next copy-and-paste Replit prompt.
+
+Freight-DNA — Dashboard Trust Hardening — Documented Trust Surface Contract
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Dashboard trust work completed:
+
+sync alert visible to all relevant roles
+
+Award Health / Coverage Gaps freshness UI
+
+NBA freshness UI
+
+Trending / Margin as-of labels
+
+Pipeline Health Strip
+
+hardening guardrails (Section 1500)
+
+empty-state clarity for Today’s Five + Cold Contacts
+
+AccountsDrifting degraded-input indicator
+
+The dashboard is now materially more honest, but the logic is spread across several files:
+
+freshness-aware portlets
+
+intentional opt-outs
+
+role gates
+
+top-of-page summary strip
+
+The next risk is future drift: someone changes a dashboard surface later and doesn’t know the trust rules.
+
+Goal:
+Create a small, explicit, developer-facing Dashboard Trust Contract so future work can build on the current logic without re-deriving it from scratch.
+
+Guardrails:
+
+Documentation + non-behavioral annotations only.
+
+No schema changes.
+
+No server changes unless purely comment-level.
+
+No UI behavior changes.
+
+No scheduler changes.
+
+Keep this slice lightweight and practical.
+
+Scope:
+
+In scope:
+
+a compact doc or source-adjacent contract note
+
+comments where necessary to anchor the rules near the code
+
+optional tests if a very small contract pin improves safety
+
+Out of scope:
+
+any new feature work
+
+any visual changes
+
+any new endpoint fields
+
+Tasks:
+
+Create a concise Dashboard Trust Contract document
+
+Add a short developer-facing document, for example:
+
+docs/dashboard-trust-contract.md
+
+or a similarly appropriate path if the repo has an established docs pattern
+
+The doc should cover:
+
+which dashboard surfaces currently carry freshness / trust signals
+
+which ones intentionally do not
+
+the core trust primitives:
+
+PortletFreshness
+
+decidePortletState
+
+PortletStateBanner
+
+AsOfLabel
+
+PipelineHealthStrip
+
+the rule:
+
+unknown must never be presented as stale / amber
+
+the rule:
+
+intentional silent/structural empties require // allow: <reason>
+
+the rule:
+
+dashboard portlets without freshness handling need a documented opt-out
+
+the current role-gate model for trust surfaces
+
+Include a current surface inventory
+
+Add a compact table or bullet matrix listing:
+
+surface
+
+trust signal type
+
+freshness source or reason for opt-out
+
+Include at least:
+
+Sync Alert
+
+Award Health
+
+Coverage Gaps
+
+NBA
+
+Trending Accounts
+
+Margin Metrics
+
+Pipeline Health Strip
+
+Today’s Five
+
+Cold Contacts
+
+AccountsDriftingPortlet
+
+For opt-out surfaces, explain briefly why they are intentionally not freshness-driven today.
+
+Add source-adjacent comments only where valuable
+
+If helpful, add one or two short comments in the most central files to point maintainers to the contract doc, for example:
+
+client/src/components/dashboard/PipelineHealthStrip.tsx
+
+tests/code-quality-guardrails.test.ts
+
+Keep comments minimal and durable.
+
+Do not add noisy comments everywhere.
+
+Optional small contract pin
+
+If there is a low-noise way to add one tiny test pin ensuring the doc path or trust contract reference remains discoverable, do it.
+
+If not, skip tests — documentation quality matters more than inventing brittle checks here.
+
+Output format:
+A. Short diagnosis
+B. Exact files changed
+C. What the trust contract now documents
+D. Any tests run and results
+E. Risks / reasons not to merge
+
+Important:
+
+Keep this practical. This is not a whitepaper.
+
+Write it so a future agent or engineer can open one file and understand:
+
+what is already trust-hardened,
+
+what is intentionally out of scope,
+
+and what patterns must be preserved.
+
