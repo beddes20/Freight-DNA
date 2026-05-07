@@ -1,0 +1,236 @@
+Diagnosis: The transport layer is now in good shape, and the next highest-value move is finally the first user-visible trust improvement: make Award Health and Coverage Gaps show “degraded” vs “unknown” instead of silently disappearing when their data source is unhealthy.
+
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — User-Visible Freshness UI for Award Health + Coverage Gaps
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+The load-fact freshness transport slice is already in place for:
+
+GET /api/dashboard/award-health
+
+GET /api/dashboard/coverage-gaps
+
+Those endpoints now return:
+
+{ awards, freshness }
+
+{ gaps, freshness }
+
+The client portlets already safely normalize both legacy array and new object response shapes.
+
+Read-only verification is complete:
+
+typecheck green
+
+guardrails green
+
+helper is defensive
+
+route wrapper is defensive
+
+prod is expected to have cron_heartbeats
+
+Right now, there is still no visible trust signal:
+
+if the list is empty, the portlet still disappears
+
+users cannot tell “nothing here today” from “data source degraded”
+
+Goal:
+Make Award Health and Coverage Gaps visibly trustworthy by rendering:
+
+a degraded state when freshness.status === "stale"
+
+a neutral unknown state when freshness.status === "unknown"
+
+the current hide-on-empty behavior only when freshness.status === "ok" and the result set is truly empty
+
+Guardrails:
+
+No schema changes.
+
+No scheduler changes.
+
+No changes to ranking, scoring, filters, fuzzy matching, or financial math.
+
+No edits to aliasFallbackName, resolveCompany, or normN.
+
+Keep the scope to Award Health + Coverage Gaps only.
+
+Prefer a small shared component over duplicated conditional JSX.
+
+Do not widen this into a broader dashboard redesign.
+
+Scope:
+
+In scope:
+
+client/src/pages/dashboard/AwardHealthPortlet.tsx
+
+client/src/pages/dashboard/CoverageGapsPortlet.tsx
+
+client/src/components/dashboard/PortletStateBanner.tsx (new shared component if needed)
+
+tests covering stale / unknown / empty-ok behavior for these two portlets
+
+Out of scope:
+
+NBA, Trending, Margin, Drifting, Relationship Advancement
+
+any server endpoint changes unless absolutely required
+
+any feature-flag system unless clearly needed for rollback
+
+Tasks:
+
+Read-only confirmation before editing
+
+Reconfirm the current normalized data access in:
+
+AwardHealthPortlet.tsx
+
+CoverageGapsPortlet.tsx
+
+Reconfirm the current empty behavior:
+
+if (awards.length === 0) return null
+
+if (gaps.length === 0) return null
+
+Reconfirm the freshness shape being consumed from the query result.
+
+Add a small shared state component
+
+Create:
+
+client/src/components/dashboard/PortletStateBanner.tsx
+
+Keep it small and practical.
+
+Props should support:
+
+state: "degraded" | "unknown"
+
+title: string
+
+body: string
+
+optional timestamp/source display from freshness
+
+Visual intent:
+
+degraded = amber / warning treatment
+
+unknown = neutral grey / informational treatment
+
+Keep copy concise and operational, not cute.
+
+Update Award Health portlet behavior
+
+File:
+
+client/src/pages/dashboard/AwardHealthPortlet.tsx
+
+New logic:
+
+If freshness?.status === "stale" and awards.length === 0:
+
+render degraded banner instead of returning null
+
+If freshness?.status === "unknown" and awards.length === 0:
+
+render neutral “freshness unavailable” banner instead of returning null
+
+If freshness?.status === "ok" and awards.length === 0:
+
+keep current return null
+
+If awards.length > 0:
+
+render existing portlet content unchanged
+
+Copy:
+
+degraded title: Award health may be stale
+
+degraded body: No stalled awards are showing, but the latest freight-data refresh looks unhealthy.
+
+unknown title: Award freshness unavailable
+
+unknown body: No stalled awards are showing, but dashboard freshness could not be verified.
+
+Update Coverage Gaps portlet behavior
+
+File:
+
+client/src/pages/dashboard/CoverageGapsPortlet.tsx
+
+New logic:
+
+If freshness?.status === "stale" and gaps.length === 0:
+
+render degraded banner instead of returning null
+
+If freshness?.status === "unknown" and gaps.length === 0:
+
+render neutral banner instead of returning null
+
+If freshness?.status === "ok" and gaps.length === 0:
+
+keep current return null
+
+If gaps.length > 0:
+
+render existing portlet content unchanged
+
+Copy:
+
+degraded title: Coverage data may be stale
+
+degraded body: No gaps are showing, but the latest freight-data refresh looks unhealthy.
+
+unknown title: Coverage freshness unavailable
+
+unknown body: No gaps are showing, but dashboard freshness could not be verified.
+
+Timestamp / source display
+
+If easy and already available in the normalized query result, show a small footer line in the banner:
+
+Last refresh: <relative or absolute timestamp>
+
+Only show it when freshness.lastUpdatedAt exists.
+
+Do not add heavy date formatting dependencies.
+
+Tests
+
+Add/extend tests for these two portlets:
+
+stale + empty → banner renders
+
+unknown + empty → neutral banner renders
+
+ok + empty → portlet stays hidden
+
+non-empty + any freshness → normal content renders
+
+Keep tests focused on behavior, not visual styling.
+
+Output format
+Please respond with:
+A. Short diagnosis
+B. Exact files changed
+C. Behavior changes
+D. Tests run and results
+E. Risks / reasons not to republish yet
+
+Important:
+
+Keep this slice small and UI-only.
+
+Do not touch any server route in this task unless you discover a real client-blocking issue.
+
+If you find a blocker, stop and report before widening scope.

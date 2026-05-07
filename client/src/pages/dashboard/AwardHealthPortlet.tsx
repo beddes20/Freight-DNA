@@ -3,6 +3,9 @@ import { Trophy, AlertTriangle, Clock, TruckIcon, HelpCircle } from "lucide-reac
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useLocation } from "wouter";
+import type { PortletFreshness } from "@shared/schema";
+import { decidePortletState } from "@/lib/portletState";
+import { PortletStateBanner } from "@/components/dashboard/PortletStateBanner";
 
 interface AwardHealthRow {
   awardId: string;
@@ -28,14 +31,14 @@ export function AwardHealthPortlet() {
 
   // Phase 1.5 S2: tolerate BOTH the legacy bare-array response and the new
   // { awards, freshness } object shape so the server can ship the wrap
-  // independently and roll back without breaking this portlet. The freshness
-  // field is intentionally not consumed yet — the UX banner lands in S6.
+  // independently and roll back without breaking this portlet.
   const { data, isLoading } = useQuery<
-    AwardHealthRow[] | { awards: AwardHealthRow[]; freshness: unknown }
+    AwardHealthRow[] | { awards: AwardHealthRow[]; freshness: PortletFreshness | null }
   >({
     queryKey: ["/api/dashboard/award-health"],
   });
   const awards: AwardHealthRow[] = Array.isArray(data) ? data : (data?.awards ?? []);
+  const freshness: PortletFreshness | null = Array.isArray(data) ? null : (data?.freshness ?? null);
 
   if (isLoading) {
     return (
@@ -57,7 +60,35 @@ export function AwardHealthPortlet() {
     );
   }
 
-  if (awards.length === 0) return null;
+  // Phase 1.5 S6: when the list is empty, decide whether to hide entirely
+  // (upstream healthy → genuinely nothing to show) or surface a banner so
+  // reps can tell "nothing today" from "data source unhealthy / unknown".
+  const portletState = decidePortletState(awards.length, freshness);
+  if (portletState === "hidden") return null;
+  if (portletState === "stale") {
+    return (
+      <PortletStateBanner
+        state="stale"
+        title="Award health may be stale"
+        body="No stalled awards are showing, but the latest freight-data refresh looks unhealthy."
+        lastUpdatedAt={freshness?.lastUpdatedAt ?? null}
+        source={freshness?.source ?? null}
+        testIdPrefix="award-health"
+      />
+    );
+  }
+  if (portletState === "unknown") {
+    return (
+      <PortletStateBanner
+        state="unknown"
+        title="Award freshness unavailable"
+        body="No stalled awards are showing, but dashboard freshness could not be verified."
+        lastUpdatedAt={freshness?.lastUpdatedAt ?? null}
+        source={freshness?.source ?? null}
+        testIdPrefix="award-health"
+      />
+    );
+  }
 
   const handleClick = (companyId: string) => {
     localStorage.setItem("cd_tab", "rfp");

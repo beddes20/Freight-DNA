@@ -3,6 +3,9 @@ import { Building2, MapPin, TrendingUp, AlertTriangle, Layers } from "lucide-rea
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useLocation } from "wouter";
+import type { PortletFreshness } from "@shared/schema";
+import { decidePortletState } from "@/lib/portletState";
+import { PortletStateBanner } from "@/components/dashboard/PortletStateBanner";
 
 interface GapRow {
   companyId: string;
@@ -25,14 +28,14 @@ export function CoverageGapsPortlet() {
 
   // Phase 1.5 S2: tolerate BOTH the legacy bare-array response and the new
   // { gaps, freshness } object shape so the server can ship the wrap
-  // independently and roll back without breaking this portlet. The freshness
-  // field is intentionally not consumed yet — the UX banner lands in S6.
+  // independently and roll back without breaking this portlet.
   const { data, isLoading } = useQuery<
-    GapRow[] | { gaps: GapRow[]; freshness: unknown }
+    GapRow[] | { gaps: GapRow[]; freshness: PortletFreshness | null }
   >({
     queryKey: ["/api/dashboard/coverage-gaps"],
   });
   const gaps: GapRow[] = Array.isArray(data) ? data : (data?.gaps ?? []);
+  const freshness: PortletFreshness | null = Array.isArray(data) ? null : (data?.freshness ?? null);
 
   if (isLoading) {
     return (
@@ -54,7 +57,35 @@ export function CoverageGapsPortlet() {
     );
   }
 
-  if (gaps.length === 0) return null;
+  // Phase 1.5 S6: when the list is empty, surface a banner if upstream is
+  // unhealthy / unverifiable so reps don't mistake silent absence for
+  // "nothing to do today". Healthy + empty still hides as before.
+  const portletState = decidePortletState(gaps.length, freshness);
+  if (portletState === "hidden") return null;
+  if (portletState === "stale") {
+    return (
+      <PortletStateBanner
+        state="stale"
+        title="Coverage data may be stale"
+        body="No gaps are showing, but the latest freight-data refresh looks unhealthy."
+        lastUpdatedAt={freshness?.lastUpdatedAt ?? null}
+        source={freshness?.source ?? null}
+        testIdPrefix="coverage-gaps"
+      />
+    );
+  }
+  if (portletState === "unknown") {
+    return (
+      <PortletStateBanner
+        state="unknown"
+        title="Coverage freshness unavailable"
+        body="No gaps are showing, but dashboard freshness could not be verified."
+        lastUpdatedAt={freshness?.lastUpdatedAt ?? null}
+        source={freshness?.source ?? null}
+        testIdPrefix="coverage-gaps"
+      />
+    );
+  }
 
   const handleClick = (companyId: string) => {
     localStorage.setItem("cd_tab", "rfp");

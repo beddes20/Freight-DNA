@@ -1,0 +1,274 @@
+Diagnosis
+The prior audit shows that the User Management tab is both overloaded (identity + RBAC + imports + demo tooling + integrations + billing) and missing basic safety patterns (no soft-delete, no demo/fixture flags, hard deletes, noisy roster). You now need a user-focused cleanup plan similar to the customers/companies plan so we can systematically classify junk vs real users, quarantine the bad ones, and harden the workflows.
+
+What is trustworthy vs not trustworthy
+Trustworthy: The existing audit’s identification of users as hard-deleted, fixture/demo/test contamination risks, and the presence of risky flows (bulk import, seed-demo, impersonation).
+Not trustworthy: Any assumption that “no activity” users or weird emails are safe to delete; and any assumption that all admins see the same version of the tab, since role-based scoping and impersonation may change what appears.
+
+Files / tables / jobs / routes involved
+Based on the earlier audit summary, the cleanup plan will touch at least:
+
+users table (plus columns we add for flags and soft-delete)
+
+Backend: user CRUD routes (GET/POST/PATCH/DELETE /api/users), bulk import routes (/api/users/bulk-import), impersonation, seed/demo scripts that create users, and any financial mapping that relies on users.financialRepId.
+
+Frontend: User Management page, any shared user-picker components, org-chart renderers, and any “login as” UI.
+
+Jobs: any analytics or financial jobs that rely on users.id, role, managerId, financialRepId (for attribution and leaderboards).
+
+Recommended plan in small steps (what you asked for)
+
+Here’s the user-specific cleanup plan, in the same style as your customers/companies version:
+
+text
+TASK: Design and sequence a cleanup plan for false / polluted users.
+
+Focus on:
+- test/demo/fixture users
+- malformed or junk users
+- users with no real activity
+- users with weird or placeholder emails (example/test/demo)
+- role pollution and service / shared-inbox accounts
+
+I need:
+- clear classification buckets (junk, demo/fixture, service/shared, real-but-inactive, real-and-active, uncertain)
+- fields / flags we should add or use (e.g., is_demo, is_fixture, is_service_account, is_quarantined, deleted_at, delete_reason)
+- the quarantine → review → merge → archive / deactivate workflow
+- logic that decides whether a user should appear in the main User Management list vs be hidden or in a separate “System/Service” section
+- exact files / tables / routes to touch
+- the safest first implementation step
+a) Classification buckets (for users)
+We should standardize on at least these user buckets:
+
+Junk users
+
+Obvious garbage: foo@test.com, user+test@…, asdf@example.com, placeholders created during early dev or experiments.
+
+No real activity (no notes, assignments, touches, deals, freight, meetings).
+
+Safe long-term state: quarantined or hard-removed after dependency check and archive.
+
+Demo / fixture users
+
+Seeded by demo scripts (seed-demo-org, seed-directors, seed-jbs-*).
+
+May own demo deals, contacts, freight, meetings in demo orgs.
+
+Safe long-term state: clearly labeled demo, isolated by org, never mixed into real org roster or analytics.
+
+Service / shared-inbox accounts
+
+Mailboxes like rfq@, tenders@, inbox+team@, integrations service users.
+
+May legitimately own emails or carry integration tokens, but should not show as reps or count toward headcount.
+
+Safe long-term state: flagged as service accounts, isolated in their own section or filtered from default views.
+
+Real-and-active users
+
+True employees or contractors actively using the system (recent login, active assignments, owned accounts, freight touches, meetings).
+
+These form the “trusted roster.”
+
+Real-but-inactive users
+
+Former employees, decommissioned reps, or users with past but not current activity (no recent login, no current assignments).
+
+Safe long-term state: soft-deactivated (cannot log in, cannot own new work, but history preserved).
+
+Uncertain users
+
+Edge cases where email/domain looks real but patterns resemble demo/test, or where there is light activity that could be demo.
+
+These should go into a review queue rather than being auto-treated as junk or real.
+
+b) Fields / flags to add or use
+We should extend the users model and related logic with:
+
+Row state / lifecycle
+
+deleted_at, deleted_by, delete_reason (for soft-delete / archive)
+
+is_active (derived or stored; if stored, set to false when deactivated)
+
+User type / purpose
+
+is_demo
+
+is_fixture (old seeds / legacy fixture users)
+
+is_service_account (shared inbox, integration user, background jobs)
+
+Optional: user_source enum (manual, bulk_import, seed_script, clerk_sync, sso, system)
+
+Quarantine / review
+
+is_quarantined (hidden from normal rosters, still visible to admin review)
+
+quarantine_reason (e.g., junk_email_pattern, seed_script, no_activity, role_mismatch)
+
+quarantined_at, quarantined_by
+
+Audit / provenance
+
+created_by, created_at (if not already explicit)
+
+last_activity_at (computed from downstream tables or periodically denormalized)
+
+c) Quarantine → review → merge → archive / deactivate workflow
+For users, we usually do not merge identities (that is more common with contacts/companies), but we may need to merge roles or transfer ownership. The lifecycle should look like:
+
+Quarantine detection (no writes to users yet)
+
+Offline job or one-off query identifies candidate junk/demo/service users based on email patterns, domains, creation source, seed scripts, and zero-activity checks.
+
+Mark them in a “User Roster Health” report (read-only) so admins can see the impact.
+
+Flagging (non-destructive)
+
+Add/update user flags: is_demo, is_service_account, is_quarantined, is_active=false where appropriate.
+
+For uncertain cases, apply is_quarantined=true and route them to an admin review queue inside User Management.
+
+Admin review UI
+
+In User Management, add a “Review queue” section/toggle that shows only users with is_quarantined=true or is_demo/is_fixture without a known demo org.
+
+For each row, allow admins to:
+
+Mark as Real user → clear quarantine flags, set is_active=true.
+
+Mark as Demo / fixture → set flags; optionally move to a demo org or ensure they’re restricted to demo-only data.
+
+Mark as Service account → set is_service_account=true and remove them from standard rep-facing rosters.
+
+Mark as Junk → move to “ready-to-deactivate” list.
+
+Deactivation / archive (soft-delete, not hard delete)
+
+For junk or ex-employees:
+
+Set is_active=false, deleted_at, deleted_by, delete_reason.
+
+Remove ability to log in and to be assigned new work (ownership, leads, lanes, etc.).
+
+Keep history intact for audit (notes, freight, deals).
+
+Ownership reassignment (if needed)
+
+Provide bulk actions to reassign owned entities (accounts, opportunities, lanes) from a user being deactivated to a new owner before deactivation.
+
+Only after reassignment and soft-deactivation should we consider hard delete—and even then, preferably never for real users.
+
+Merge (rare)
+
+If someone managed to create a duplicate user identity (same person, two accounts), support:
+
+Reassign all downstream references from source → target user.
+
+Soft-delete source user with reason merged_into:<target_id>.
+
+This should be a separate admin-only tool, not part of routine cleanup.
+
+d) Logic: which users appear in the main User Management list
+Define clear rules for what shows by default on the User Management page:
+
+Included in main list (default view):
+
+is_active=true
+
+is_quarantined=false
+
+is_demo=false
+
+is_service_account=false
+
+Excluded from main list, but available via filters/tabs:
+
+Demo users → appear under a “Demo/Fixture users” filter/tab.
+
+Service accounts → appear under a “System/Service accounts” filter/tab.
+
+Quarantined users → appear only under “Review queue.”
+
+Archived/deactivated users (soft-deleted) → appear only when “Show archived” is toggled, with a clear “Deactivated” label and disabled actions.
+
+This preserves trust: when a leader opens User Management in normal mode, they see only real, active humans they expect to manage.
+
+e) Exact files / tables / routes to touch (high level)
+You’ll refine this after inspecting your real repo, but conceptually:
+
+Tables / schema
+
+users table: add flags and lifecycle columns (is_active, is_demo, is_fixture, is_service_account, is_quarantined, quarantine_reason, deleted_at, deleted_by, delete_reason, optional user_source).
+
+Any analytics/materialized views that summarize users or their activity may need to be aware of is_active and demo/service flags.
+
+Backend routes
+
+GET /api/users
+
+Add filters to default to active, non-quarantined, non-demo, non-service accounts.
+
+Add explicit query parameters to fetch demo=true, service=true, archived=true, quarantined=true.
+
+POST /api/users and PATCH /api/users/:id
+
+Enforce constraints: you can’t create demo/service users without flags, you can’t clear flags without permission, etc.
+
+DELETE /api/users/:id
+
+Replace hard delete with soft-delete behavior that sets deleted_at, is_active=false, etc., and logs the action.
+
+Bulk import routes (/api/users/bulk-import)
+
+Add support for user_source=bulk_import, optional demo/service flags, and more robust validation (email patterns, role mapping).
+
+Admin-only tooling: impersonation, seed-demo, any script endpoints that create users
+
+Ensure they set is_demo, is_fixture, or is_service_account appropriately and are gated by env/org.
+
+Frontend
+
+User Management page (User list + review queue + filters/tabs for demo/service/archived).
+
+User detail panel: show type flags and lifecycle state clearly (Active / Demo / Service / Archived / Quarantined).
+
+Bulk import UI: show a preview/dry-run and clearly indicate source and flags before committing.
+
+Jobs / background processes
+
+Any job that calculates headcount, performance, utilization, or similar should filter out demo/service/quarantined users and optionally filter out archived users.
+
+f) Safest first implementation step
+Your safest first step in Replit should be purely read-only, no schema changes, no writes:
+
+Add or run audit queries that classify users into these buckets using existing data only:
+
+Email patterns (%example%, %test%, %demo%, temp domains).
+
+Creation source (if you have it), or script-based provenance (users created by seed/demo scripts).
+
+Activity metrics: number of owned entities, last login, last activity from downstream tables.
+
+Deliverables from that step:
+
+A User Roster Health report (even just in a console query or temporary admin-only view) listing:
+
+Counts by bucket (likely junk, likely demo/fixture, likely service, real-and-active, real-but-inactive, uncertain).
+
+Example rows for each bucket.
+
+Only after you see the distribution do we design the exact flags and UI, because we want to avoid overfitting the schema to assumptions that don’t match your actual data.
+
+Risks / dependencies
+
+Changing user visibility and flags will affect org charts, RBAC, financial attribution, team performance, and any “active user” metrics, so we must treat this as cross-tab work even if the UI entry point is User Management.
+
+Mislabeling demo or service users as real (or vice versa) can either pollute reporting or cut off important system behavior (e.g., shared inbox processing), so the review queue and clear labeling are critical.
+
+Safe first action
+Define and run read-only classification queries to produce a User Roster Health snapshot, then share that output (or a redacted version) so we can refine the schema/flags and workflow without touching production data yet.
+
+What should not be republished yet
+Do not republish new “active user counts,” “team sizes,” or any user-based KPI while this cleanup is in flight. Also avoid adding or exposing any delete/deactivate buttons or new filters in the UI until we have the flags and lifecycle model agreed and tested in a non-destructive way.
