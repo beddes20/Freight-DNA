@@ -1114,6 +1114,69 @@ export async function runMigrations() {
     await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lever text`);
     await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at text`);
     await clientTaskExpand.query(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS description text`);
+
+    // Migration 0018 — converge tasks.opportunity_id FK to canonical Drizzle
+    // name + shape, regardless of pre-existing drift. Mirrors
+    // `migrations/0018_tasks_opportunity_fk_idempotent.sql` so prod boot
+    // applies it even if Replit's deploy-time schema-sync skips that file.
+    // Idempotent: drops any FK on tasks(opportunity_id)->crm_opportunities(id)
+    // by shape (not just name), then re-adds canonical FK NOT VALID so
+    // pre-existing orphan rows can't fail the deploy.
+    await clientTaskExpand.query(`
+      DO $$
+      DECLARE
+        fk_record RECORD;
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'tasks'
+            AND column_name = 'opportunity_id'
+        ) THEN
+          RETURN;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.tables
+          WHERE table_schema = 'public'
+            AND table_name = 'crm_opportunities'
+        ) THEN
+          RETURN;
+        END IF;
+
+        FOR fk_record IN
+          SELECT c.conname
+          FROM pg_constraint c
+          JOIN pg_class t       ON c.conrelid  = t.oid AND t.relname = 'tasks'
+          JOIN pg_namespace tn  ON t.relnamespace = tn.oid AND tn.nspname = 'public'
+          JOIN pg_class rt      ON c.confrelid = rt.oid AND rt.relname = 'crm_opportunities'
+          JOIN pg_namespace rtn ON rt.relnamespace = rtn.oid AND rtn.nspname = 'public'
+          WHERE c.contype = 'f'
+            AND c.conkey = (
+              SELECT ARRAY[a.attnum]::smallint[]
+              FROM pg_attribute a
+              WHERE a.attrelid = t.oid AND a.attname = 'opportunity_id'
+            )
+        LOOP
+          EXECUTE format('ALTER TABLE tasks DROP CONSTRAINT %I', fk_record.conname);
+        END LOOP;
+
+        EXECUTE 'ALTER TABLE tasks
+          ADD CONSTRAINT tasks_opportunity_id_crm_opportunities_id_fk
+          FOREIGN KEY (opportunity_id)
+          REFERENCES crm_opportunities(id)
+          ON DELETE SET NULL
+          NOT VALID';
+
+        BEGIN
+          EXECUTE 'ALTER TABLE tasks VALIDATE CONSTRAINT tasks_opportunity_id_crm_opportunities_id_fk';
+        EXCEPTION
+          WHEN foreign_key_violation THEN
+            RAISE NOTICE '[migrations] 0018: orphan tasks.opportunity_id values present — FK left NOT VALID';
+        END;
+      END $$;
+    `);
+
     console.log("[migrations] tasks expansion columns ensured");
   } catch (err) {
     console.error("[migrations] tasks expansion error:", err);

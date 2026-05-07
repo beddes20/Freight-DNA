@@ -29,6 +29,13 @@
       "when": 1744487999000,
       "tag": "0004_email_signal_consumers",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1778198400000,
+      "tag": "0018_tasks_opportunity_fk_idempotent",
+      "breakpoints": true
     }
   ]
 }
