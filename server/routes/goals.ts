@@ -42,14 +42,31 @@ export function registerGoalRoutes(app: Express): void {
       const uploads = await storage.getFinancialUploadsForOrg(req.session.organizationId!);
       const latestUpload = uploads.length ? uploads[uploads.length - 1] : null;
 
+      // Task #1108 — trust-state classification for auto-tracked goals.
+      // Derived purely from data already loaded above (allUsers + latestUpload);
+      // the compute path itself is unchanged. Allowed values:
+      //   "ok"          — value is computed from real source data (or DB count)
+      //   "true_zero"   — financial metric: rep is mapped + matches rows in the
+      //                   upload, but had zero activity in this goal's month
+      //   "no_data"     — financial metric: no upload exists yet for the org
+      //   "unmapped_rep"— financial metric: user has no financial_rep_id, OR
+      //                   the rep key doesn't match any row in the latest upload
+      //   "unknown"     — non-auto metrics or anything we can't classify safely
+      const FIN_METRICS = new Set(["margin", "loads_booked", "margin_pct"]);
+
       const enriched = await Promise.all(goalsList.map(async (goal) => {
         let computedValue: number | null = null;
+        let autoTrackingState: "ok" | "true_zero" | "no_data" | "unmapped_rep" | "unknown" = "unknown";
+        let autoTrackingReason: string | null = null;
         if (goal.metric === "contacts_added") {
           computedValue = await storage.getContactsAddedByAm(goal.amId, goal.startDate, goal.endDate);
+          autoTrackingState = "ok";
         } else if (goal.metric === "touchpoints") {
           computedValue = await storage.getTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+          autoTrackingState = "ok";
         } else if (goal.metric === "meaningful_touchpoints") {
           computedValue = await storage.getMeaningfulTouchpointCountByAm(goal.amId, goal.startDate, goal.endDate);
+          autoTrackingState = "ok";
         } else if (goal.metric === "margin" && latestUpload) {
           const amUser = allUsers.find(u => u.id === goal.amId);
           const repKey = amUser ? amUser.financialRepId as string | null : null;
@@ -109,7 +126,58 @@ export function registerGoalRoutes(app: Express): void {
             else computedValue = totalCharges > 0 ? Math.round((totalMargin / totalCharges) * 1000) / 10 : 0;
           }
         }
-        return { ...goal, computedValue };
+
+        // Task #1108 — derive autoTrackingState for financial metrics.
+        // Read-only: uses the same allUsers + latestUpload data already loaded
+        // above. Does NOT change computedValue, rep matching, or any writes.
+        if (FIN_METRICS.has(goal.metric)) {
+          if (!latestUpload) {
+            autoTrackingState = "no_data";
+            autoTrackingReason = "No financial upload exists yet for this organization.";
+          } else {
+            const amUser = allUsers.find(u => u.id === goal.amId);
+            const repKey = amUser ? (amUser.financialRepId as string | null) : null;
+            if (!repKey) {
+              autoTrackingState = "unmapped_rep";
+              autoTrackingReason = "This user has no financial rep key mapped, so the upload can't be attributed to them.";
+            } else {
+              // Did any row in the latest upload match this rep, regardless of
+              // the goal's month? If yes and goal-period value is 0, that's a
+              // legitimate "true_zero" for the period. If not, the rep key
+              // didn't match at all → effectively unmapped (likely name drift).
+              const isLM = amUser?.role === "logistics_manager" || amUser?.role === "logistics_coordinator";
+              const txRows: any[] = (latestUpload.rows as any[]) || [];
+              const stateCols = resolveColumns(txRows);
+              const repKeyLower = repKey.toLowerCase();
+              let repAppearsAnywhere = false;
+              for (const row of txRows) {
+                if (isExcludedRow(row, stateCols)) continue;
+                const repInRow = isLM
+                  ? getDispatcherFromRow(row, stateCols).toLowerCase()
+                  : getRepFromRow(row, stateCols);
+                if (repInRow === repKeyLower) { repAppearsAnywhere = true; break; }
+              }
+              const valueForState = computedValue ?? 0;
+              if (valueForState > 0) {
+                autoTrackingState = "ok";
+              } else if (repAppearsAnywhere) {
+                autoTrackingState = "true_zero";
+                autoTrackingReason = "Rep is mapped and matches rows in the upload, but had no activity in this goal's period.";
+              } else {
+                autoTrackingState = "unmapped_rep";
+                autoTrackingReason = "Rep key didn't match any rows in the latest upload — the name in the upload may have drifted.";
+              }
+            }
+          }
+        }
+
+        return {
+          ...goal,
+          computedValue,
+          lastFinancialUploadAt: latestUpload?.uploadedAt ?? null,
+          autoTrackingState,
+          autoTrackingReason,
+        };
       }));
 
       res.json(enriched);

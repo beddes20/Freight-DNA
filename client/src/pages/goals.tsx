@@ -23,6 +23,29 @@ import {
 import { useConfetti } from "@/components/confetti";
 import type { Goal, GoalComment } from "@shared/schema";
 
+// Task #1107 / #1108 — read-only fields appended by GET /api/goals (server
+// enrichment). Not persisted; do not write to these.
+type AutoTrackingState = "ok" | "true_zero" | "no_data" | "unmapped_rep" | "unknown";
+type GoalWithMeta = Goal & {
+  lastFinancialUploadAt?: string | null;
+  autoTrackingState?: AutoTrackingState;
+  autoTrackingReason?: string | null;
+};
+
+function isValidIsoDateLike(s: string | null | undefined): boolean {
+  if (!s || typeof s !== "string") return false;
+  const d = new Date(s);
+  return !isNaN(d.getTime());
+}
+
+function fmtShortDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  } catch { return iso; }
+}
+
 const METRICS = [
   { value: "custom",                label: "Custom",                              icon: Sliders,     color: "bg-orange-500",  unit: "units" },
   { value: "load_count",            label: "Load Count",                          icon: Truck,       color: "bg-green-500",   unit: "loads" },
@@ -62,7 +85,7 @@ function fmtDate(iso: string) {
 }
 
 interface GoalCardProps {
-  goal: Goal;
+  goal: GoalWithMeta;
   currentUserId: string;
   userRole: string;
   allUsers: Array<{ id: string; name: string; role?: string }>;
@@ -123,16 +146,24 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
     : current;
   const displayPct = progressPct(displayCurrent, target);
 
-  // Pace indicator
+  // Pace indicator — Task #1107: never silently fall back to 365-day total
+  // when start/end dates are absent or unparseable. Show an explicit
+  // "Date range not set" pill instead of a misleading "On pace" badge.
   const today = new Date();
-  const goalStart = new Date(goal.startDate);
-  const goalEnd = goal.endDate ? new Date(goal.endDate) : null;
-  const totalDays = goalEnd ? Math.max(1, (goalEnd.getTime() - goalStart.getTime()) / 86400000) : 365;
-  const daysPassed = Math.max(0, Math.min(totalDays, (today.getTime() - goalStart.getTime()) / 86400000));
-  const expectedPct = Math.min(100, Math.round((daysPassed / totalDays) * 100));
+  const hasValidStart = isValidIsoDateLike(goal.startDate);
+  const hasValidEnd = isValidIsoDateLike(goal.endDate);
+  const goalStart = hasValidStart ? new Date(goal.startDate) : null;
+  const goalEnd = hasValidEnd ? new Date(goal.endDate as string) : null;
+  // Malformed range = parses but end is before start. Treat the same as a
+  // missing range so we never render a misleading "On pace" badge.
+  const hasChronologicalOrder = !!(goalStart && goalEnd && goalEnd.getTime() >= goalStart.getTime());
+  const hasValidRange = hasValidStart && hasValidEnd && hasChronologicalOrder;
+  const totalDays = (goalStart && goalEnd) ? Math.max(1, (goalEnd.getTime() - goalStart.getTime()) / 86400000) : 0;
+  const daysPassed = (goalStart && totalDays > 0) ? Math.max(0, Math.min(totalDays, (today.getTime() - goalStart.getTime()) / 86400000)) : 0;
+  const expectedPct = totalDays > 0 ? Math.min(100, Math.round((daysPassed / totalDays) * 100)) : 0;
   const paceGap = displayPct - expectedPct;
   const goalExpired = goalEnd ? today > goalEnd : false;
-  const goalNotStarted = today < goalStart;
+  const goalNotStarted = goalStart ? today < goalStart : false;
 
   const updateProgress = useMutation({
     mutationFn: (value: string) => apiRequest("PATCH", `/api/goals/${goal.id}`, { currentValue: value }),
@@ -298,12 +329,61 @@ function GoalCard({ goal, currentUserId, userRole, allUsers, allCompanies, onEdi
               )}
             </span>
             {isAutoTracked && !isEffectivelyManual && (
-              <span className="text-xs text-muted-foreground">
-                {isFinancialTracked ? "From financial data" : "Auto-tracked"}
+              <span className="text-xs text-muted-foreground" data-testid={`auto-source-${goal.id}`}>
+                {isFinancialTracked || goal.metric === "loads_booked" || goal.metric === "margin_pct"
+                  ? (goal.lastFinancialUploadAt
+                      ? `From financial data · as of ${fmtShortDate(goal.lastFinancialUploadAt)}`
+                      : "From financial data")
+                  : "Auto-tracked"}
               </span>
             )}
           </div>
-          {!goalExpired && !goalNotStarted && displayPct < 100 && (
+          {/* Task #1108 — trust-state label for auto-tracked goals. Distinguishes
+              true zero (legitimate 0), no_data (no upload yet), and unmapped_rep
+              (rep key didn't match any rows) so a 0 doesn't look broken. */}
+          {isAutoTracked && !isEffectivelyManual && goal.autoTrackingState && goal.autoTrackingState !== "ok" && goal.autoTrackingState !== "unknown" && (
+            <div className="flex items-center gap-1.5 mt-1">
+              {goal.autoTrackingState === "true_zero" && (
+                <span
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full"
+                  title={goal.autoTrackingReason || undefined}
+                  data-testid={`auto-state-true-zero-${goal.id}`}
+                >
+                  0 recorded for this period
+                </span>
+              )}
+              {goal.autoTrackingState === "no_data" && (
+                <span
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-1.5 py-0.5 rounded-full"
+                  title={goal.autoTrackingReason || undefined}
+                  data-testid={`auto-state-no-data-${goal.id}`}
+                >
+                  No source data yet
+                </span>
+              )}
+              {goal.autoTrackingState === "unmapped_rep" && (
+                <span
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-1.5 py-0.5 rounded-full"
+                  title={goal.autoTrackingReason || undefined}
+                  data-testid={`auto-state-unmapped-rep-${goal.id}`}
+                >
+                  Auto-tracking paused — we couldn't match your name in the latest upload
+                </span>
+              )}
+            </div>
+          )}
+          {!hasValidRange && (
+            <div className="flex items-center gap-1.5 mt-1">
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full" data-testid={`pace-unavailable-${goal.id}`}>
+                {!hasValidStart && !hasValidEnd
+                  ? "Date range not set"
+                  : !hasChronologicalOrder && hasValidStart && hasValidEnd
+                    ? "Pace unavailable — end date is before start"
+                    : "Pace unavailable — missing start/end dates"}
+              </span>
+            </div>
+          )}
+          {hasValidRange && !goalExpired && !goalNotStarted && displayPct < 100 && (
             <div className="flex items-center gap-1.5 mt-1">
               {paceGap >= 5 ? (
                 <span className="inline-flex items-center gap-1 text-[11px] font-medium text-green-700 dark:text-green-400 bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-800 px-1.5 py-0.5 rounded-full" data-testid={`pace-ahead-${goal.id}`}>
@@ -522,11 +602,21 @@ export default function GoalsPage() {
   const isAm = user?.role === "account_manager" || user?.role === "logistics_manager" || user?.role === "logistics_coordinator";
   const isAmRole = user?.role === "account_manager";
 
-  const { data: goals = [], isLoading } = useQuery<Goal[]>({
+  const { data: goals = [], isLoading } = useQuery<GoalWithMeta[]>({
     queryKey: ["/api/goals"],
     refetchInterval: 120000,
     staleTime: 60000,
   });
+
+  // Task #1107 — surface latest financial-upload timestamp from any enriched
+  // goal so we can flag visibly stale auto-tracked numbers (margin, loads
+  // booked, margin %) without changing compute or schema.
+  const lastFinancialUploadAt = goals.find(g => g.lastFinancialUploadAt)?.lastFinancialUploadAt ?? null;
+  const STALE_UPLOAD_HOURS = 36;
+  const uploadAgeHours = lastFinancialUploadAt
+    ? (Date.now() - new Date(lastFinancialUploadAt).getTime()) / 3600000
+    : null;
+  const isUploadStale = uploadAgeHours != null && uploadAgeHours > STALE_UPLOAD_HOURS;
 
   const { data: pairings = [] } = useQuery<Array<{ namId: string; amId: string; namName: string; amName: string }>>({
     queryKey: ["/api/one-on-one/pairings"],
@@ -849,6 +939,19 @@ export default function GoalsPage() {
           )}
         </div>
       </div>
+
+      {isUploadStale && lastFinancialUploadAt && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-3" data-testid="banner-stale-financial-upload">
+          <BellRing className="h-4 w-4 text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm text-amber-800 dark:text-amber-300">
+              <span className="font-semibold">Heads up:</span> auto-tracked margin, loads-booked, and margin % goals are based on the last financial upload from{" "}
+              <span className="font-medium">{fmtShortDate(lastFinancialUploadAt)}</span>
+              {uploadAgeHours != null && ` (~${Math.round(uploadAgeHours)}h ago)`}. Numbers may not reflect the latest activity.
+            </p>
+          </div>
+        </div>
+      )}
 
       {isNam && repsWithActiveGoals.length > 0 && (
         <div className="flex items-center gap-3 rounded-lg border bg-card p-3" data-testid="team-goals-summary">

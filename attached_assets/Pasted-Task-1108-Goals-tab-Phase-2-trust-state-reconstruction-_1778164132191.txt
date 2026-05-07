@@ -1,0 +1,131 @@
+Task #1108 — Goals tab Phase 2 trust-state reconstruction (read-only validation + UI distinction for true zero vs missing vs unmapped)
+
+We have completed Phase 1 visibility fixes for freshness and pace in the Goals tab.
+This next task is still non-destructive and trust-first.
+Do not change schema, background jobs, schedulers, rep-mapping logic, delete behavior, or leaderboard ranking/filtering.
+
+Objective
+
+Improve the Goals tab so reps can distinguish between:
+
+true zero performance,
+
+no source data yet, and
+
+auto-tracking paused / unmapped rep.
+
+The current UI still allows all three to appear as 0 / target, which is misleading.
+
+Working rules
+
+Think in small, testable steps.
+
+Plan before coding.
+
+Show files you will touch before edits.
+
+Minimize blast radius.
+
+Prefer read-only investigation first.
+
+No destructive actions.
+
+If a change requires schema work or deeper compute changes, stop and mark it out of scope.
+
+Step 1 — Read-only investigation first
+
+Inspect these files without editing initially:
+
+server/routes/goals.ts
+
+server/storage.ts
+
+server/financialHelpers.ts
+
+server/colResolver.ts
+
+client/src/pages/goals.tsx
+
+Confirm and document:
+
+Exactly where auto-tracked goal values become 0.
+
+Whether the code can currently tell the difference between:
+
+matched rep with legitimate zero result,
+
+no matching upload row / no source rows,
+
+unmapped rep key / failed name match.
+
+Whether existing response data from /api/goals can safely expose a trust-state field without changing compute behavior.
+
+Step 2 — If feasible without schema or compute changes, implement trust-state labeling
+
+Add a narrow, non-breaking response field for auto-tracked goals only, such as:
+
+autoTrackingState: "ok" | "true_zero" | "no_data" | "unmapped_rep" | "unknown"
+
+and optionally autoTrackingReason
+
+Rules:
+
+This must be derived from existing read paths only.
+
+Do not change how values are computed.
+
+Do not alter rep matching logic.
+
+Do not change goal ranking, writes, or stored values.
+
+Step 3 — UI labeling in client/src/pages/goals.tsx
+
+For auto-tracked goal cards:
+
+If state is true_zero, show neutral copy like: “0 recorded for this period”
+
+If state is no_data, show muted warning copy like: “No source data yet”
+
+If state is unmapped_rep, show warning copy like: “Auto-tracking paused — we couldn’t match your name in the latest upload”
+
+If state is unknown, keep current behavior but document why
+
+Requirements:
+
+Do not make the card look broken.
+
+Do not overstate certainty if the backend cannot truly distinguish a state.
+
+Keep styling practical and consistent with existing Goals UI.
+
+Add data-testid values for each trust-state label.
+
+Step 4 — Output
+
+Return:
+
+Short diagnosis
+
+Small-step plan
+
+Exact files touched
+
+What was implemented vs skipped
+
+Risks / dependencies / reasons not to republish yet
+
+Hard stops
+
+Stop and report instead of coding if implementation would require:
+
+schema changes
+
+new jobs
+
+rep-mapping logic changes
+
+delete behavior changes
+
+leaderboard filtering changes
+
+If trust-state classification is not safely possible from current code paths, say so clearly and propose the smallest safe follow-up.
