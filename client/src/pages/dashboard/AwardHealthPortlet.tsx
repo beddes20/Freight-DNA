@@ -26,9 +26,16 @@ function ageBadgeClass(days: number): string {
 export function AwardHealthPortlet() {
   const [, navigate] = useLocation();
 
-  const { data: awards = [], isLoading } = useQuery<AwardHealthRow[]>({
+  // Phase 1.5 S2: tolerate BOTH the legacy bare-array response and the new
+  // { awards, freshness } object shape so the server can ship the wrap
+  // independently and roll back without breaking this portlet. The freshness
+  // field is intentionally not consumed yet — the UX banner lands in S6.
+  const { data, isLoading } = useQuery<
+    AwardHealthRow[] | { awards: AwardHealthRow[]; freshness: unknown }
+  >({
     queryKey: ["/api/dashboard/award-health"],
   });
+  const awards: AwardHealthRow[] = Array.isArray(data) ? data : (data?.awards ?? []);
 
   if (isLoading) {
     return (

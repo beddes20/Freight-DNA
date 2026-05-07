@@ -1,0 +1,269 @@
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — Load-Fact Freshness Slice
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+This task is about Dashboard trust for two loadFact-backed portlets:
+
+Award Health
+
+Coverage Gaps
+
+Both endpoints currently return bare arrays, and both portlets consume them as arrays.
+
+S1 is already merged:
+
+PortletFreshness schema/type exists.
+
+portletFreshness helper file exists but is not implemented or used.
+
+Goal:
+
+Implement the first end-to-end freshness wiring for Award Health and Coverage Gaps by:
+
+Computing composite freshness from existing loadFact heartbeats.
+
+Changing the two endpoints to { awards/gaps, freshness }.
+
+Adding a defensive client-side normalizer so existing behavior does not break.
+
+Do this in three small, ordered, revertible steps.
+
+Guardrails:
+
+No schema changes.
+
+No scheduler changes or new jobs.
+
+No change to scoring/ranking or revenue math.
+
+No edits to alias/fuzzy matching (e.g., aliasFallbackName, resolveCompany, normN).
+
+Treat financials and dashboard endpoints as high-risk; prefer defensive error handling.
+
+Primary payload must still be returned even if freshness lookup fails.
+
+Scope:
+
+In scope:
+
+Server:
+
+server/lib/portletFreshness.ts
+
+server/routes/dashboard.ts (award-health, coverage-gaps endpoints)
+
+Client:
+
+client/src/pages/dashboard/AwardHealthPortlet.tsx
+
+client/src/pages/dashboard/CoverageGapsPortlet.tsx
+
+Tests:
+
+new helper tests
+
+new contract tests for the two endpoints
+
+Out of scope:
+
+NBA, Trending, Margin, Drifting, Relationship Advancement portlets.
+
+Any scheduler wrapping (withHeartbeat) beyond what already exists for loadFact.
+
+Any UX change (banners/labels) in this slice.
+
+Tasks:
+
+Step 1 — Implement getFreshnessForJobs (helper only, no callers yet)
+
+Files:
+
+server/lib/portletFreshness.ts
+
+tests/portlet-freshness-helper.test.ts (new)
+
+Changes:
+
+Replace the throw "not implemented" body of getFreshnessForJobs(jobNames) with a real implementation that:
+
+Reads from cron_heartbeats filtered by the given job names.
+
+Produces a composite PortletFreshness representing the “worst of” the supplied jobs.
+
+Uses canonical job-name constants (e.g., JOB_NAMES.loadFactImportMorning, JOB_NAMES.loadFactImportAfternoon), not ad‑hoc strings.
+
+Status derivation:
+
+ok when:
+
+a heartbeat row exists for at least one job, AND
+
+the latest relevant heartbeat is success, AND
+
+its lastFinishedAt is within the configured freshness window.
+
+stale when:
+
+a heartbeat row exists but:
+
+lastStatus is error, OR
+
+consecutiveFailures > 0, OR
+
+lastFinishedAt is older than the freshness window.
+
+unknown when:
+
+no heartbeat rows exist for any job, OR
+
+the heartbeat read fails (e.g., DB error).
+
+Do not implement getFreshnessForJob or batchFreshness yet; keep them throwing until later slices.
+
+Tests:
+
+tests/portlet-freshness-helper.test.ts:
+
+Seeds cron_heartbeats rows for test job names.
+
+Asserts:
+
+no rows → status === "unknown".
+
+row with lastStatus="error" → status === "stale".
+
+row older than the freshness threshold → status === "stale".
+
+fresh success row → status === "ok".
+
+Cleans up seeded rows.
+
+Behavior change:
+
+None in the app; no endpoint imports this helper yet.
+
+Step 2 — Defensive client normalization for Award Health + Coverage Gaps
+
+Files:
+
+client/src/pages/dashboard/AwardHealthPortlet.tsx
+
+client/src/pages/dashboard/CoverageGapsPortlet.tsx
+
+Changes:
+
+Update query types to accept both legacy and new shapes:
+
+Award Health:
+
+useQuery<AwardHealthRow[]> → useQuery<AwardHealthRow[] | { awards: AwardHealthRow[]; freshness: PortletFreshness | null }>
+
+Coverage Gaps:
+
+useQuery<GapRow[]> → useQuery<GapRow[] | { gaps: GapRow[]; freshness: PortletFreshness | null }>
+
+Add normalization shims:
+
+Award Health:
+
+ts
+const awards = Array.isArray(data) ? data : (data?.awards ?? []);
+Coverage Gaps:
+
+ts
+const gaps = Array.isArray(data) ? data : (data?.gaps ?? []);
+Do not read or render freshness yet.
+
+Keep all existing UI/behavior (empty states, counts, etc.) exactly as-is.
+
+Behavior change:
+
+None visible; portlets still behave the same with the current bare-array responses.
+
+This step is purely making the portlets tolerant of either response shape.
+
+Step 3 — Wire freshness into award-health and coverage-gaps endpoints
+
+File:
+
+server/routes/dashboard.ts
+
+tests/portlet-freshness-contract.test.ts (new)
+
+Changes:
+
+For GET /api/dashboard/award-health:
+
+Change from:
+
+res.json(stalledAwards.slice(0, 10))
+
+To:
+
+res.json({ awards: stalledAwards.slice(0, 10), freshness })
+
+Where freshness is computed via:
+
+getFreshnessForJobs([JOB_NAMES.loadFactImportMorning, JOB_NAMES.loadFactImportAfternoon])
+
+For GET /api/dashboard/coverage-gaps:
+
+Change from:
+
+res.json(allGaps.slice(0, 15))
+
+To:
+
+res.json({ gaps: allGaps.slice(0, 15), freshness })
+
+Same getFreshnessForJobs call as above.
+
+Wrap the freshness lookup in its own try/catch:
+
+On helper failure, fall back to freshness: null and still return the primary payload.
+
+Do not let heartbeat read errors cause 500s for these endpoints.
+
+Tests:
+
+tests/portlet-freshness-contract.test.ts:
+
+Hits both endpoints with a seeded auth session.
+
+Asserts the response is an object with:
+
+awards or gaps arrays.
+
+freshness either null or matching the existing portletFreshnessSchema.
+
+Optionally: seed a heartbeat row with lastStatus="error" and assert freshness.status === "stale".
+
+Behavior change:
+
+Server: response shape for the two endpoints becomes { awards/gaps, freshness }.
+
+Client: because of Step 2, both portlets keep working against the new shape with no UX change yet.
+
+Tests to run for the slice:
+
+Typecheck / compile.
+
+Guardrails / quality checks.
+
+tests/portlet-freshness-helper.test.ts.
+
+tests/portlet-freshness-contract.test.ts.
+
+Output format (from the agent):
+
+A. Short diagnosis.
+
+B. Exact files changed, with brief line-range notes.
+
+C. Summary of behavior changes (server + client).
+
+D. Tests run and results.
+
+E. Risks / reasons not to republish yet.

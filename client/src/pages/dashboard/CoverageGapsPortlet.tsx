@@ -23,9 +23,16 @@ function volumeBadgeClass(vol: number): string {
 export function CoverageGapsPortlet() {
   const [, navigate] = useLocation();
 
-  const { data: gaps = [], isLoading } = useQuery<GapRow[]>({
+  // Phase 1.5 S2: tolerate BOTH the legacy bare-array response and the new
+  // { gaps, freshness } object shape so the server can ship the wrap
+  // independently and roll back without breaking this portlet. The freshness
+  // field is intentionally not consumed yet — the UX banner lands in S6.
+  const { data, isLoading } = useQuery<
+    GapRow[] | { gaps: GapRow[]; freshness: unknown }
+  >({
     queryKey: ["/api/dashboard/coverage-gaps"],
   });
+  const gaps: GapRow[] = Array.isArray(data) ? data : (data?.gaps ?? []);
 
   if (isLoading) {
     return (

@@ -5,6 +5,26 @@ import { requireAuth, getCurrentUser, getVisibleCompanyIds } from "../auth";
 import { resolveColumns, getRepFromRow, getDispatcherFromRow, getCustomerFromRow } from "../colResolver";
 import { isExcludedRow, parseHistoricalRow, toMonthKey } from "../financialHelpers";
 import { cacheGet, cacheSet } from "../cache";
+import { getFreshnessForJobs } from "../lib/portletFreshness";
+import { JOB_NAMES } from "../lib/cronHeartbeat";
+import type { PortletFreshness } from "../../shared/schema";
+
+// Phase 1.5 S3: load-fact-backed portlets attach a composite freshness
+// signal derived from both daily import jobs. Wrapped in its own try/catch
+// at every call site — heartbeat read errors must NEVER take down the
+// primary portlet payload (this is the Task #1109a "never collapse unknown
+// into stale, never let freshness fail the request" rule).
+async function safeLoadFactFreshness(): Promise<PortletFreshness | null> {
+  try {
+    return await getFreshnessForJobs([
+      JOB_NAMES.loadFactImportMorning,
+      JOB_NAMES.loadFactImportAfternoon,
+    ]);
+  } catch (err) {
+    console.error("[dashboard] load-fact freshness lookup failed:", err);
+    return null;
+  }
+}
 
 export function registerDashboardRoutes(app: Express): void {
   // ─── Director/Admin Dashboard Portlet Endpoints ───────────────────────────
@@ -1478,7 +1498,8 @@ export function registerDashboardRoutes(app: Express): void {
         return b.awardAgeDays - a.awardAgeDays;
       });
 
-      res.json(stalledAwards.slice(0, 10));
+      const freshness = await safeLoadFactFreshness();
+      res.json({ awards: stalledAwards.slice(0, 10), freshness });
     } catch (err) {
       console.error("Award health error:", err);
       res.status(500).json({ error: "Failed to load award health" });
@@ -1598,7 +1619,8 @@ export function registerDashboardRoutes(app: Express): void {
 
       // Sort by volume descending; cap at 15 rows to keep the portlet light
       allGaps.sort((a, b) => b.totalVolume - a.totalVolume);
-      res.json(allGaps.slice(0, 15));
+      const freshness = await safeLoadFactFreshness();
+      res.json({ gaps: allGaps.slice(0, 15), freshness });
     } catch (err) {
       console.error("Coverage gaps error:", err);
       res.status(500).json({ error: "Failed to load coverage gaps" });
