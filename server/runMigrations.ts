@@ -6481,6 +6481,20 @@ export async function runEmailIntelV1_5Migrations() {
     console.log(
       "[migrations] Task #1/#1093 contacts soft-delete columns + partial indexes ensured",
     );
+
+    // ── Task 1 (2026-05-07) — quote_opportunities.source default parity ────
+    // shared/schema.ts declares `source NOT NULL DEFAULT 'email'`, but a prod
+    // DB that has not yet had `drizzle-kit push:pg` run can be missing the
+    // DEFAULT clause. Any insert that omits `source` (e.g. the
+    // freight-capture-funnel test's bulk insert at L408, plus any future
+    // call site that relies on the schema-declared default) will then 500
+    // with PG 23502. Strictly idempotent so a fresh prod boot is safe.
+    await client.query(
+      `ALTER TABLE quote_opportunities ALTER COLUMN source SET DEFAULT 'email'`,
+    );
+    console.log(
+      "[migrations] Task 1 quote_opportunities.source DEFAULT 'email' ensured",
+    );
   } catch (err) {
     console.error("[migrations] Task #1026 lifecycle_stage migration error:", err);
   } finally {

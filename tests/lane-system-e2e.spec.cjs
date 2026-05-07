@@ -107,6 +107,21 @@ test.beforeAll(async () => {
   if (others.rowCount === 0) throw new Error('no second assignable user in dev org');
   const otherUser = others.rows[0];
 
+  // Task 2 (2026-05-07) — `/api/recurring-lanes/work-queue` is gated behind
+  // the `lane_carrier_outreach_v1` feature flag (assertFlagEnabled in
+  // server/routes/laneCarrierOutreach.ts). When the dev-bypass org has the
+  // flag off (or unset → defaults to off), the LWQ page receives a 403 and
+  // never renders any `customer-group-…` element — both SSE and Shift+L
+  // tests then time out at the pre-condition wait. Upsert the flag ON for
+  // the dev org so the LWQ surface actually paints. Idempotent via the
+  // (org_id, flag_key) unique index.
+  await pool.query(
+    `INSERT INTO feature_flags (org_id, flag_key, enabled, updated_by_id)
+     VALUES ($1, 'lane_carrier_outreach_v1', true, $2)
+     ON CONFLICT (org_id, flag_key) DO UPDATE SET enabled = true, updated_at = now()`,
+    [orgId, DEV_AUTH_BYPASS_USER_ID],
+  );
+
   // Seed an unassigned recurring lane the rep can self-assign in the UI.
   // We use a stamped, suite-unique `company_name` (free-text on the lane
   // and cache rows) so the seeded lane lands in its OWN customer group in
