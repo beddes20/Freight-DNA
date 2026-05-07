@@ -135,9 +135,11 @@ export const contacts = pgTable("contacts", {
   // Soft-delete columns (Task 1, 2026-05-07 incident hardening). Hard
   // deletes are forbidden; `deleteContact` writes these instead. Every
   // SELECT against `contacts` must filter `deleted_at IS NULL` — see
-  // server/storage.ts and the call-site allow-list there. The future
-  // contact_audit_log (Task 4) records the full before/after; these
-  // columns exist so the row itself carries enough context to be
+  // server/storage.ts and the call-site allow-list there, and the
+  // Section 1200 guardrail in tests/code-quality-guardrails.test.ts
+  // which enforces the filter on every IStorage `getContact*` method.
+  // The future contact_audit_log (Task 4) records the full before/after;
+  // these columns exist so the row itself carries enough context to be
   // restored without joining the audit log.
   deletedAt: timestamp("deleted_at"),
   deletedBy: varchar("deleted_by"),
@@ -145,7 +147,17 @@ export const contacts = pgTable("contacts", {
 }, (t) => ({
   companyIdx: index("contacts_company_idx").on(t.companyId),
   emailIdx: index("contacts_email_idx").on(t.email),
-  deletedAtIdx: index("contacts_deleted_at_idx").on(t.deletedAt),
+  // Partial index — only tombstoned rows. Powers admin "deleted contacts"
+  // reports (Task 1093) without bloating the index for the active-row hot
+  // path. Migration: 0016_contacts_partial_indexes.sql.
+  deletedAtIdx: index("contacts_deleted_at_idx")
+    .on(t.deletedAt)
+    .where(sql`${t.deletedAt} IS NOT NULL`),
+  // Partial index — active rows only. Backs every user-facing
+  // `WHERE company_id = ? AND deleted_at IS NULL` lookup. Task 1093.
+  companyActiveIdx: index("contacts_company_active_idx")
+    .on(t.companyId)
+    .where(sql`${t.deletedAt} IS NULL`),
 }));
 
 export const insertContactSchema = createInsertSchema(contacts).omit({

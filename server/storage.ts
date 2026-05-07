@@ -2326,6 +2326,45 @@ export class DatabaseStorage implements IStorage {
   // introduced in the 2026-05-07 incident-hardening pass. If you need to
   // read soft-deleted rows for a future restore/admin path, add a
   // distinct method named `*IncludingDeleted` rather than weakening these.
+  //
+  // Read-path audit (Task #1093 — completed 2026-05-07):
+  //
+  //   IStorage method                       | site                  | status
+  //   -------------------------------------- | --------------------- | --------
+  //   getContacts                           | storage.ts L2311      | filtered
+  //   getContactsByOrg                      | storage.ts L2315      | filtered
+  //   getContactsByCompany                  | storage.ts L2324      | filtered
+  //   getContactsByCompanyIds               | storage.ts L2329      | filtered
+  //   getContactsByIds                      | storage.ts L2335      | filtered
+  //   getContact                            | storage.ts L2361      | filtered
+  //   getContactBaseHistory                 | storage.ts L2345      | n/a (reads contact_base_history, not contacts)
+  //   bulkCreateContacts (existing-key set) | storage.ts L2394      | INTENTIONALLY UNFILTERED — restorability guard;
+  //                                                                    needs to see tombstones to avoid duplicate inserts
+  //                                                                    that would resurrect a deleted identity. See gotcha
+  //                                                                    in shared/schema.ts.
+  //   updateContact                         | storage.ts L2414      | filtered (cannot update tombstoned row)
+  //   deleteContact                         | storage.ts L2423      | filtered (no double-delete)
+  //   searchContacts                        | storage.ts L3247      | filtered
+  //   getColdContacts (raw SQL)             | storage.ts L3602      | filtered (c.deleted_at IS NULL)
+  //   getColdContacts (hydration)           | storage.ts L3633      | filtered
+  //   getMeaningfulOverdueContacts (SQL)    | storage.ts L3665      | filtered (join predicate)
+  //   getMeaningfulOverdueContacts (hydr.)  | storage.ts L3692      | filtered
+  //   getTeamPerformance (allContacts)      | storage.ts L3322      | filtered
+  //   getContactsAddedByAm                  | storage.ts L3713      | filtered
+  //   getRepReport (direct-report contacts) | storage.ts L3897      | filtered
+  //   getContactByEmailInOrg                | storage.ts L7522      | filtered
+  //   getContactByEmailAndCompany           | storage.ts L8868      | filtered
+  //
+  // Off-storage call sites (also reviewed):
+  //   server/chatbot.ts L508,L618,L725                | filtered
+  //   server/services/aiIntelligenceService.ts L49,L156,L230 | filtered
+  //   server/routes/aiIntelligence.ts L82,L116        | filtered
+  //   server/routes/customerQuotes.ts L1486           | filtered
+  //   server/nextBestActionEngine.ts                  | uses storage.getContactsByCompany — filtered transitively
+  //
+  // Section 1200 of tests/code-quality-guardrails.test.ts enforces this.
+  // New `getContact*` methods MUST either filter `isNull(contacts.deletedAt)`
+  // or be added to the explicit allow-list there.
 
   async getContacts(): Promise<Contact[]> {
     return db.select().from(contacts).where(isNull(contacts.deletedAt));

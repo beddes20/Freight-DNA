@@ -5931,3 +5931,122 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     "won-quote conversion must not write a synthetic orderNumber (upload-as-source-of-truth contract)",
   );
 })();
+
+// ── Section 1200: Contacts soft-delete read-path enforcement (Task #1093) ──
+// Every IStorage method whose name starts with `getContact` MUST either
+//   (a) reference `isNull(contacts.deletedAt)` somewhere in its body, OR
+//   (b) appear on the explicit allow-list below.
+// The allow-list is intentionally tiny — additions require a comment
+// justifying why the method does NOT need the soft-delete filter (e.g.
+// it does not read the `contacts` table, or it is an admin/restore path
+// that intentionally surfaces tombstones).
+//
+// Also fences:
+//   • The partial indexes on `contacts` exist in the schema with the
+//     correct WHERE predicates.
+//   • The migration file 0016 is present.
+//   • bulkCreateContacts intentionally reads tombstones (restorability
+//     guard) and is annotated as such.
+console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (#1093) ──\n");
+
+(() => {
+  const storageSrc = readFile("server/storage.ts");
+  const schemaSrc = readFile("shared/schema.ts");
+
+  // Allow-list: methods that don't query the `contacts` table directly
+  // and therefore don't need the filter. Keep this list small and
+  // explicit — every entry needs a comment-trail justification above.
+  const SOFT_DELETE_ALLOWLIST = new Set<string>([
+    // Reads contact_base_history, not contacts.
+    "getContactBaseHistory",
+    // Reads contact_geography_suggestions, not contacts.
+    "getContactGeographySuggestions",
+    "getContactGeographySuggestion",
+  ]);
+
+  // Find every concrete `async getContact*(…)` method in storage.ts.
+  const methodRe = /^\s{2,}async\s+(getContact[A-Za-z0-9]*)\s*\(/gm;
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = methodRe.exec(storageSrc)) !== null) {
+    const name = m[1];
+    if (seen.has(name)) continue;
+    seen.add(name);
+
+    if (SOFT_DELETE_ALLOWLIST.has(name)) {
+      assert(
+        `storage.ts — ${name} is on the soft-delete allow-list (does not read contacts)`,
+        true,
+      );
+      continue;
+    }
+
+    // Slice the body — from the method signature to the next `^  async `
+    // or end-of-file — and check it references the soft-delete filter.
+    const start = m.index;
+    const rest = storageSrc.slice(start + m[0].length);
+    const nextMethodMatch = /^\s{2,}async\s+[A-Za-z][A-Za-z0-9_]*\s*\(/m.exec(rest);
+    const body = nextMethodMatch ? rest.slice(0, nextMethodMatch.index) : rest;
+
+    assert(
+      `storage.ts — ${name} filters isNull(contacts.deletedAt)`,
+      /isNull\(\s*contacts\.deletedAt\s*\)/.test(body) ||
+        /c\.deleted_at\s+IS\s+NULL/i.test(body),
+      `${name} reads the contacts table without filtering deleted_at — add the filter or add the method to the allow-list with a comment justifying why.`,
+    );
+  }
+
+  // We expect at least the seven core read methods to have been scanned.
+  assert(
+    "storage.ts — Section 1200 scanned at least 7 getContact* methods",
+    seen.size >= 7,
+    `Only saw ${seen.size} getContact* methods — the regex may have drifted; double-check.`,
+  );
+
+  // Schema parity — both partial indexes are declared.
+  assert(
+    "shared/schema.ts — contacts_deleted_at_idx is partial (WHERE deleted_at IS NOT NULL)",
+    /contacts_deleted_at_idx[\s\S]{0,400}IS\s+NOT\s+NULL/.test(schemaSrc),
+    "Schema must declare contacts_deleted_at_idx with .where(... IS NOT NULL) so drizzle push stays in sync with migration 0016.",
+  );
+  assert(
+    "shared/schema.ts — contacts_company_active_idx is partial (WHERE deleted_at IS NULL)",
+    /contacts_company_active_idx[\s\S]{0,400}IS\s+NULL/.test(schemaSrc),
+    "Schema must declare contacts_company_active_idx on (company_id) with .where(... IS NULL).",
+  );
+
+  // Migration file exists.
+  assert(
+    "migrations/0016_contacts_partial_indexes.sql — file exists",
+    fs.existsSync(path.join(ROOT, "migrations", "0016_contacts_partial_indexes.sql")),
+    "Task #1093 migration file is missing.",
+  );
+
+  const migSrc = fs.existsSync(path.join(ROOT, "migrations", "0016_contacts_partial_indexes.sql"))
+    ? readFile("migrations/0016_contacts_partial_indexes.sql")
+    : "";
+  assert(
+    "0016_contacts_partial_indexes.sql — drops the old non-partial deleted_at index",
+    /DROP\s+INDEX\s+IF\s+EXISTS\s+contacts_deleted_at_idx/i.test(migSrc),
+    "Migration must drop the original non-partial contacts_deleted_at_idx before recreating it as partial.",
+  );
+  assert(
+    "0016_contacts_partial_indexes.sql — creates partial deleted_at index (WHERE NOT NULL)",
+    /CREATE\s+INDEX[^;]*contacts_deleted_at_idx[\s\S]*?WHERE\s+deleted_at\s+IS\s+NOT\s+NULL/i.test(migSrc),
+    "Migration must recreate contacts_deleted_at_idx as a partial index WHERE deleted_at IS NOT NULL.",
+  );
+  assert(
+    "0016_contacts_partial_indexes.sql — creates partial contacts_company_active_idx (WHERE deleted_at IS NULL)",
+    /CREATE\s+INDEX[^;]*contacts_company_active_idx[\s\S]*?WHERE\s+deleted_at\s+IS\s+NULL/i.test(migSrc),
+    "Migration must create contacts_company_active_idx on (company_id) WHERE deleted_at IS NULL.",
+  );
+
+  // bulkCreateContacts is the one storage method that intentionally
+  // reads tombstones — make sure the comment explaining why is still
+  // present so a future cleanup pass doesn't "fix" it by accident.
+  assert(
+    "storage.ts — bulkCreateContacts retains the restorability-guard comment",
+    /bulkCreateContacts[\s\S]{0,2000}Restorability guard/i.test(storageSrc),
+    "bulkCreateContacts intentionally reads tombstoned rows to avoid duplicate inserts; the guard comment must remain.",
+  );
+})();
