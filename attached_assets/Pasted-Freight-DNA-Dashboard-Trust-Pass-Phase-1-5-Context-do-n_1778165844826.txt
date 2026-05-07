@@ -1,0 +1,156 @@
+Freight-DNA — Dashboard Trust Pass (Phase 1.5)
+
+Context (do not change):
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+The /dashboard tab is the role-aware home screen for AMs, NAMs, Directors, Admins, and Logistics Managers.
+
+This tab directly influences revenue decisions (retain at-risk volume, work awarded lanes, RFP follow-up, relationship advancement).
+
+We already shipped Task #1108, which:
+
+Ungated the sync alert payload so all roles see stale-month flags.
+
+Kept the “Upload manually” CTA gated to admins/directors.
+
+Added a guardrail test ensuring non-admins see the sync failure payload.
+
+Goal for this task:
+Improve dashboard trust signals without touching schemas or pipelines:
+
+Surface freshness (“last updated from X”) on key portlets.
+
+Visibly distinguish “no items today” vs “data unavailable/degraded.”
+
+Do all of this in small, reversible steps with minimal blast radius.
+
+Working rules:
+
+Treat any feature that touches companies, contacts, org charts, financials, freight pipelines, or background jobs as high-risk.
+
+No destructive scripts, no bulk deletes, no schema changes, no data rewrites.
+
+Prefer visibility and labeling over logic changes in this pass.
+
+If something is ambiguous, default to “warn or label” rather than “hide.”
+
+Plan before coding; show which files you’ll touch and what you’ll change.
+
+Scope:
+Focus only on read + UI trust for these portlets/endpoints:
+
+NbaDashboardPanel (NBA Phase 1 cards)
+
+AccountsDriftingPortlet
+
+RelationshipAdvancementPortlet
+
+CoverageGapsPortlet
+
+AwardHealthPortlet
+
+Trending Accounts, Margin Metrics, and any cards derived from financial uploads
+
+Do NOT:
+
+Change aliasFallbackName, resolveCompany, normN, or any fuzzy matching yet.
+
+Change scheduler logic or start/stop any jobs.
+
+Change scoring/ranking logic for NBA, drifting, or coverage.
+
+Touch contacts/companies persistence.
+
+Tasks:
+
+Read-only analysis
+
+Identify, for each of the scoped portlets:
+
+Which scheduler(s) or upload(s) it depends on (e.g., nbaPhase1Scheduler, emailFactsScheduler, loadFactScheduler, monthlyDataRefreshScheduler, availableFreightScheduler).
+
+Whether there is already any notion of “last successful run / last successful upload” available in code or settings.
+
+How the endpoint currently behaves when:
+a) There is truly no data (“nothing to do today”).
+b) The upstream job fails or hasn’t run recently (scheduler failure, missing upload, swallowed exception, etc.).
+
+Output a small matrix: Portlet → Endpoint → Upstream job → Current empty behavior → Current degradation behavior.
+
+Design a minimal freshness contract (no writes yet)
+
+Propose a minimal, read-only data contract that we can thread through dashboard endpoints, something like:
+
+lastUpdatedAt (ISO timestamp)
+
+source (e.g., “loadFactScheduler”, “nbaPhase1Scheduler”, “emailFactsScheduler”)
+
+status enum for the upstream data: “ok”, “stale”, “unknown”
+
+For each scoped portlet, specify:
+
+Where you’d read this from (which scheduler’s heartbeat or upload metadata).
+
+How you’d attach it to the existing dashboard response without changing its main payload shape.
+
+Empty vs broken state definition
+For each scoped portlet, define (in plain English):
+
+What “no items today” means in business terms for that portlet.
+
+What “data unavailable/degraded” means (e.g., last run older than X days, heartbeat missing, caught exception).
+
+The exact UI copy for:
+
+“No items today.”
+
+“Data unavailable — last successful run <timestamp> from <source>.”
+
+Key constraints:
+
+Keep copy practical, not cute. Reps need to trust it at a glance.
+
+Make sure copy makes it clear whether the rep can safely assume there is nothing to do, or whether they should treat the portlet as unreliable until fixed.
+
+Implementation plan (no code yet)
+
+Propose a step-by-step implementation plan in this format:
+A. Short diagnosis of current trust gaps (1–3 sentences).
+B. Ordered list of small changes, each with:
+
+Files to touch (paths only).
+
+Rough line ranges if known.
+
+Whether it’s purely additive (labels/props) vs changes existing logic.
+C. Rollout plan:
+
+Which portlet(s) to update first.
+
+Where a feature flag or simple config constant is warranted.
+D. Guardrail tests you’d add (file paths + what they assert).
+
+Guardrails & non-goals
+
+Do not change revenue math, scoring, or ranking in this task.
+
+Do not attempt to “fix” fuzzy matching or alias mapping here.
+
+Do not introduce new background jobs.
+
+Every proposed change must be easy to revert in a single commit.
+
+Output format:
+
+Diagnosis
+
+Portlet freshness matrix
+
+Proposed freshness contract (data shape)
+
+Empty vs broken UX copy per portlet
+
+Implementation plan (A–D)
+
+Risks / things we must explicitly check before publishing
