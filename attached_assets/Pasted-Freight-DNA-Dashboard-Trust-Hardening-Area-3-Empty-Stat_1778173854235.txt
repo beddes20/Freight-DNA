@@ -1,0 +1,143 @@
+Freight-DNA — Dashboard Trust Hardening — Area 3 Empty-State Clarity (Today’s Five + Cold Contacts)
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Phase 1.5 already shipped the core dashboard trust primitives and freshness work:
+
+sync alert visibility
+
+Award Health / Coverage Gaps freshness UI
+
+NBA freshness UI
+
+Trending / Margin as-of labels
+
+Pipeline Health Strip
+
+The hardening slice is now complete:
+
+structural return null exceptions are annotated
+
+Section 1500 guardrails are in place and green
+
+The next gap is user-facing empty-state clarity on two high-value rep-facing surfaces:
+
+Today’s Five
+
+Cold Contacts
+
+These are meaningful when empty: a rep should understand “nothing to work here today” rather than wonder if the portlet is broken or simply missing.
+
+Goal:
+Add minimal, honest empty-state copy for:
+
+Today’s Five
+
+Cold Contacts
+
+Guardrails:
+
+No schema changes.
+
+No server changes unless absolutely necessary.
+
+No scheduler changes.
+
+No changes to ranking, scoring, or what qualifies for Today’s Five / Cold Contacts.
+
+Keep this slice small and visible only in the empty branch.
+
+Do not widen into other portlets in this task.
+
+Scope:
+
+In scope:
+
+client/src/pages/dashboard.tsx
+
+relevant empty render branches for Today’s Five and Cold Contacts
+
+associated tests for the empty-state behavior
+
+Out of scope:
+
+Opportunity Leaderboard
+
+Churn Risk
+
+Meaningful Overdue
+
+Drifting portlet
+
+server endpoint behavior
+
+freshness contract changes
+
+Tasks:
+
+Read-only confirmation first
+
+Reconfirm where Today’s Five and Cold Contacts are rendered in client/src/pages/dashboard.tsx.
+
+Reconfirm their current empty behavior:
+
+whether they return null
+
+or simply render nothing inside the container
+
+Confirm these portlets do not currently carry a freshness envelope and that this task is strictly about honest empty-state copy, not stale-vs-unknown logic.
+
+Add minimal empty-state copy
+
+For Today’s Five:
+
+when the portlet is empty, render a small muted/italic line instead of disappearing completely
+
+suggested copy:
+
+All clear — nothing to work in Today’s Five right now.
+
+For Cold Contacts:
+
+when empty, render:
+
+All clear — no cold contacts need attention right now.
+
+Keep styling lightweight and consistent with existing dashboard muted text patterns.
+
+Do not create a new shared component unless the implementation naturally wants one and it stays tiny.
+
+Preserve existing behavior for non-empty states
+
+When rows/items exist, the current rendering should be unchanged.
+
+No ranking, grouping, sorting, or CTA changes.
+
+Tests
+
+Add or extend tests to assert:
+
+Today’s Five empty branch renders the new copy
+
+Cold Contacts empty branch renders the new copy
+
+non-empty branches remain unchanged
+
+Keep tests behavior-focused; do not over-test styles.
+
+Output format:
+A. Short diagnosis
+B. Exact files changed
+C. Behavior changes
+D. Tests run and results
+E. Risks / reasons not to merge
+
+Important:
+
+This is a small UI clarity slice only.
+
+Do not bundle Drifting trust work into this task.
+
+Do not widen to other empty portlets unless you find a trivial shared abstraction and can prove zero extra blast radius; otherwise stop and report.

@@ -1167,7 +1167,13 @@ export default function Dashboard() {
               {todaysFiveLoading ? (
                 <div className="space-y-2">{[1,2,3,4,5].map(i => <Skeleton key={i} className="h-10 w-full" />)}</div>
               ) : todaysFive.length === 0 ? (
-                <p className="text-sm text-muted-foreground py-2">No accounts prioritized today. Upload financial data to unlock AI prioritization.</p>
+                // Empty-state clarity (Phase 1.5 Area 3) — honest "nothing to work" line
+                // with the existing upload hint preserved as a smaller sub-line so reps
+                // who genuinely have no financial data still see the actionable nudge.
+                <div className="py-2 space-y-1" data-testid="empty-todays-five">
+                  <p className="text-sm italic text-muted-foreground">All clear — nothing to work in Today's Five right now.</p>
+                  <p className="text-xs text-muted-foreground">If you haven't uploaded financial data yet, upload it to unlock AI prioritization.</p>
+                </div>
               ) : (
                 <div className="space-y-1.5">
                   {todaysFive.map((acct, idx) => (
@@ -1669,7 +1675,19 @@ export default function Dashboard() {
       </div>
 
       <div style={{ order: getOrder("cold-contacts") }} className={(!isVisible("cold-contacts") || isAm) ? "hidden" : ""} data-tour="tour-contacts-attention">
-      {coldContacts.length > 0 && (
+      {coldContacts.length === 0 ? (
+        // Empty-state clarity (Phase 1.5 Area 3) — was previously a silent
+        // gated render (`coldContacts.length > 0 && <Card/>`) which disappeared
+        // entirely when empty and left reps wondering whether the portlet was
+        // broken. Honest "all clear" line keeps the surface present.
+        <Card data-testid="card-cold-contacts-empty">
+          <CardContent className="py-3">
+            <p className="text-sm italic text-muted-foreground" data-testid="empty-cold-contacts">
+              All clear — no cold contacts need attention right now.
+            </p>
+          </CardContent>
+        </Card>
+      ) : (
         <Card data-testid="card-cold-contacts">
           <CardHeader className={coldContactsCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_cold_contacts_collapsed", !coldContactsCollapsed, setColdContactsCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-cold-contacts">

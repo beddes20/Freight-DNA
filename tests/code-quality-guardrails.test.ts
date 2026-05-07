@@ -6494,3 +6494,58 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     }
   }
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1501 — Empty-state clarity pins (Phase 1.5 Area 3)
+//
+// Two rep-facing dashboard surfaces — Today's Five and Cold Contacts —
+// are meaningful when empty. A blank card or silently-disappearing
+// portlet leaves reps unsure whether the surface is broken or genuinely
+// quiet. This section pins the empty-state copy and testIds so a future
+// refactor can't quietly delete them.
+//
+// Scope is intentionally tiny:
+//   - Today's Five empty branch must render the "All clear" line under
+//     the data-testid="empty-todays-five" surface.
+//   - Cold Contacts empty branch must render the "All clear" line under
+//     the data-testid="empty-cold-contacts" surface, AND the cold
+//     contacts surface must NOT regress to its old silent
+//     `coldContacts.length > 0 && <Card/>` gating.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1501: Empty-state clarity (Today's Five + Cold Contacts) ─\n");
+
+  const DASH_SRC = readFile("client/src/pages/dashboard.tsx");
+
+  // ── Today's Five ────────────────────────────────────────────────────────
+  assert(
+    "Section 1501 — Today's Five exposes data-testid=\"empty-todays-five\"",
+    /data-testid=["']empty-todays-five["']/.test(DASH_SRC),
+    'Today\'s Five empty branch must carry data-testid="empty-todays-five" so the empty state is observable to tests.',
+  );
+  assert(
+    "Section 1501 — Today's Five empty branch contains \"All clear\" copy",
+    /All clear[^<]*Today's Five/.test(DASH_SRC),
+    'Today\'s Five empty branch must render copy starting with "All clear" and naming "Today\'s Five". Restore the empty-state line — silent rendering of an empty card was the regression Area 3 closed.',
+  );
+
+  // ── Cold Contacts ──────────────────────────────────────────────────────
+  assert(
+    "Section 1501 — Cold Contacts exposes data-testid=\"empty-cold-contacts\"",
+    /data-testid=["']empty-cold-contacts["']/.test(DASH_SRC),
+    'Cold Contacts empty branch must carry data-testid="empty-cold-contacts" so the empty state is observable to tests.',
+  );
+  assert(
+    "Section 1501 — Cold Contacts empty branch contains \"All clear\" copy",
+    /All clear[^<]*cold contacts/i.test(DASH_SRC),
+    'Cold Contacts empty branch must render copy starting with "All clear" and mentioning "cold contacts". Restore the empty-state line.',
+  );
+  // Pin the new explicit-ternary structure — the previous gating was the
+  // silent `coldContacts.length > 0 && (<Card/>)` form that quietly
+  // disappeared when empty. Forbid that exact regression.
+  assert(
+    "Section 1501 — Cold Contacts uses an explicit empty-vs-populated branch (not the old silent && gate)",
+    /coldContacts\.length\s*===\s*0\s*\?/.test(DASH_SRC),
+    'Cold Contacts must branch on `coldContacts.length === 0 ? <empty/> : <populated/>` so the empty case is rendered, not silently elided. Do not regress to `coldContacts.length > 0 && (<Card/>)`.',
+  );
+})();
