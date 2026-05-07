@@ -145,6 +145,11 @@ verified end-to-end in dev. This is one task, scope already proposed,
 
 ### Task #P2.1 — Promote `companies.financialAlias` to a proper alias table
 
+- **Planning artifact (2026-05-07):** Full design + 7-step phased
+  rollout plan now lives in
+  [`docs/company-financial-aliases-plan.md`](./company-financial-aliases-plan.md).
+  Implementation has not started — that doc is the contract P2.2+
+  builds against.
 - **Diagnosis:** Aliases live as a single denormalized text column on
   `companies`, which forces every consumer to do bidirectional
   substring matching. A real `company_financial_aliases` table makes

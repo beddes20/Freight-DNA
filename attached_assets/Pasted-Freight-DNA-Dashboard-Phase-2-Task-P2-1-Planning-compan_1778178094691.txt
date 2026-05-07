@@ -1,0 +1,245 @@
+Freight-DNA — Dashboard Phase 2 — Task P2.1 Planning (company_financial_aliases Design + Migration Plan)
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Dashboard Phase 1.5 (trust retrofit) is complete and documented.
+
+Phase 2 plan (docs/dashboard-phase2-plan.md) recommends Track 1:
+
+Clean up data-model and joins so dashboards don’t rely on fuzzy .includes() matching and single text columns.
+
+P2.0 is complete:
+
+Dev DB schema is now in a known-good state.
+
+Key workflows (backfill-incident, storage-integration, dashboard-adjacent tests) are unblocked at the schema layer.
+
+Today’s task P2.1 is planning-only:
+
+No schema changes executed.
+
+No join changes.
+
+Deliverables are a design + migration plan, not code.
+
+Goal:
+Design the new company_financial_aliases model and a safe migration/rollout plan to move away from companies.financialAlias and fuzzy .includes() matching, while preserving dashboard trust.
+
+Guardrails:
+
+Planning-only in this task.
+
+No SQL executed.
+
+No server/client behavior changes.
+
+Think in terms of:
+
+phased rollout,
+
+dual-read/dual-write,
+
+quarantine instead of best-guess,
+
+reversibility.
+
+Scope:
+
+In scope:
+
+Analyze current usage of companies.financialAlias and related fuzzy/alias matching in dashboard code.
+
+Propose the company_financial_aliases table shape.
+
+Design the migration steps (add → dual-read/write → cutover → deprecate).
+
+Identify which endpoints/joins will eventually move to the new resolver.
+
+Out of scope:
+
+Implementing the table/migrations.
+
+Changing existing join logic.
+
+Any Phase 2 tasks beyond financial aliasing.
+
+Tasks:
+
+Read-only audit of current alias usage
+
+Identify where companies.financialAlias is used today, especially in:
+
+server/routes/dashboard.ts for financial joins (Award Health, Coverage Gaps, Trending, Margin, etc.).
+
+Any shared helpers that do:
+
+.includes() matching on names/aliases
+
+normN / fuzzy normalization for financial name matching.
+
+List the key call sites and summarize:
+
+what input they have (carrier/customer name, financial account name, etc.),
+
+how they decide a match today,
+
+what the current failure/phantom-account risks are.
+
+Propose the company_financial_aliases table shape
+
+Design a table that turns “free text alias” into a structured, auditable record.
+
+For the doc, specify:
+
+Table name: company_financial_aliases
+
+Proposed columns (with types and meaning), e.g.:
+
+id
+
+company_id (FK)
+
+alias (text)
+
+source (enum/text: e.g., financial_upload, manual, import)
+
+confirmed_by_user_id (nullable)
+
+created_at
+
+updated_at
+
+org_id (if multi-org is relevant)
+
+any needed uniqueness/index rules (e.g., one alias per org, etc.)
+
+Do not write SQL yet; describe the schema clearly enough that we can write migrations later.
+
+Design the migration / rollout plan
+
+Outline the phased steps, for example:
+
+Step 1 — Add new table:
+
+Create company_financial_aliases table.
+
+Backfill from existing companies.financialAlias where possible:
+
+For each non-null alias, insert a row into company_financial_aliases with source='legacy_column'.
+
+Step 2 — Dual-read:
+
+New resolver function reads from company_financial_aliases first; still falls back to companies.financialAlias for legacy safety.
+
+No behavior change yet for callers.
+
+Step 3 — Dual-write:
+
+Any place that writes/updates aliases writes to both:
+
+the new table,
+
+and the legacy companies.financialAlias, to keep them in sync.
+
+Step 4 — Shadow mode:
+
+New resolver runs in parallel (flagged per org) and logs mismatches between the old fuzzy match and the new strict match.
+
+Step 5 — Cutover:
+
+For opted-in orgs, use the new resolver only.
+
+Keep the old column as a backup for a defined period.
+
+Step 6 — Deprecate:
+
+Once confidence is high, stop writing to companies.financialAlias and eventually drop or freeze it.
+
+Define resolveCompanyByFinancialAlias behavior (at a high level)
+
+In the doc, define the resolver’s decision tree, without writing code:
+
+Inputs:
+
+org context
+
+financial account identifier/name
+
+Resolution order (example):
+
+Exact company-id mapping (if provided directly).
+
+Exact alias match in company_financial_aliases for the org.
+
+Possibly normalized alias match (if we choose to allow it) with clear rules.
+
+Otherwise:
+
+do not guess with .includes().
+
+instead, return “unresolved” and route to a quarantine / admin review path.
+
+Note how this ties back to:
+
+dashboard trust (no phantom customers),
+
+and the future quarantine surface (P2.4).
+
+Identify affected endpoints / joins
+
+List which routes/joins will move to use the new resolver in the next tasks, for example:
+
+Award Health
+
+Coverage Gaps
+
+Trending Accounts
+
+Margin Metrics
+
+For each, note:
+
+current join conditions,
+
+how they will change conceptually,
+
+and what guardrails/testing will be needed.
+
+Document the plan
+
+Create or extend a document, e.g.:
+
+docs/dashboard-phase2-plan.md (append P2.1 section),
+
+or a new docs/company-financial-aliases-plan.md.
+
+Capture:
+
+audit findings
+
+proposed table schema
+
+migration steps
+
+resolver behavior outline
+
+affected endpoints
+
+No code, no migrations, just a clear plan.
+
+Output format:
+A. Short diagnosis of current alias-join risk
+B. Proposed company_financial_aliases schema (in prose)
+C. Migration / rollout steps (numbered)
+D. High-level resolveCompanyByFinancialAlias behavior
+E. List of affected endpoints/joins for future tasks
+
+Important:
+
+Do not write or execute SQL in this task.
+
+Do not change any join logic yet.
+
+This is a design artifact other engineers (or future you) can pick up and implement safely.
