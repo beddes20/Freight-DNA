@@ -1,0 +1,169 @@
+Freight-DNA — Dashboard Phase 2 — Task P2.1b (Dev-only company_financial_aliases Table + Backfill)
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Dashboard Phase 1.5 (trust retrofit) is complete and documented.
+
+Phase 2 Track 1 is data-model cleanup around financial aliases and joins.
+
+P2.0 (dev schema prereq) is complete.
+
+P2.1 (planning) is complete and documented at docs/company-financial-aliases-plan.md:
+
+current risk: companies.financialAlias as a single comma-separated text field with fuzzy .includes() joins across six dashboard call sites
+
+proposed schema: company_financial_aliases with org/company FK, normalized alias, source, provenance/confirmation
+
+phased migration: add → backfill → dual-read → dual-write → shadow → cutover → deprecate
+
+high-level resolveCompanyByFinancialAlias behavior
+
+Goal:
+Implement the first concrete step of that plan in dev only:
+
+Create the company_financial_aliases table as specified in the P2.1 design.
+
+Backfill it from the legacy companies.financialAlias column (plus self-alias rows from companies.name).
+
+Do not change any joins or dashboard behavior yet.
+
+Guardrails:
+
+Dev DB only. No changes to staging or production in this task.
+
+No changes to any dashboard routes, joins, or resolvers.
+
+No behavior changes for reps.
+
+Schema + one-shot backfill only, aligned with the design doc.
+
+Scope:
+
+In scope:
+
+Schema creation for company_financial_aliases in dev.
+
+A one-shot, idempotent backfill script in dev.
+
+Basic verification and tests.
+
+Out of scope:
+
+Implementing resolveCompanyByFinancialAlias.
+
+Rewiring any dashboard endpoints or ingest paths.
+
+Dropping or modifying companies.financialAlias.
+
+Tasks:
+
+Confirm dev DB target
+
+Reconfirm that the DB you target is the same dev DB used in P2.0 (host, db name, env).
+
+Explicitly avoid any production/staging URLs.
+
+Create company_financial_aliases schema in dev
+
+Implement the table exactly as defined in docs/company-financial-aliases-plan.md:
+
+Columns (names and types per the doc), including:
+
+id
+
+org_id
+
+company_id
+
+alias
+
+alias_normalized
+
+source (legacy_column | admin | financial_upload | heuristic | migration)
+
+confirmed_by_user_id
+
+confirmed_at
+
+created_at
+
+created_by_user_id
+
+updated_at
+
+notes
+
+Indexes:
+
+unique partial index on (org_id, alias_normalized) where source != 'heuristic'
+
+read-path indexes on (org_id, company_id) and (org_id, alias_normalized)
+
+quarantine index on (org_id, source) where source = 'heuristic' and confirmed_by_user_id IS NULL
+
+Implement this via your usual migration mechanism or an idempotent DDL script suitable for later promotion to a formal migration.
+
+Implement a dev-only backfill script
+
+Add a script (e.g. scripts/backfill-company-financial-aliases.ts) that:
+
+Reads all companies with non-empty financialAlias.
+
+Splits on comma, trims, normalizes each token using the same normalization that P2.1 defines for the resolver.
+
+Inserts rows into company_financial_aliases with:
+
+source = 'legacy_column'
+
+correct org_id and company_id
+
+alias and alias_normalized per the design.
+
+Optionally also inserts a self-alias per company (alias = company.name) with the appropriate source value so the resolver doesn’t need a special case for the company’s own name.
+
+Make the script idempotent:
+
+Avoid duplicates on re-run using ON CONFLICT or pre-checks keyed by (org_id, company_id, alias_normalized).
+
+Run schema + backfill in dev and verify
+
+Execute the migration/DDL against the dev DB.
+
+Run the backfill script once.
+
+Verify:
+
+company_financial_aliases exists with the expected columns and indexes.
+
+Row counts roughly match:
+
+number of non-empty aliases from companies.financialAlias, plus
+
+number of companies (for self-aliases), adjusted for de-duplication.
+
+Spot-check a few companies to confirm their aliases and normalization look correct.
+
+Run basic tests
+
+Re-run at least:
+
+npm run check
+
+your guardrails suite
+
+one or two dashboard- or financial-adjacent tests (e.g. storage-integration, backfill-incident) to ensure no regression from the new table.
+
+Output format:
+A. Short diagnosis (what changed in dev DB and why)
+B. Exact schema (table + critical indexes) you created
+C. Backfill results (row counts, edge cases)
+D. Tests run and results
+E. Risks / follow-ups (including how this will be ported to prod migrations later and how it sets up P2.2)
+
+Important:
+
+Do not wire any code to use company_financial_aliases yet.
+
+If the schema you implement needs to diverge from the doc for practical reasons, update docs/company-financial-aliases-plan.md to match and call that divergence out explicitly in the output.

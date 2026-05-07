@@ -107,6 +107,75 @@ export const insertCompanySchema = createInsertSchema(companies).omit({
 export type InsertCompany = z.infer<typeof insertCompanySchema>;
 export type Company = typeof companies.$inferSelect;
 
+// Task #P2.1 — Authoritative alias mapping for the financial-system
+// customer name → CRM company resolution. Replaces the comma-separated
+// `companies.financial_alias` blob (kept for one release as the
+// dual-read/dual-write safety net). See
+// docs/company-financial-aliases-plan.md for the full design + 7-step
+// rollout. P2.1b adds the table + backfill ONLY — no readers, no
+// writers wired up yet (those land in P2.2).
+export const COMPANY_FINANCIAL_ALIAS_SOURCES = [
+  "legacy_column",
+  "admin",
+  "financial_upload",
+  "heuristic",
+  "migration",
+] as const;
+export type CompanyFinancialAliasSource = typeof COMPANY_FINANCIAL_ALIAS_SOURCES[number];
+
+export const companyFinancialAliases = pgTable("company_financial_aliases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  orgId: varchar("org_id")
+    .notNull()
+    .references(() => organizations.id),
+  companyId: varchar("company_id")
+    .notNull()
+    .references(() => companies.id, { onDelete: "cascade" }),
+  alias: text("alias").notNull(),
+  // Stored, not computed, so the canonical normalize fn lives in
+  // exactly one place (server/services/aliasResolver.ts in P2.2). Hot
+  // equality column.
+  aliasNormalized: text("alias_normalized").notNull(),
+  // CHECK constraint enforced via raw SQL in the migration; Drizzle
+  // doesn't model CHECKs ergonomically yet. Allowed values per
+  // COMPANY_FINANCIAL_ALIAS_SOURCES above.
+  source: text("source").notNull(),
+  confirmedByUserId: varchar("confirmed_by_user_id"),
+  confirmedAt: timestamp("confirmed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  createdByUserId: varchar("created_by_user_id"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  notes: text("notes"),
+}, (t) => ({
+  // Read path: "all aliases for this company in this org".
+  orgCompanyIdx: index("cfa_org_company_idx").on(t.orgId, t.companyId),
+  // Read path: "given a financial customer name, what company does it
+  // map to?". Hot path for every dashboard portlet (P2.2).
+  orgAliasNormIdx: index("cfa_org_alias_norm_idx").on(t.orgId, t.aliasNormalized),
+  // One AUTHORITATIVE alias per org. Heuristic suggestions are allowed
+  // to coexist with confirmed mappings (so the quarantine surface can
+  // show "we suggested X, admin confirmed Y") — hence the partial
+  // predicate excluding source='heuristic'.
+  orgAliasNormUniq: uniqueIndex("cfa_org_alias_norm_uniq")
+    .on(t.orgId, t.aliasNormalized)
+    .where(sql`source <> 'heuristic'`),
+  // Quarantine surface (P2.4): "show me unresolved aliases waiting for
+  // human review".
+  quarantineIdx: index("cfa_quarantine_idx")
+    .on(t.orgId)
+    .where(sql`source = 'heuristic' AND confirmed_by_user_id IS NULL`),
+}));
+
+export const insertCompanyFinancialAliasSchema = createInsertSchema(companyFinancialAliases, {
+  source: z.enum(COMPANY_FINANCIAL_ALIAS_SOURCES),
+}).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+export type InsertCompanyFinancialAlias = z.infer<typeof insertCompanyFinancialAliasSchema>;
+export type CompanyFinancialAlias = typeof companyFinancialAliases.$inferSelect;
+
 export const contacts = pgTable("contacts", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   companyId: varchar("company_id").notNull().references(() => companies.id, { onDelete: "cascade" }),
