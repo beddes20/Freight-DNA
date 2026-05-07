@@ -48,3 +48,9 @@ id = "qWL5PJaXioifHvUtbT63Y"
 uri = "file://screenshots/freshness-strip-normal.jpg"
 type = "image"
 title = "Freshness strip — STEADY state (gap < 20, hint hidden)"
+
+[[outputs]]
+id = "U86p8Z5l0bvkXjSzkeLU1"
+uri = "file://docs/audits/customers-tab-audit.md"
+type = "text"
+title = "Customers Tab Deep Audit"

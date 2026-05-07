@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { QueryError } from "@/components/query-error";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -44,6 +44,7 @@ import { invalidateAfterTouchpoint } from "@/lib/invalidations";
 import { buildAiToasts } from "@/lib/aiTouchUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
+import { useIsAdmin } from "@/lib/feature-visibility";
 import { fmtMoney } from "@/lib/rep-utils";
 import type { Company, Contact, User, SharedRep } from "@shared/schema";
 
@@ -142,6 +143,10 @@ function getCompanyFinancials(company: Company, accountSummary: AccountSummaryRo
 
 export default function Customers() {
   const { user: currentUser } = useAuth();
+  const [, navigate] = useLocation();
+  // Task #1102 — Action 3. The "Org Chart" chip below is gated behind
+  // admin_preview while we validate destination/UX before broader rollout.
+  const isAdminPreviewViewer = useIsAdmin();
   const { toast } = useToast();
 
   const initParam = (key: string, fallback = "all") => {
@@ -815,10 +820,35 @@ export default function Customers() {
                         <Users className="h-3.5 w-3.5" />
                         <span>{contacts.length} contact{contacts.length !== 1 ? "s" : ""}</span>
                       </div>
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <Network className="h-3.5 w-3.5" />
-                        <span>Org Chart</span>
-                      </div>
+                      {/* Task #1102 — Action 3. Previously a static
+                          decorative chip that looked like a metric/link
+                          but did nothing. Now wired to the company
+                          detail's People tab (where the org chart
+                          lives) via wouter `navigate`. We can't render
+                          a nested <Link> because the entire card is
+                          already wrapped in <Link href={`/companies/${id}`}>
+                          (invalid HTML), so a button + stopPropagation
+                          mirrors the pattern used by the existing
+                          quick-touch / quick-add buttons on the same
+                          card. Gated behind admin_preview so non-admin
+                          reps see the previous visual (no chip at all)
+                          until Phase 1 visibility work is reviewed. */}
+                      {isAdminPreviewViewer && (
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            navigate(`/companies/${company.id}?tab=people`);
+                          }}
+                          className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded transition-colors cursor-pointer"
+                          title="Open the org chart for this account"
+                          data-testid={`link-org-chart-${company.id}`}
+                        >
+                          <Network className="h-3.5 w-3.5" />
+                          <span>Org Chart</span>
+                        </button>
+                      )}
                       {openTasks > 0 && !company.archivedAt && (
                         <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 text-xs">
                           <AlertTriangle className="h-3 w-3 mr-1" />

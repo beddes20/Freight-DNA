@@ -1,0 +1,50 @@
+Goal
+Clean up the misleading “Org Chart” chip on each customer card on /customers by either (a) wiring it to the actual company org-chart page, or (b) hiding it entirely — initially under the same admin_preview flag used in Prompt B.
+
+Critical guardrails
+
+Frontend-only change, no backend or schema changes.
+
+Do not alter which customers are visible or how they’re filtered.
+
+No deletes, no archives, no ownership changes.
+
+Do not deploy yet; this is a code‑only task.
+
+Files to work in
+
+client/src/pages/customers.tsx (lines ~818–821 in the current version where the “Org Chart” chip is rendered).
+
+Implementation decision
+
+First, inspect the codebase for an existing org‑chart view route for a company (e.g., something like /companies/:id/org-chart or a route where the org chart is rendered inside the company detail view).
+
+If such a route exists and is safe to link to, convert the chip into a real link (e.g., using <Link> from the router) that navigates to that org‑chart view for the current company.
+
+If no such org‑chart route exists yet, hide the chip entirely under admin_preview so we can decide in a later task whether to reintroduce it once the destination exists.
+
+Implementation details
+
+When converting to a link:
+
+Use the same label (“Org Chart”) for now.
+
+Ensure it’s clearly clickable (cursor, focus styles).
+
+Preserve existing layout and spacing as much as possible.
+
+When hiding behind feature flag:
+
+Wrap the chip’s JSX in a conditional on the admin_preview flag, same as Prompt B.
+
+Testing
+
+With admin_preview off: no visible change for any user.
+
+With admin_preview on: either (a) chip becomes a working link to the org chart for that company, or (b) chip disappears entirely; in both cases the rest of the card is unchanged.
+
+Deliverable
+
+A minimal diff on client/src/pages/customers.tsx implementing the chosen behaviour (link vs hide) with comments.
+
+No deployment; I will later decide on rollout once Phase 1 visibility work is reviewed.
