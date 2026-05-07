@@ -1,0 +1,154 @@
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — Start with S1–S2 only
+
+Context:
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+The /dashboard tab surfaces read-only portlets (NBA, Drifting, Relationship Advancement, Coverage Gaps, Award Health, Trending, Margin).
+
+Audit and planning are complete: we confirmed three failure modes — “no items”, “stale upstream”, “endpoint 500” — all collapse into if (length === 0) return null, with TanStack Query defaulting data = [] on error, hiding real failures.
+
+We already have:
+
+cron_heartbeats table + withHeartbeat() in server/lib/cronHeartbeat.ts.
+
+A working feature flag pattern from profile_safety_labels_enabled using a feature_flags table.
+
+Today’s task:
+Start implementing Phase 1.5 in small steps — do S1 and S2 only from the plan, no schedulers or UI yet:
+
+S1: Add the shared PortletFreshness contract and helper file (no route changes).
+
+S2: Wire freshness into the two loadFact-backed endpoints (/award-health, /coverage-gaps) which already have heartbeats, but do not change any client code yet.
+
+Guardrails:
+
+No schema changes.
+
+No changes to schedulers, jobs, or intervals.
+
+No changes to scoring/ranking or revenue math.
+
+No changes to aliasFallbackName, resolveCompany, normN.
+
+No deletes or destructive scripts.
+
+Every change must be easily revertible in a single commit.
+
+Use this older plan as ground truth for details, but implement only S1 and S2 now:
+
+Diagnosis
+Three failure modes (no items / stale upstream / endpoint 500) all collapse into the same hidden UI via if (length === 0) return null, and TanStack Query’s data = [] default hides server errors. We have cron_heartbeats + withHeartbeat() and a feature flag pattern, so we can fix this additively without touching scheduler timing or schemas.
+
+Implement S1 — shared types + helper (no behavior change)
+
+Files:
+
+shared/schema.ts
+
+server/lib/portletFreshness.ts (new)
+
+Tasks:
+
+In shared/schema.ts, near the existing heartbeat types (cronHeartbeats), add:
+
+ts
+export const portletFreshnessStatusEnum = z.enum(["ok", "stale", "unknown"]);
+export type PortletFreshnessStatus = z.infer<typeof portletFreshnessStatusEnum>;
+
+export const portletFreshnessSchema = z.object({
+  source: z.string(),
+  status: portletFreshnessStatusEnum,
+  lastUpdatedAt: z.string().datetime().nullable(),
+  nextExpectedAt: z.string().datetime().nullable(),
+  consecutiveFailures: z.number().int().nonnegative(),
+});
+
+export type PortletFreshness = z.infer<typeof portletFreshnessSchema>;
+Create server/lib/portletFreshness.ts with signatures + skeleton only (no logic yet):
+
+ts
+import { PortletFreshness } from "../../shared/schema";
+import { JobName } from "./cronHeartbeat";
+
+export async function getFreshnessForJob(
+  jobName: JobName,
+): Promise<PortletFreshness> {
+  // TODO: implement in a later step
+  throw new Error("not implemented");
+}
+
+export async function getFreshnessForJobs(
+  jobNames: JobName[],
+): Promise<PortletFreshness> {
+  // TODO: implement in a later step
+  throw new Error("not implemented");
+}
+
+export async function batchFreshness(
+  jobNames: JobName[],
+): Promise<Record<JobName, PortletFreshness>> {
+  // TODO: implement in a later step
+  throw new Error("not implemented");
+}
+Do not import or call these helpers anywhere yet. This step is just types + file scaffolding.
+
+Implement S2 — wire freshness into loadFact-backed endpoints (server-only, additive)
+
+Files:
+
+server/routes/dashboard.ts
+
+Endpoints:
+
+/api/dashboard/award-health (approx L1372)
+
+/api/dashboard/coverage-gaps (approx L1493)
+
+Tasks:
+
+Import PortletFreshness type and the helper signatures at the top of server/routes/dashboard.ts:
+
+ts
+import { PortletFreshness } from "../../shared/schema";
+import { getFreshnessForJobs } from "../lib/portletFreshness";
+In each endpoint’s response object, add an optional freshness key, but keep the rest of the payload identical. For now, stub it to null so there’s still no behavior change until we implement the helper:
+
+ts
+// award-health
+return res.json({
+  awards,
+  freshness: null as PortletFreshness | null,
+});
+ts
+// coverage-gaps
+return res.json({
+  gaps,
+  freshness: null as PortletFreshness | null,
+});
+Do not yet actually call getFreshnessForJobs — we’ll do that in a later step after the helper is implemented and tested.
+
+Tests for this task
+
+Update or add a small contract test confirming that the JSON shape for /award-health and /coverage-gaps now includes freshness as an optional key of type PortletFreshness | null, without breaking existing fields.
+
+Ensure all existing tests still pass (npm test / guardrails).
+
+Output format
+Please respond with:
+
+A. Short summary of what you changed.
+
+B. Exact file list and line-range notes for S1 and S2.
+
+C. Confirmation that:
+
+No scheduler logic was changed.
+
+No scoring or math was changed.
+
+No existing response fields were removed/renamed.
+
+D. Test commands run and their results.
+
+Do not implement S3+ yet (no withHeartbeat wraps, no real freshness computation, no client/UI changes). I’ll trigger a follow-up task for that once S1–S2 are merged and green.
