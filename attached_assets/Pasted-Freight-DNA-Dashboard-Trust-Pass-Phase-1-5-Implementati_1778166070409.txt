@@ -1,0 +1,195 @@
+Freight-DNA — Dashboard Trust Pass (Phase 1.5) — Implementation Planning
+
+Context (do not change):
+
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+The /dashboard tab is a role-aware home screen for AMs, NAMs, Directors, Admins, and Logistics Managers.
+
+This tab directly influences revenue decisions (retain at-risk volume, work awarded lanes, RFP follow-up, relationship advancement).
+
+Task #1108 is already merged:
+
+Sync alert payload now surfaces to all roles.
+
+Upload/repair CTA remains gated to admins/directors.
+
+A guardrail test enforces non-admin visibility.
+
+New diagnosis (confirmed by code):
+
+Multiple dashboard portlets collapse three distinct states into the same “empty/hidden” UI:
+
+Genuinely no items today (clean board).
+
+Upstream job failed or hasn’t run (stale).
+
+Endpoint 500s and TanStack Query falls back to data = [], so if (length === 0) return null hides a real failure.
+
+This affects NBA, Drifting, Relationship Advancement, Coverage Gaps, Award Health, Trending, and Margin Metrics.
+
+cron_heartbeats already exists with lastFinishedAt, lastStatus, nextExpectedAt, and consecutiveFailures, driven by withHeartbeat() in server/lib/cronHeartbeat.ts.
+
+loadFactScheduler already uses heartbeats; NBA, email facts, available freight, and monthly refresh do not yet.
+
+Goal for this task:
+Turn the Phase 1.5 plan into a concrete, minimal implementation strategy that:
+
+Adds a small, reusable “freshness” contract to scoped dashboard endpoints.
+
+Splits “no items today” vs “data unavailable/stale” states in the portlets.
+
+Uses existing cron_heartbeats where available and only adds withHeartbeat() wrappers (no new jobs).
+
+Does not change scoring, ranking, or revenue math.
+
+Keeps every change small, additive, and one-commit-revertible.
+
+Working rules:
+
+This is planning plus concrete implementation outline, not a big refactor.
+
+No schema changes, no destructive scripts, no bulk deletes.
+
+No changes to aliasFallbackName, resolveCompany, normN, or any fuzzy matching logic.
+
+No changes to scheduler intervals or how they are triggered.
+
+Treat anything touching companies, contacts, org charts, financials, freight pipelines, or jobs as high-risk.
+
+Use my existing plan as ground truth:
+
+Diagnosis
+
+Portlet Freshness Matrix
+
+Proposed PortletFreshness type and getFreshnessForJob helper
+
+Empty vs broken UX copy per portlet
+
+6-step implementation sequence
+
+Guardrail tests and risks
+
+Tasks for you:
+
+Sanity-check & tighten the scope
+
+Reconfirm the portlet list and endpoint mapping:
+
+NbaDashboardPanel → /api/dashboard/nba
+
+AccountsDriftingPortlet → stale-accounts + cold-contacts + meaningful-overdue
+
+RelationshipAdvancementPortlet → /api/dashboard/relationships-moved
+
+CoverageGapsPortlet → /api/dashboard/coverage-gaps
+
+AwardHealthPortlet → /api/dashboard/award-health
+
+Trending Accounts → /api/dashboard/trending-accounts
+
+Margin Metrics → /api/dashboard/margin-metrics
+
+Re-derive the “Portlet → Endpoint → Upstream job → Empty behavior → Degraded behavior” matrix from the code to ensure nothing was missed.
+
+Lock in the PortletFreshness contract
+
+Propose the exact TS + zod definition (based on my suggested type) and where it goes in shared/schema.ts.
+
+Propose the exact shape of the optional freshness key each endpoint will add, confirming:
+
+Existing payload fields remain unchanged.
+
+Clients that ignore freshness behave exactly as they do today.
+
+Concrete server plan
+
+Design server/lib/portletFreshness.ts:
+
+Exact function signatures (getFreshnessForJob, etc.).
+
+How you will avoid N separate DB calls per endpoint (e.g., batch read in summary or per-request cache).
+
+List the specific endpoints and line ranges in server/routes/dashboard.ts that will:
+
+Read from getFreshnessForJob.
+
+Append freshness to the response.
+
+For loadFact-backed portlets (Coverage Gaps, Award Health), plan the additive freshness wiring first—no scheduler changes.
+
+For NBA, monthly refresh, available freight, and email facts:
+
+Identify where to wrap with withHeartbeat(JOB_NAMES.<name>, intervalMs, ...).
+
+Identify which job names to add to JOB_NAMES.
+
+Confirm that withHeartbeat behavior (pass-through + rethrow) is safe for each scheduler.
+
+Concrete client plan
+
+Identify the exact components and line ranges that currently do if (items.length === 0) return null:
+
+NbaDashboardPanel
+
+CoverageGapsPortlet
+
+AwardHealthPortlet
+
+RelationshipAdvancementPortlet
+
+Trending / Margin sections on dashboard.tsx
+
+Design a small shared component, e.g. PortletStateBanner, to:
+
+Render the “empty/ok”, “broken/stale”, and “unknown” copy I proposed.
+
+Take freshness and error flags as props.
+
+For AccountsDrifting:
+
+Plan how to surface partial failures (one of the three queries failing) via per-source error tooltips instead of freshness.
+
+Feature flag & rollout strategy
+
+Propose a single feature flag name (e.g. dashboard_freshness_labels_enabled) and where it should live (config/feature-flag pattern already used by profile_safety_labels_enabled).
+
+Describe exactly how to guard:
+
+The new freshness UI (so prod can remain unchanged until we flip the flag).
+
+The new guardrail test that forbids adding more if (length === 0) return null without a comment escape hatch.
+
+Guardrail test plan
+
+Name and outline the tests you will add, including:
+
+A contract test asserting the freshness field’s shape on each scoped endpoint.
+
+A test for getFreshnessForJob covering ok, stale, and unknown branches.
+
+A guardrail preventing new silent-empty patterns in dashboard portlets.
+
+A degraded-state test using a stubbed cron_heartbeats row.
+
+Output format
+Produce your answer in this structure:
+
+Short diagnosis (1–3 sentences)
+
+Updated Portlet Freshness Matrix from the code
+
+Final PortletFreshness contract (TS + zod) and portletFreshness.ts design
+
+Server-side implementation steps (ordered, with file paths + line ranges)
+
+Client-side implementation steps (ordered, with file paths + line ranges)
+
+Feature flag & rollout plan
+
+Guardrail test plan
+
+Risks / safeguards before we touch any code
+
+Remember: this is still a planning task. Do not modify code yet; just produce a crisp, low-blast-radius plan that another agent can implement in small PRs.
