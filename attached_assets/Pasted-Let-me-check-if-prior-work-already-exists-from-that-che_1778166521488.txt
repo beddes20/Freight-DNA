@@ -1,0 +1,26 @@
+Let me check if prior work already exists from that checkpoint message.
+
+
+7 actions
+Wait — I need to check this: the current award-health endpoint returns an array directly (res.json(stalledAwards.slice(0, 10))), and coverage-gaps too (res.json(allGaps.slice(0, 15))). Wrapping these in { awards, freshness } would break existing clients. Let me verify how clients consume them.
+
+
+4 actions
+Pausing before any edits — I found a real conflict in the S2 spec that needs your call before I proceed.
+
+The problem: Both endpoints currently return bare arrays, not objects:
+
+award-health → res.json(stalledAwards.slice(0, 10)) (returns AwardHealthRow[])
+coverage-gaps → res.json(allGaps.slice(0, 15)) (returns GapRow[])
+The clients consume them that way (useQuery<AwardHealthRow[]>, useQuery<GapRow[]> with data: awards = []).
+
+The S2 spec says wrap them as { awards, freshness } / { gaps, freshness } — but that changes the response shape from Array to Object, which breaks both portlets immediately (awards.length becomes undefined.length). That violates your explicit guardrail "No existing response fields were removed/renamed" and the rule "do not change client code yet."
+
+Three ways forward — your call:
+
+Ship S1 only this PR. Defer S2 until S6's client work; the freshness contract sits unused for one PR cycle. Lowest risk, matches your "do not change client code yet" rule literally.
+Ship S1 + a tiny additive client change in the same commit. Update the two useQuery types to AwardHealthRow[] | { awards: AwardHealthRow[], freshness: ... } and normalize at the call site (~6 LOC each). Keeps S2 server-side, single-commit revertible, no UX change.
+Ship S1 + S2 with response-header freshness instead of body. Add X-Portlet-Freshness: <json> header on the two endpoints; body shape stays a bare array. Zero client breakage, but headers are awkward to test and don't compose into /api/dashboard/summary cleanly later.
+My recommendation is #1 — it's the most literal read of your guardrails and keeps every PR a clean one-commit revert. The freshness contract still ships and gets exercised by the server-only contract test; the actual response wiring happens in a later PR alongside the client banner work.
+
+Which would you like? I'll execute as soon as you pick.

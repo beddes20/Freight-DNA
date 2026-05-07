@@ -6742,6 +6742,24 @@ export const cronHeartbeats = pgTable("cron_heartbeats", {
 });
 export type CronHeartbeat = typeof cronHeartbeats.$inferSelect;
 
+// ─── Portlet Freshness contract (Dashboard Trust Pass — Phase 1.5, S1) ───────
+// Read-only freshness signal attached to scoped dashboard endpoints. Lets
+// portlets distinguish "no items today" from "upstream job stale/failed" from
+// "freshness unknown" without changing scoring or any existing payload field.
+// Sourced from cron_heartbeats via server/lib/portletFreshness.ts (helper
+// signatures only at this stage — implementation lands in a later PR).
+export const portletFreshnessStatusEnum = z.enum(["ok", "stale", "unknown"]);
+export type PortletFreshnessStatus = z.infer<typeof portletFreshnessStatusEnum>;
+
+export const portletFreshnessSchema = z.object({
+  source: z.string(),
+  status: portletFreshnessStatusEnum,
+  lastUpdatedAt: z.string().datetime().nullable(),
+  nextExpectedAt: z.string().datetime().nullable(),
+  consecutiveFailures: z.number().int().nonnegative(),
+});
+export type PortletFreshness = z.infer<typeof portletFreshnessSchema>;
+
 // ─── Manager Leak Console (Task #872) ────────────────────────────────────────
 // Manager-only console that surfaces 4 leak classes across Available Freight
 // (AF) and Lane Work Queue (LWQ). Persists daily KPI rollups and an audit row
