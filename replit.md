@@ -7,7 +7,7 @@ FreightDNA is a mini CRM application designed to empower transportation brokerag
 - **Typecheck:** `npm run typecheck`
 - **Codegen:** `npm run codegen`
 - **DB Push:** `drizzle-kit push:pg`
-- **Environment Variables:** `DATABASE_URL`, `OPENAI_API_KEY`, `MICROSOFT_GRAPH_CLIENT_ID`, `MICROSOFT_GRAPH_CLIENT_SECRET`, `RESEND_API_KEY`
+- **Environment Variables:** `DATABASE_URL`, `OPENAI_API_KEY`, `MICROSOFT_GRAPH_CLIENT_ID`, `MICROSOFT_GRAPH_CLIENT_SECRET`, `RESEND_API_KEY`, `CONTACT_JOBS_ENABLED` (Task #1094 kill switch — default true; set to literal `false` to halt inbound contact / suggestion auto-create writers)
 
 ## Stack
 - **Frontend:** React, TypeScript, Tailwind CSS, `shadcn/ui`
@@ -57,6 +57,7 @@ I prefer clear and concise information. I like iterative development with regula
 - **Email Ingestion:** The `processUserMailboxEmail` helper has specific logic for `PERSIST-UNKNOWN` and `TOMBSTONE-DROP` emails; do not reintroduce `DROP-GATE` behavior.
 - **Carrier Ranking:** The carrier ranking engine prioritizes lane fit; AI adjustments cannot violate the lane-first ordering.
 - **Email-Derived Companies (Task #1095, 2026-05-07):** `companies.is_email_derived` (bool, default false) marks rows auto-created by the inbound-email path. The default `GET /api/companies` filter excludes these — pass `?includeEmailDerived=true` to opt back in (Customers page uses `data-testid="toggle-show-email-derived"`). The won-quote AF handoff in `server/services/customerQuotes.ts` is the only production setter (sets `true` iff `opp.source === "email"`); do not introduce other auto-create sites without flagging consistently. Schema requires `drizzle-kit push:pg` before deploy (adds `is_email_derived`, `email_derived_at`, `email_derived_seed_message_id`, partial index `companies_email_derived_idx`). **Backfill TODO:** existing legacy stub rows are NOT yet flagged — use the admin console's "Heuristic (legacy)" mode in `/admin/email-derived-companies` until a backfill migration is run; the "is_email_derived flag" mode (`?source=flag`) only sees newly-flagged rows. Section 1095 of `tests/code-quality-guardrails.test.ts` enforces these contracts.
+- **CONTACT_JOBS_ENABLED kill switch (Task #1094):** Env-driven pause for inbound `contacts` / auto-created `companies` / `account_contact_suggestions` writers. Default is **true** (enabled). Disabled ONLY when the env value is the literal string `false` (trimmed, case-insensitive). When disabled, gated callers (`server/accountContactCaptureService.ts`, `server/services/signatureContactSweep.ts`) early-return and emit a `[contact-jobs] disabled — skipping <writer>` warn line; PERSIST-UNKNOWN still preserves the source email. User-driven CRUD (`POST /api/companies/:companyId/contacts`, `PATCH /api/contacts/:id`, `POST /api/companies`) stays UNGATED so reps retain a recovery path. Helper lives at `server/lib/featureFlags.ts`; boot log emits `[boot] CONTACT_JOBS_ENABLED=<true|false>`. New writers MUST add the gate AND extend `tests/code-quality-guardrails.test.ts` Section 1094.
 
 ## Pointers
 - **Drizzle ORM:** [https://orm.drizzle.team/](https://orm.drizzle.team/)

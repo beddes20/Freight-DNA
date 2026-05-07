@@ -45,12 +45,14 @@ import type { IStorage } from "../storage";
 import { parseSignatureBlock, type ParsedSignature } from "./signatureContactParser";
 import { detectAndSuggest } from "../accountContactCaptureService";
 import { normalizeEmailAddress } from "./carrierContactMatchService";
+import { contactJobsEnabled } from "../lib/featureFlags";
 
 export type SweepAction =
   | "skipped_no_company"
   | "skipped_outbound"
   | "skipped_no_sender"
   | "skipped_no_signal"
+  | "skipped_kill_switch"
   | "enriched"
   | "created"
   | "suggested"
@@ -81,6 +83,20 @@ export async function sweepSignatureContactForInbound(
   storage: IStorage,
   opts: SweepOptions = {},
 ): Promise<SweepResult> {
+  // Task #1094 — CONTACT_JOBS_ENABLED kill switch. When disabled we
+  // skip the entire sweep (both the direct `contacts` writes AND the
+  // `detectAndSuggest` fallback) so flipping the env actually halts
+  // every contact-create path. The caller (`processUserMailboxEmail`)
+  // treats any non-mutating result as a no-op and continues, so the
+  // underlying email row is still preserved by PERSIST-UNKNOWN.
+  if (!contactJobsEnabled()) {
+    console.warn(
+      `[contact-jobs] disabled — skipping sweepSignatureContactForInbound ` +
+        `(messageId=${message.id} orgId=${message.orgId} ` +
+        `companyId=${opts.companyId ?? message.linkedAccountId ?? "null"})`,
+    );
+    return { action: "skipped_kill_switch" };
+  }
   if (message.direction !== "inbound") {
     return { action: "skipped_outbound" };
   }

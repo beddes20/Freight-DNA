@@ -6050,3 +6050,111 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "bulkCreateContacts intentionally reads tombstoned rows to avoid duplicate inserts; the guard comment must remain.",
   );
 })();
+
+// ─────────────────────────────────────────────────────────────────────────
+// Section 1094: CONTACT_JOBS_ENABLED kill switch (Task #1094)
+// Every writer to `contacts`, auto-created `companies`, or
+// `account_contact_suggestions` MUST import + call `contactJobsEnabled`
+// from `server/lib/featureFlags`. Adding a new contact-create writer
+// without wiring the kill switch would silently bypass operator pause
+// during an incident. This section also pins the helper API surface
+// (named exports + boot-log line in `server/index.ts`) so a refactor
+// can't accidentally drop them.
+// ─────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1094: CONTACT_JOBS_ENABLED kill switch ─────────────────\n");
+
+  const HELPER_PATH = "server/lib/featureFlags.ts";
+  assert(
+    `${HELPER_PATH} — file exists`,
+    fs.existsSync(path.join(ROOT, HELPER_PATH)),
+    "featureFlags.ts not found in server/lib",
+  );
+
+  const helperSrc = fs.existsSync(path.join(ROOT, HELPER_PATH)) ? readFile(HELPER_PATH) : "";
+  assert(
+    `${HELPER_PATH} — exports contactJobsEnabled`,
+    /export\s+function\s+contactJobsEnabled\s*\(/.test(helperSrc),
+    "contactJobsEnabled not exported from featureFlags.ts",
+  );
+  assert(
+    `${HELPER_PATH} — exports describeContactJobsFlag`,
+    /export\s+function\s+describeContactJobsFlag\s*\(/.test(helperSrc),
+    "describeContactJobsFlag not exported from featureFlags.ts",
+  );
+  assert(
+    `${HELPER_PATH} — false ONLY when env value is literal "false"`,
+    /normalized\s*===\s*"false"/.test(helperSrc) && /\.trim\(\)/.test(helperSrc) && /\.toLowerCase\(\)/.test(helperSrc),
+    "kill switch must trim + lowercase the env value and only treat literal \"false\" as disabled",
+  );
+  assert(
+    `${HELPER_PATH} — header documents UNGATED user-driven CRUD endpoints`,
+    helperSrc.includes("/api/companies/:companyId/contacts") &&
+      helperSrc.includes("UNGATED") &&
+      helperSrc.includes("POST /api/companies"),
+    "featureFlags.ts header must call out which user-driven CRUD endpoints stay UNGATED",
+  );
+
+  // Boot log line in server/index.ts so operators can see the resolved
+  // flag value alongside the rest of the startup banner.
+  const indexSrc = readFile("server/index.ts");
+  assert(
+    "server/index.ts — imports describeContactJobsFlag",
+    /from\s+["']\.\/lib\/featureFlags["']/.test(indexSrc) && indexSrc.includes("describeContactJobsFlag"),
+    "server/index.ts must import describeContactJobsFlag from ./lib/featureFlags",
+  );
+  assert(
+    "server/index.ts — emits [boot] CONTACT_JOBS_ENABLED=<value> log line",
+    /\[boot\]\s+CONTACT_JOBS_ENABLED=\$\{describeContactJobsFlag\(\)\}/.test(indexSrc),
+    "boot log must surface the resolved CONTACT_JOBS_ENABLED value",
+  );
+
+  // Each gated writer file: must import + call contactJobsEnabled.
+  // Adding a new contact / company / suggestion writer means adding the
+  // file here AND wiring the kill switch in the source.
+  const GATED_WRITER_FILES: ReadonlyArray<{ file: string; describe: string }> = [
+    {
+      file: "server/accountContactCaptureService.ts",
+      describe: "account_contact_suggestions writer (detectAndSuggest + detectUnlinkedDomainSuggestions)",
+    },
+    {
+      file: "server/services/signatureContactSweep.ts",
+      describe: "contacts writer (sweepSignatureContactForInbound)",
+    },
+  ];
+
+  for (const { file, describe } of GATED_WRITER_FILES) {
+    assert(
+      `${file} — exists (${describe})`,
+      fs.existsSync(path.join(ROOT, file)),
+      "gated writer source missing",
+    );
+    if (!fs.existsSync(path.join(ROOT, file))) continue;
+    const src = readFile(file);
+    assert(
+      `${file} — imports contactJobsEnabled from server/lib/featureFlags`,
+      /import\s*\{[^}]*\bcontactJobsEnabled\b[^}]*\}\s*from\s*["'][^"']*lib\/featureFlags["']/.test(src),
+      "gated writer must import contactJobsEnabled from the kill-switch helper",
+    );
+    assert(
+      `${file} — calls contactJobsEnabled() before writing`,
+      /\bcontactJobsEnabled\s*\(\s*\)/.test(src),
+      "gated writer must invoke contactJobsEnabled() at the top of every writer entry point",
+    );
+    assert(
+      `${file} — emits structured [contact-jobs] disabled warn log when gated`,
+      /\[contact-jobs\]\s+disabled/.test(src),
+      "gated writer must emit a [contact-jobs] disabled … warn line so suppressions are countable in logs",
+    );
+  }
+
+  // The user-driven CRUD path MUST stay UNGATED — it's the operator
+  // recovery surface while jobs are paused. Pin that contract so a
+  // future "blanket gate" refactor can't sneak past code review.
+  const contactsRoutesSrc = readFile("server/routes/contacts.ts");
+  assert(
+    "server/routes/contacts.ts — does NOT import contactJobsEnabled (user-driven CRUD stays ungated)",
+    !/contactJobsEnabled/.test(contactsRoutesSrc),
+    "user-driven contact CRUD must stay UNGATED; gate auto-create writers instead",
+  );
+})();

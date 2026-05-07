@@ -16,6 +16,7 @@
 
 import type { EmailMessage } from "@shared/schema";
 import type { IStorage } from "./storage";
+import { contactJobsEnabled } from "./lib/featureFlags";
 
 // ─── Generic inbox prefix patterns ─────────────────────────────────────────
 
@@ -242,6 +243,20 @@ export async function detectAndSuggest(
   message: EmailMessage,
   storage: IStorage,
 ): Promise<DetectAndSuggestResult> {
+  // Task #1094 — CONTACT_JOBS_ENABLED kill switch. When disabled we
+  // emit a single structured warn line per call so operators can count
+  // suppressed work, then early-return without touching
+  // `account_contact_suggestions`. The inbound email row that triggered
+  // this call is preserved upstream (PERSIST-UNKNOWN); pausing this
+  // writer only delays the suggestion, never drops the source signal.
+  if (!contactJobsEnabled()) {
+    console.warn(
+      `[contact-jobs] disabled — skipping detectAndSuggest ` +
+        `(messageId=${message.id} orgId=${message.orgId} ` +
+        `accountId=${message.linkedAccountId ?? "null"})`,
+    );
+    return { upserted: 0, skipped: 0 };
+  }
   const accountId = message.linkedAccountId;
   if (!accountId) return { upserted: 0, skipped: 0 };
 
@@ -380,6 +395,17 @@ export async function detectUnlinkedDomainSuggestions(
   message: EmailMessage,
   storage: IStorage,
 ): Promise<DetectAndSuggestResult> {
+  // Task #1094 — CONTACT_JOBS_ENABLED kill switch. Same contract as
+  // `detectAndSuggest`: emit one structured warn line per call and
+  // early-return without touching `account_contact_suggestions`. The
+  // PERSIST-UNKNOWN email row stays intact upstream.
+  if (!contactJobsEnabled()) {
+    console.warn(
+      `[contact-jobs] disabled — skipping detectUnlinkedDomainSuggestions ` +
+        `(messageId=${message.id} orgId=${message.orgId})`,
+    );
+    return { upserted: 0, skipped: 0 };
+  }
   if (message.linkedAccountId) return { upserted: 0, skipped: 0 };
   if (!message.orgId) return { upserted: 0, skipped: 0 };
 

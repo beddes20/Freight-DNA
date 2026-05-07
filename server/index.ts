@@ -53,6 +53,7 @@ import { Pool as SchemaCheckPool } from "pg";
 import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
 import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "./emailGate";
+import { describeContactJobsFlag } from "./lib/featureFlags";
 
 const app = express();
 const httpServer = createServer(app);
@@ -383,6 +384,11 @@ process.on("uncaughtException", (err) => {
       },
     );
   });
+
+  // Task #1094 — surface the CONTACT_JOBS_ENABLED kill switch state in the
+  // boot log so operators can confirm what their env value resolved to,
+  // independent of the structured warn lines emitted by gated callers.
+  console.log(`[boot] CONTACT_JOBS_ENABLED=${describeContactJobsFlag()}`);
 
   await runMigrations();
 
