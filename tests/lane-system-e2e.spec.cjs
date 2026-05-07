@@ -331,11 +331,31 @@ test.describe('Lane assignment + SSE cross-tab sync', () => {
   // inbox / work-queue refetch observers. Serialising eliminates the
   // alternating ~1-in-3 flake without changing any AF business logic
   // or SSE infra.
+  // Follow-up #1130 — bumped from 60s → 120s. The SSE cross-tab test's
+  // happy path is well under 60s, but when SSE invalidation races (the
+  // documented flake), the test falls back to `pageB.reload()` +
+  // `waitForLoadState('networkidle', 30s)` + a 15s post-reload poll.
+  // That fallback alone consumes ~45s on top of the ~25-30s spent on
+  // setup/assignment, blowing past a 60s test budget under CI load.
+  // Doubling the budget keeps the fallback path inside the budget
+  // without changing any app/SSE behavior.
+  // NOTE: must be passed to `describe.configure` — a top-of-describe
+  // `test.setTimeout(...)` call does NOT apply to tests in this block
+  // under Playwright (only works inside hooks / test bodies).
   test.describe.configure({ mode: 'serial' });
 
-  test.setTimeout(60_000);
-
   test('assigning a lane in one tab updates a second LWQ tab via SSE', async ({ browser }) => {
+    // Follow-up #1130 — set per-test timeout to 120s. The happy path is
+    // well under 60s, but when SSE invalidation races (the documented
+    // flake), the test falls back to `pageB.reload()` +
+    // `waitForLoadState('networkidle', 30s)` + a 15s post-reload poll.
+    // That fallback alone consumes ~45s on top of the ~25-30s spent on
+    // setup/assignment, blowing past a 60s budget under CI load. The
+    // `test.setTimeout` call must be INSIDE the test body — calling it
+    // at describe-body level is silently ignored by Playwright, and
+    // `describe.configure({ timeout })` did not propagate either in
+    // 1.59.1. No app/SSE behavior changed.
+    test.setTimeout(120_000);
     // Two independent contexts → two independent SSE subscriptions, one shared
     // org channel. Same dev-bypass user on both so they receive the broadcast.
     const ctxA = await browser.newContext();
@@ -380,26 +400,25 @@ test.describe('Lane assignment + SSE cross-tab sync', () => {
       }, null, { timeout: 10_000 });
       await Promise.all([waitForLiveSync(pageA), waitForLiveSync(pageB)]);
 
-      // Expand the group on page A so we can click the row's assign dropdown.
-      // (Page B doesn't need to be expanded — we assert at the group level.)
-      await pageA
-        .locator(`[data-testid="customer-group-toggle-${lane.companyName}"]`)
-        .first()
-        .click();
-      const rowA = pageA.locator(`[data-testid="work-queue-row-${lane.laneId}"]`);
-      await expect(rowA).toBeVisible({ timeout: 10_000 });
-
-      // Page A: open the assign dropdown and pick the OTHER user. The
-      // dev-bypass user is `admin` so the manager-only assign-to-other path
-      // is allowed.
-      const assignBtn = pageA.locator(`[data-testid="btn-assign-to-${lane.laneId}"]`);
-      await expect(assignBtn).toBeVisible({ timeout: 10_000 });
-      await assignBtn.click();
-      const option = pageA.locator(
-        `[data-testid="assign-option-${lane.laneId}-${seeded.otherUser.id}"]`,
+      // Follow-up #1130 — dispatch the assignment via a direct API POST
+      // from pageA's auth context instead of driving the inline assign
+      // dropdown. The dropdown UI involves a portal-rendered list, an
+      // eligibility-verdict branch (`canAssignLane`) that can divert to
+      // an inline override-confirm row, and a click target that races
+      // outside-click handlers under CI parallelism — all of which
+      // produced ~1-in-2 flakes that have nothing to do with the
+      // behavior under test (cross-tab SSE invalidation). Issuing the
+      // POST directly removes the click race AND guarantees the server
+      // has persisted the row before either tab is queried, which is
+      // the actual readiness signal the cross-tab assertions need.
+      // This is a test-only timing/sync change; the production
+      // dropdown flow is exercised by the existing per-row LWQ unit
+      // tests and the manager-side reassign test below.
+      const assignResp = await pageA.request.post(
+        `/api/recurring-lanes/${lane.laneId}/assign`,
+        { data: { ownerUserId: seeded.otherUser.id } },
       );
-      await expect(option).toBeVisible({ timeout: 5_000 });
-      await option.click();
+      expect(assignResp.status(), `assign POST ${await assignResp.text()}`).toBe(200);
 
       // Page B's SSE subscription should receive the `recurring_lane`
       // broadcast and invalidate the work-queue query. Once the refetch
@@ -422,11 +441,35 @@ test.describe('Lane assignment + SSE cross-tab sync', () => {
           })
           .toBe(0);
       } catch {
+        // Follow-up #1130 — when SSE invalidation races, fall back to a
+        // hard reload of pageB. Two readiness fixes vs the prior
+        // `waitForLoadState('networkidle')` approach:
+        //
+        //  (a) Wait for pageA's local state to confirm the assignment
+        //      landed server-side BEFORE reloading pageB. The
+        //      onSuccess of the local mutation invalidates pageA's
+        //      `recurring-lanes/work-queue` query, so once the seeded
+        //      customer-group leaves pageA's `bucket-unassigned` we
+        //      know the PATCH has been persisted. Without this guard
+        //      the reload races the in-flight mutation and pageB's
+        //      fresh fetch returns the pre-assignment row.
+        //  (b) Use a testid-based readiness signal in place of
+        //      `waitForLoadState('networkidle')`. The dev shell polls
+        //      notifications / today-queue / live-sync on a steady
+        //      cadence (see Start-application logs), so the network
+        //      never goes idle and a 30s networkidle wait
+        //      deterministically times out.
+        await expect.poll(() => unassignedGroupOnA.count(), { timeout: 10_000 }).toBe(0);
         await pageB.reload();
-        // Wait for the LWQ page to fully hydrate by waiting for any
-        // customer-group-toggle to appear, then assert the seeded
-        // customer's group is no longer in the unassigned bucket.
-        await pageB.waitForLoadState('networkidle', { timeout: 30_000 });
+        // Follow-up #1130 — wait for the LWQ bucket shell (which always
+        // renders, even when zero customer groups are visible) instead
+        // of `customer-group-toggle-*`. With the customer URL filter
+        // applied, the seeded lane was the only group; once it's
+        // assigned away, the unassigned-only view is empty and a
+        // toggle would never appear, deadlocking the readiness wait.
+        await expect(
+          pageB.locator('[data-testid="bucket-unassigned"]')
+        ).toBeVisible({ timeout: 15_000 });
         await expect.poll(() => unassignedGroupOnB.count(), { timeout: 15_000 }).toBe(0);
       }
 
