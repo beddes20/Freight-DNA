@@ -54,6 +54,12 @@ import { apiRequest, queryClient } from "@/lib/queryClient";
 import { fmtMoney } from "@/lib/rep-utils";
 import { TaskDialog } from "@/components/task-dialog";
 import { CalloutDialog } from "@/components/callout-dialog";
+// Task #1109 — Profile Safety Labels (banner + Connection/Freshness pills)
+import { useProfileSafetyFlag } from "@/hooks/useProfileSafetyFlag";
+import { EmailDerivedBanner } from "@/components/profile-safety/EmailDerivedBanner";
+import { DataFreshnessPill } from "@/components/profile-safety/DataFreshnessPill";
+import { LiveSyncPill } from "@/components/live-sync/LiveSyncPill";
+import { FreshnessLine } from "@/components/profile-safety/FreshnessLine";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import { FileAttachmentUpload, FileAttachmentList, uploadPendingFiles, type PendingFile } from "@/components/file-attachment";
 import { MarketShareCard } from "@/components/market-share-card";
@@ -602,6 +608,8 @@ export default function CompanyDetail() {
     );
   }
 
+  const safetyLabelsEnabled = useProfileSafetyFlag();
+
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6">
       <div className="sticky top-0 z-20 -mx-4 sm:-mx-6 px-4 sm:px-6 py-3 bg-background/95 backdrop-blur border-b border-border/50 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -659,6 +667,17 @@ export default function CompanyDetail() {
                           text={`Momentum compares your touch count from the last 30 days vs the prior 30 days. ${healthScore.momentumLabel || ""} ↑ = engaging more, ↓ = dropping off, → = steady.`}
                           side="bottom"
                         />
+                        {/* Task #1109 / #1109a — sourced from `touchpoints.date`
+                            (user-entered, can be backdated). Label says
+                            "Last touchpoint" so the wording matches the data. */}
+                        {safetyLabelsEnabled && (
+                          <FreshnessLine
+                            companyId={companyId}
+                            source="health"
+                            label="Last touchpoint"
+                            testIdSuffix="health"
+                          />
+                        )}
                       </div>
                       {healthNarrative?.narrative && (
                         <p className="text-xs text-muted-foreground italic leading-relaxed max-w-md" data-testid="health-narrative">{healthNarrative.narrative}</p>
@@ -675,6 +694,15 @@ export default function CompanyDetail() {
                             <span className="text-xs text-muted-foreground" title={growthScore.drivers.map(d => `${d.positive ? "↑" : "↓"} ${d.label}`).join(" · ")}>
                               — {growthScore.drivers[0].positive ? "↑" : "↓"} {growthScore.drivers[0].label}
                             </span>
+                          )}
+                          {/* Task #1109 — growth/momentum freshness from accountGrowthScores.calculatedAt */}
+                          {safetyLabelsEnabled && (
+                            <FreshnessLine
+                              companyId={companyId}
+                              source="growth"
+                              label="Growth"
+                              testIdSuffix="growth"
+                            />
                           )}
                         </div>
                       )}
@@ -704,6 +732,18 @@ export default function CompanyDetail() {
                     {threadSummary.waitingOnThem > 0 && `${threadSummary.waitingOnThem} on them`}
                     {threadSummary.overdue > 0 && ` (${threadSummary.overdue} overdue)`}
                   </Badge>
+                )}
+                {/* Task #1109 — split Connection (live socket) vs Data freshness (upstream jobs).
+                    Both pills are NEW on the company-detail header; when the
+                    `profile_safety_labels_enabled` flag is OFF, this entire span
+                    renders nothing — which restores the prior UI exactly (the
+                    page had no live indicator before this task). */}
+                {safetyLabelsEnabled && (
+                  <span className="inline-flex items-center gap-1.5" data-testid="group-profile-safety-pills">
+                    <span className="text-[11px] uppercase tracking-wider text-muted-foreground">Connection</span>
+                    <LiveSyncPill testId="pill-profile-connection" />
+                    <DataFreshnessPill companyId={companyId} testId="pill-profile-data-freshness" />
+                  </span>
                 )}
                 {company.website && (
                   <a
@@ -820,6 +860,11 @@ export default function CompanyDetail() {
           </DropdownMenu>
         </div>
       </div>
+
+      {/* Task #1109 — Email-derived banner (above tabs, dismissible per session) */}
+      {safetyLabelsEnabled && company.isEmailDerived && (
+        <EmailDerivedBanner companyId={companyId} companyName={company.name} />
+      )}
 
       {company.archivedAt && (
         <div className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/30 px-4 py-3">

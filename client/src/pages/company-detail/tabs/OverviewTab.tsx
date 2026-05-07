@@ -17,6 +17,10 @@ import { CustomerEmailIdentitiesCard } from "../components/CustomerEmailIdentiti
 import { fmtMoney } from "@/lib/rep-utils";
 import type { Contact, Rfp } from "@shared/schema";
 import type { AccountPerf, MonthBucket } from "../types";
+// Task #1109 — non-invasive freshness + mapping hints (gated by feature flag)
+import { useProfileSafetyFlag } from "@/hooks/useProfileSafetyFlag";
+import { FreshnessLine } from "@/components/profile-safety/FreshnessLine";
+import { FinancialMappingHint } from "@/components/profile-safety/FinancialMappingHint";
 
 interface OverviewTabProps {
   accountPerf: AccountPerf | undefined;
@@ -56,6 +60,7 @@ export function OverviewTab({
   onPrepForCall,
 }: OverviewTabProps) {
   const [ffDialogOpen, setFfDialogOpen] = useState(false);
+  const safetyLabelsEnabled = useProfileSafetyFlag();
 
   const { data: contacts = [] } = useQuery<Contact[]>({
     queryKey: ["/api/companies", companyId, "contacts"],
@@ -145,6 +150,9 @@ export function OverviewTab({
       )}
 
       {/* Phase 1 persistent NBA card — takes precedence; falls back to legacy when absent */}
+      {safetyLabelsEnabled && (
+        <FreshnessLine companyId={companyId} source="nba" label="Next Best Action" />
+      )}
       <NbaCompanyCard companyId={companyId} onHasCard={setHasPhase1Card} onPrepForCall={onPrepForCall} />
 
       {!hasPhase1Card && (
@@ -166,6 +174,12 @@ export function OverviewTab({
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-0 space-y-4">
+            {safetyLabelsEnabled && (
+              <>
+                <FreshnessLine companyId={companyId} source="financials" label="Financial sync" testIdSuffix="account-perf" />
+                <FinancialMappingHint companyId={companyId} />
+              </>
+            )}
             <PerfGrid bucket={accountPerf.ytd} label={`YTD (${new Date().getFullYear()})`} />
             <div className="border-t" />
             <PerfGrid bucket={accountPerf.lastMonth} label={fmtMonth(accountPerf.lastMonthKey)} />

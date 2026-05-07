@@ -1,5 +1,5 @@
 import type { Express } from "express";
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, sql, max, ne, or, isNotNull, type SQL } from "drizzle-orm";
 import { storage, db } from "../storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "../auth";
 import { pStr, qStr } from "../lib/req";
@@ -15,8 +15,17 @@ import {
   emailMessages,
   insertCustomerEmailIdentitySchema,
   CUSTOMER_EMAIL_IDENTITY_KINDS,
+  nbaCards,
+  accountGrowthScores,
+  touchpoints,
+  freightDailyUploadFact,
+  featureFlags,
 } from "@shared/schema";
 import { z } from "zod";
+
+// Task #1109 — Profile Safety Labels feature flag key. Default ON: a row is
+// only persisted when an admin explicitly disables the surface.
+const PROFILE_SAFETY_FLAG_KEY = "profile_safety_labels_enabled";
 
 export function registerCompanyRoutes(app: Express): void {
   // ── List companies ─────────────────────────────────────────────────────────
@@ -636,6 +645,163 @@ export function registerCompanyRoutes(app: Express): void {
       res.json(updated);
     } catch (error) {
       res.status(500).json({ error: "Failed to update onboarding milestones" });
+    }
+  });
+
+  // ── Task #1109 — Profile Safety Labels feature flag (default ON) ───────────
+  // Distinct from the generic /api/feature-flags GET because we need the
+  // client to distinguish "no row → default ON" from "row with enabled=false →
+  // explicit OFF". Returns a tiny shape {enabled, configured} that the
+  // useProfileSafetyFlag hook keys off.
+  app.get("/api/profile-safety-flag", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const [row] = await db
+        .select({ enabled: featureFlags.enabled })
+        .from(featureFlags)
+        .where(and(
+          eq(featureFlags.orgId, currentUser.organizationId),
+          eq(featureFlags.flagKey, PROFILE_SAFETY_FLAG_KEY),
+        ));
+      if (!row) {
+        return res.json({ enabled: true, configured: false });
+      }
+      return res.json({ enabled: !!row.enabled, configured: true });
+    } catch (err) {
+      console.error("[profile-safety-flag] error:", err);
+      // Default-ON: do not break the page if the lookup fails.
+      res.json({ enabled: true, configured: false });
+    }
+  });
+
+  // ── Task #1109 — Per-company data freshness ────────────────────────────────
+  // Pure SELECTs of the upstream-job timestamps surfaced on the Company
+  // Profile. No recomputation is performed here — this is the read-side of
+  // the "Updated Xh ago" / "Stale" pills.
+  app.get("/api/companies/:id/data-freshness", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = pStr(req.params.id);
+      if (!(await canAccessCompany(currentUser, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const company = await storage.getCompanyInOrg(companyId, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const [nbaRow] = await db
+        .select({ ts: max(nbaCards.createdAt) })
+        .from(nbaCards)
+        .where(and(eq(nbaCards.companyId, companyId), eq(nbaCards.orgId, currentUser.organizationId)));
+
+      const [growthRow] = await db
+        .select({ ts: accountGrowthScores.calculatedAt })
+        .from(accountGrowthScores)
+        .where(and(
+          eq(accountGrowthScores.companyId, companyId),
+          eq(accountGrowthScores.organizationId, currentUser.organizationId),
+        ))
+        .orderBy(desc(accountGrowthScores.calculatedAt))
+        .limit(1);
+
+      // Health is derived from the latest meaningful touchpoint date.
+      const [healthRow] = await db
+        .select({ ts: max(touchpoints.date) })
+        .from(touchpoints)
+        .where(eq(touchpoints.companyId, companyId));
+
+      // Financial freshness uses the most recent freight_daily_upload_fact
+      // ingest for any row whose customer matches the company name or its
+      // financialAlias (case-insensitive). Falls back to NULL when no rows
+      // match — which the UI surfaces as "never recomputed".
+      const aliasRaw = (company.financialAlias ?? "").trim();
+      const nameRaw = (company.name ?? "").trim();
+      const orParts: SQL[] = [];
+      if (nameRaw) orParts.push(sql`lower(${freightDailyUploadFact.customer}) = lower(${nameRaw})`);
+      if (aliasRaw) orParts.push(sql`lower(${freightDailyUploadFact.customer}) = lower(${aliasRaw})`);
+      let financials: string | null = null;
+      if (orParts.length > 0) {
+        const [finRow] = await db
+          .select({ ts: max(freightDailyUploadFact.ingestedAt) })
+          .from(freightDailyUploadFact)
+          .where(and(
+            eq(freightDailyUploadFact.orgId, currentUser.organizationId),
+            or(...orParts),
+          ));
+        financials = finRow?.ts ? new Date(finRow.ts as Date).toISOString() : null;
+      }
+
+      res.json({
+        nba:        nbaRow?.ts ?? null,
+        growth:     growthRow?.ts ?? null,
+        health:     healthRow?.ts ?? null,
+        financials,
+      });
+    } catch (err) {
+      console.error("[data-freshness] error:", err);
+      res.status(500).json({ error: "Failed to compute data freshness" });
+    }
+  });
+
+  // ── Task #1109 — Financial mapping health ──────────────────────────────────
+  // Counts freight rows whose `customer` looks like the company's name but is
+  // not currently bound to it via name- or financialAlias-equality. Powers
+  // the "may be incomplete" hint on the financial card. Read-only — does NOT
+  // mutate freight_daily_upload_fact.
+  app.get("/api/companies/:id/financial-mapping-health", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const companyId = pStr(req.params.id);
+      if (!(await canAccessCompany(currentUser, companyId))) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const company = await storage.getCompanyInOrg(companyId, currentUser.organizationId);
+      if (!company) return res.status(404).json({ error: "Company not found" });
+
+      const nameRaw = (company.name ?? "").trim();
+      const aliasRaw = (company.financialAlias ?? "").trim();
+      const hasFinancialAlias = aliasRaw.length > 0;
+      if (nameRaw.length < 3) {
+        return res.json({
+          unmappedRowCount: 0,
+          unmappedCustomerSamples: [],
+          hasFinancialAlias,
+        });
+      }
+
+      // Match: customer ILIKE %name% AND NOT equal to name AND (no alias OR not equal to alias).
+      const namePattern = `%${nameRaw.toLowerCase()}%`;
+      const conditions: SQL[] = [
+        eq(freightDailyUploadFact.orgId, currentUser.organizationId),
+        isNotNull(freightDailyUploadFact.customer),
+        sql`lower(${freightDailyUploadFact.customer}) like ${namePattern}`,
+        sql`lower(${freightDailyUploadFact.customer}) <> lower(${nameRaw})`,
+      ].filter((c): c is SQL => c !== undefined);
+      if (hasFinancialAlias) {
+        conditions.push(sql`lower(${freightDailyUploadFact.customer}) <> lower(${aliasRaw})`);
+      }
+
+      const [countRow] = await db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(freightDailyUploadFact)
+        .where(and(...conditions));
+
+      const sampleRows = await db
+        .selectDistinct({ customer: freightDailyUploadFact.customer })
+        .from(freightDailyUploadFact)
+        .where(and(...conditions))
+        .limit(5);
+
+      res.json({
+        unmappedRowCount: countRow?.n ?? 0,
+        unmappedCustomerSamples: sampleRows.map(r => r.customer).filter(Boolean) as string[],
+        hasFinancialAlias,
+      });
+    } catch (err) {
+      console.error("[financial-mapping-health] error:", err);
+      res.status(500).json({ error: "Failed to compute mapping health" });
     }
   });
 }
