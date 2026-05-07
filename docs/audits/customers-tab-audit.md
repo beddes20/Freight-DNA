@@ -286,6 +286,12 @@ Reference contracts:
 
 ---
 
+## Owner-mismatch diff
+
+- 2026-05-07 read-only diff of `companies` where `owner_rep_id IS DISTINCT FROM assigned_to` (both non-null), with inactive-user proxy and per-org / per-category counts: [`customers-owner-mismatch-20260507.md`](./customers-owner-mismatch-20260507.md) → CSV at [`exports/customers-owner-mismatch-20260507.csv`](./exports/customers-owner-mismatch-20260507.csv).
+
+---
+
 ## Appendix — Proposed follow-up tasks
 
 These are **proposals** for the planning agent. Do not create them from this
