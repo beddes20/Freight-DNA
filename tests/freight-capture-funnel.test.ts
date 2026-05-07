@@ -89,7 +89,7 @@ async function seed() {
     .insert(quoteCustomers)
     .values([
       { organizationId: org.id, name: "Acme Foods", partyType: "customer" },
-      { organizationId: org.id, name: "Globex Logistics", partyType: "customer" },
+      { organizationId: org.id, name: "Globex Industries", partyType: "customer" },
       // Should be filtered out by nonCustomer guard.
       { organizationId: org.id, name: "Bad Carrier Inc", partyType: "carrier" },
     ])
@@ -608,13 +608,16 @@ async function main(): Promise<void> {
       !perfLabels.includes("Rep Legacy"),
       `got ${perfLabels.join(", ")}`,
     );
-    // The non-customer-facing reps' QUOTES are still counted in stage totals —
-    // we only hide the rep buckets from rankings, not the underlying quote
-    // rows (preserves historical attribution).
-    // 9 reps × (1 won + 1 lost) = 18 received, 9 won, 9 lost.
+    // Task #1042 / #1048 — `applyFilters` now drops rows whose `repId` is
+    // attributed to a non-customer-facing rep (managers, logistics_*,
+    // generic-sales) from EVERY aggregate including stage totals, not just
+    // rankings. Visible reps in this seed: AM, NAM, and Legacy (null
+    // user_id, accepted by `isCustomerFacingQuoteRep`). 3 reps × 2 quotes
+    // = 6 received, 3 won, 3 lost. (Pre-#1042 expectation was 18/9/9 —
+    // updated here to match the intentional production behavior.)
     assert(
-      "9d: stage totals still include all reps' quotes (attribution preserved)",
-      funnel.summary.totalReceived === 18 && funnel.summary.totalWon === 9,
+      "9d: stage totals reflect Task #1042 rep-role gate (visible reps' quotes only)",
+      funnel.summary.totalReceived === 6 && funnel.summary.totalWon === 3,
       `received=${funnel.summary.totalReceived} won=${funnel.summary.totalWon}`,
     );
 
@@ -1091,9 +1094,14 @@ async function main(): Promise<void> {
       !funnelLabels.includes("Rep OK"),
       `got ${funnelLabels.join(", ")}`,
     );
+    // Task #1042 / #1048 — stage totals reflect the rep-role gate. After
+    // suppressing Rep OK, only Rep Unliked (null user_id, accepted by
+    // `isCustomerFacingQuoteRep`) remains visible. Rep Wrong (admin role)
+    // is excluded by the universe filter. So received=1, won=0.
+    // (Pre-#1042 expectation was 6/3 — updated to match production.)
     assert(
-      "13c: stage totals still count suppressed rep's quotes (received=6, won=3)",
-      funnelAfter.summary.totalReceived === 6 && funnelAfter.summary.totalWon === 3,
+      "13c: stage totals reflect Task #1042 rep-role gate (only unsuppressed visible reps)",
+      funnelAfter.summary.totalReceived === 1 && funnelAfter.summary.totalWon === 0,
       `received=${funnelAfter.summary.totalReceived} won=${funnelAfter.summary.totalWon}`,
     );
 

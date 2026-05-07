@@ -1,0 +1,291 @@
+Outstanding work. All 4 workflows are now green, Step 1 (AF-WF-001) is complete, and you stayed disciplined—test-only fixes, no production code touched, no schema migrations committed, follow-ups clearly scoped.
+
+What just happened (translation for the next engineer)
+Step 1: AF Workflow Recovery — ✅ COMPLETE
+Starting state: 12/15 workflows green, 3 failing (backfill-incident, storage-integration, freight-capture-funnel were assumed red based on the original audit; lane-system-e2e was 12/15 with SSE flakes).
+
+Root causes identified:
+
+freight-capture-funnel — stale test fixtures (wrong schema assumptions)
+
+lane-system-e2e SSE tests — real-time race between SSE delivery and test polling window, exacerbated by parallel worker contention
+
+Dev DB schema drift — missing columns needed by tests (recovered via manual SQL, not committed migration)
+
+Fixes applied (test-only, reversible):
+
+Fixed stale fixtures in tests/freight-capture-funnel.test.ts
+
+Added SSE-wait probe in tests/lane-system-e2e.spec.cjs (waits for EventSource.readyState === OPEN before triggering PATCH)
+
+Added focus-event refetch nudge to force react-query to poll aggressively
+
+Forced SSE describe block into serial mode (describe.serial) to prevent parallel worker interference
+
+Added try-SSE-then-reload fallback for heavy CI parallelism environments
+
+No AF production code changed
+
+No schema migrations committed (dev DB recovered manually; proper migration deferred to Task #1129)
+
+Ending state:
+
+✅ backfill-incident
+
+✅ storage-integration (32/32)
+
+✅ test:freight-capture-funnel (156/0)
+
+✅ test:lane-system-e2e (15/15, reproducible)
+
+Follow-ups proposed:
+
+Task #1129 — Proper migration strategy for dev schema drift
+
+Task #1130 — Lane-inbox SSE delivery under load (infrastructure investigation)
+
+Task #1131 — Auto-enable shipped feature flags for dev org
+
+Diagnostic quality check
+Your .local/tasks/task-1127-diagnostic.md is production-ready. It clearly documents:
+
+What was broken
+
+What was trustworthy vs not
+
+Root causes
+
+Fixes applied (scope-limited, test-only)
+
+What was not fixed (SSE infrastructure, schema migrations) and why (out of scope, deferred to follow-ups)
+
+This is exactly the audit trail the next engineer needs.
+
+Ready for Step 2: Phase 0 Read-Only Audit
+Now that workflows are green, you can safely run the Phase 0 audit queries against the dev/prod replica without fear of breaking the guardrail net.
+
+Step 2 Task Spec (ready to paste into Replit)
+TASK: AF-P0-001 — Available Freight Phase 0 Read-Only Audit
+
+Dependency: AF-WF-001 (complete ✅)
+
+Goal: Quantify email-derived pollution, snooze/SLA desync, import divergence, and owner drift in Available Freight to decide whether Phase 1 is "label and disclose" or "escalate and emergency filter."
+
+Scope: Five read-only SQL queries + diagnostic write-up. No production writes, no schema changes, no filter/scope changes.
+
+Files / tables / jobs involved
+New files created:
+
+.local/tasks/af-phase0-audit.sql (5 queries, read-only)
+
+.local/tasks/af-phase0-diagnostic.md (findings write-up)
+
+Tables queried (SELECT only):
+
+freight_opportunities
+
+freight_daily_upload_fact
+
+companies
+
+freight_opportunity_import_audit
+
+users
+
+No writes to production. Run against dev replica first, then prod replica if safe.
+
+The 5 audit queries
+Query 1: Email-derived pollution (last 14 days)
+Question: How many AF rows reference companies with is_email_derived = true?
+
+sql
+-- Query 1: Email-derived customer pollution in Available Freight (last 14 days)
+SELECT 
+  COUNT(*) AS af_rows_email_derived,
+  COUNT(DISTINCT fo.company_id) AS unique_email_derived_companies,
+  COUNT(DISTINCT fo.org_id) AS orgs_affected
+FROM freight_opportunities fo
+JOIN companies c ON fo.company_id = c.id
+WHERE c.is_email_derived = true
+  AND fo.created_at >= NOW() - INTERVAL '14 days'
+  AND fo.status IN ('open', 'awaiting_approval', 'ready_to_send', 'partial');
+Decision point:
+
+<50 rows → Phase 1 labels sufficient
+
+50–500 rows → Phase 1 + Phase 2 filter (hide by default)
+
+>500 rows → Escalate; consider emergency quarantine
+
+Query 2: Snooze/SLA desync
+Question: How many open AF rows are hidden by snooze while SLA L1/L2 is actively firing?
+
+sql
+-- Query 2: Snoozed rows with active SLA escalation
+SELECT 
+  COUNT(*) AS snoozed_but_sla_active,
+  COUNT(*) FILTER (WHERE sla_notified_l1_at IS NOT NULL) AS sla_l1_firing,
+  COUNT(*) FILTER (WHERE sla_notified_l2_at IS NOT NULL) AS sla_l2_firing,
+  COUNT(DISTINCT owner_user_id) AS owners_affected
+FROM freight_opportunities
+WHERE snoozed_until IS NOT NULL
+  AND snoozed_until > NOW()
+  AND awaiting_approval_since IS NOT NULL
+  AND status IN ('awaiting_approval', 'ready_to_send');
+Decision point:
+
+>10 rows → Phase 2 must include "Snoozed but SLA-active" admin view
+
+>50 rows → Consider auto-pausing SLA when snoozed_until is in the future
+
+Query 3: Import divergence (OneDrive vs Unified Daily Upload)
+Question: For today's date, how many (orgId, lane, pickup) triples appear in freight_opportunities but NOT in freight_daily_upload_fact (and vice versa)?
+
+sql
+-- Query 3: Import divergence (OneDrive importer vs Unified Daily Upload)
+WITH todays_date AS (
+  SELECT CURRENT_DATE AS today
+),
+af_rows AS (
+  SELECT DISTINCT
+    fo.org_id,
+    fo.origin_city || '-' || fo.destination_city AS lane,
+    DATE(fo.pickup_datetime) AS pickup_date
+  FROM freight_opportunities fo
+  CROSS JOIN todays_date td
+  WHERE DATE(fo.pickup_datetime) = td.today
+    AND fo.status IN ('open', 'awaiting_approval', 'ready_to_send', 'partial')
+),
+fact_rows AS (
+  SELECT DISTINCT
+    fdu.org_id,
+    fdu.origin_city || '-' || fdu.destination_city AS lane,
+    DATE(fdu.pickup_datetime) AS pickup_date
+  FROM freight_daily_upload_fact fdu
+  CROSS JOIN todays_date td
+  WHERE DATE(fdu.pickup_datetime) = td.today
+)
+SELECT 
+  (SELECT COUNT(*) FROM af_rows WHERE (org_id, lane, pickup_date) NOT IN (SELECT org_id, lane, pickup_date FROM fact_rows)) AS in_af_not_fact,
+  (SELECT COUNT(*) FROM fact_rows WHERE (org_id, lane, pickup_date) NOT IN (SELECT org_id, lane, pickup_date FROM af_rows)) AS in_fact_not_af,
+  (SELECT COUNT(*) FROM af_rows) AS total_af_today,
+  (SELECT COUNT(*) FROM fact_rows) AS total_fact_today;
+Decision point:
+
+Divergence >10% → Phase 5 reconciler is mandatory
+
+Divergence <5% → Phase 5 can wait; likely explanation is timing (one writer ran, other hasn't yet)
+
+Query 4: Unmatched companies distribution (last 30 days)
+Question: How often does the OneDrive importer encounter customer names it can't resolve to a CRM company?
+
+sql
+-- Query 4: Unmatched companies in import audit (last 30 days)
+SELECT 
+  DATE(import_started_at) AS import_date,
+  unmatched_companies,
+  rows_inserted,
+  rows_updated,
+  rows_expired
+FROM freight_opportunity_import_audit
+WHERE import_started_at >= NOW() - INTERVAL '30 days'
+ORDER BY import_started_at DESC;
+Decision point:
+
+If unmatched_companies > 0 on multiple recent runs → That's when email-derived stubs were created
+
+Cross-reference those dates with Query 1 results to confirm pollution source
+
+Query 5: Owner attribution drift
+Question: How many rows have conflicting owner attribution (where ownerUserId, delegatedToUserId, createdById, approvedById disagree in non-trivial ways)?
+
+sql
+-- Query 5: Owner attribution drift
+SELECT 
+  COUNT(*) AS total_open_af_rows,
+  COUNT(*) FILTER (WHERE owner_user_id IS NULL) AS missing_owner,
+  COUNT(*) FILTER (WHERE owner_user_id != created_by_id AND delegated_to_user_id IS NULL) AS owner_creator_mismatch,
+  COUNT(*) FILTER (WHERE delegated_to_user_id IS NOT NULL AND delegated_to_user_id != owner_user_id) AS delegation_active,
+  COUNT(*) FILTER (WHERE approved_by_id IS NOT NULL AND approved_by_id NOT IN (owner_user_id, delegated_to_user_id, created_by_id)) AS approved_by_unknown
+FROM freight_opportunities
+WHERE status IN ('open', 'awaiting_approval', 'ready_to_send', 'partial', 'covered')
+  AND created_at >= NOW() - INTERVAL '14 days';
+Decision point:
+
+missing_owner >0 → Investigate importer's owner-stamping logic
+
+approved_by_unknown >10 → Likely fallout from the backfill-incident workflow failure; cross-reference with Task #1127 diagnostic
+
+Recommended execution plan
+Run queries against dev replica first (read-only, no risk)
+
+Review results — do the numbers pass sanity checks? (e.g., total_af_today should be >0 on a weekday)
+
+If dev results look clean, run against prod replica (still read-only)
+
+Write up findings in .local/tasks/af-phase0-diagnostic.md using this template:
+
+text
+# Available Freight Phase 0 Audit — Findings
+
+**Date:** 2026-05-07  
+**Ran against:** [dev replica / prod replica]  
+**Dependency:** Task #1127 (AF Workflow Recovery) complete ✅
+
+---
+
+## Query 1: Email-derived pollution
+- **AF rows (last 14 days) tied to email-derived companies:** [N]
+- **Unique email-derived companies:** [N]
+- **Orgs affected:** [N]
+- **Severity:** [Low <50 / Medium 50-500 / High >500]
+- **Recommendation:** [Phase 1 labels / Phase 1 + Phase 2 filter / Escalate]
+
+## Query 2: Snooze/SLA desync
+- **Snoozed rows with active SLA:** [N]
+- **L1 firing on snoozed rows:** [N]
+- **L2 firing on snoozed rows:** [N]
+- **Owners affected:** [N]
+- **Severity:** [Low <10 / Medium 10-50 / High >50]
+- **Recommendation:** [Phase 2 admin view / + auto-pause SLA]
+
+## Query 3: Import divergence
+- **In AF but not Fact (today):** [N]
+- **In Fact but not AF (today):** [N]
+- **Total AF rows today:** [N]
+- **Total Fact rows today:** [N]
+- **Divergence %:** [X%]
+- **Severity:** [Low <5% / Medium 5-10% / High >10%]
+- **Recommendation:** [Phase 5 optional / Phase 5 mandatory]
+
+## Query 4: Unmatched companies (last 30 days)
+- **Runs with unmatched_companies > 0:** [N runs]
+- **Peak unmatched count:** [N on date X]
+- **Correlation with Query 1:** [Yes/No — does timing match email-derived pollution?]
+
+## Query 5: Owner attribution drift
+- **Missing owner:** [N]
+- **Owner/creator mismatch:** [N]
+- **Active delegations:** [N]
+- **Approved by unknown user:** [N]
+- **Likely root cause:** [Importer bug / backfill-incident fallout / normal delegation]
+
+---
+
+## Overall severity assessment
+[Low / Medium / High / Critical]
+
+## Recommended next steps
+- [ ] Proceed with Phase 1 (labels + always-on hidden counts)
+- [ ] Escalate to leadership before Phase 1
+- [ ] Run targeted investigation (specify Query # and focus area)
+- [ ] Emergency quarantine (if pollution >500 rows or >50% divergence)
+
+## What is safe to trust in Available Freight right now
+- [List data/UI elements that passed audit]
+
+## What should NOT be trusted without manual review
+- [List polluted/drifted areas]
+
+## Safe to republish AF code changes?
+**Yes / No / Conditional (explain)**
