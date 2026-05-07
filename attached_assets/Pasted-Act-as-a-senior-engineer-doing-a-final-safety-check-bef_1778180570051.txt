@@ -1,0 +1,84 @@
+Act as a senior engineer doing a final safety check before I publish Freight-DNA to production.
+
+GOAL  
+Tell me clearly whether this current HEAD (commit 3c5aa264) is safe to deploy, based on the pre-publish review you already produced, by actively verifying the key risks you listed.
+
+CONSTRAINTS  
+- READ-ONLY ONLY.  
+- Do NOT modify any code, migrations, env vars, or app settings.  
+- Do NOT run destructive SQL (no ALTER/DROP/DELETE/TRUNCATE).  
+- Do NOT run any scripts that write to the database.  
+- Only inspect code, config, and (if available) metadata/describe-style queries.
+
+WHAT TO VERIFY (in this order)
+
+1) Contacts soft-delete schema in PROD
+- Verify that the production database has these columns on the `contacts` table:
+  - `deleted_at`
+  - `deleted_by`
+  - `delete_reason`
+- If you can’t connect directly to prod from here, instead:
+  - Confirm that prod has already run the migration / push that added these columns, OR
+  - Confirm that `server/runMigrations.ts` contains an `ADD COLUMN IF NOT EXISTS` block that will add them safely on boot.
+- Tell me explicitly: “Yes, prod will have these columns at/after boot” or “Unclear / must be checked manually.”
+
+2) `companies.is_email_derived` creation behavior
+- Confirm that `server/runMigrations.ts` (or equivalent) contains idempotent `ADD COLUMN IF NOT EXISTS` logic to add:
+  - `is_email_derived`
+  - `email_derived_at`
+  - `email_derived_seed_message_id`
+- Confirm that no code path assumes these columns exist BEFORE migrations run.
+- Summarize: “These columns will be added automatically on boot, and code tolerates their absence before that migration runs.”
+
+3) `quote_opportunities.source` parity
+- Check schema definition vs migrations:
+  - Is `source` `NOT NULL`?
+  - Is there a DEFAULT?
+- Check the insert paths to ensure they always provide a `source` value.
+- Tell me if there is any realistic path where prod could try to insert a row with `source = NULL` and hit a NOT NULL violation.
+
+4) Env vars and app settings assumptions
+From code only (no changes), identify:
+- Where `CONTACT_JOBS_ENABLED` is read.
+- The exact logic that decides ON vs OFF.
+- Any places where OFF could break expected behavior rather than just pause background writes.
+- Where `oneOnOne.listEndpointsCreateSessions` is read and what default behavior is if unset.
+
+Then tell me what the **safe values** are for production for both of these and WHY.
+
+5) Payload shape changes and client consumers
+- For `/api/nba/cards`, confirm:
+  - Old shape: bare `cards[]`
+  - New shape: `{ cards, freshness }`
+- Inspect the main consumer (`client/src/components/NbaDashboardPanel.tsx`) and verify it actually handles the new shape correctly and does NOT break if the payload is in the new object shape.
+- List any OTHER consumers (e.g., mobile, scripts) that appear to assume the old shape.
+
+6) Sync alert visibility
+- Confirm that `/api/dashboard/summary` now returns `syncAlert` for all roles.
+- Trace where that field is consumed on the client (dashboard page).
+- Verify that the **CTA/action button** for fixing sync issues is still gated on admin or a proper permission check.
+- Tell me: “Non-admins may see an FYI banner, but cannot trigger admin-only actions.”
+
+7) Test status for freight-critical flows
+- Without changing tests, re-run (or inspect last run status if already run recently at this HEAD) for:
+  - `freight-capture-funnel` tests
+  - `lane-system-e2e` tests
+- Report whether they are green on this commit.
+
+8) Final recommendation
+Based on the above checks, return a clear recommendation:
+
+- “OK to deploy, assuming prod has already applied the contacts soft-delete schema (or will via runMigrations on boot).”
+OR
+- “WAIT – these specific items must be fixed/verified before deploy: [list].”
+
+FORMAT YOUR ANSWER LIKE THIS:
+1. Contacts schema check – result + reasoning  
+2. Email-derived companies schema – result + reasoning  
+3. quote_opportunities.source – result + reasoning  
+4. Env/app settings – safe prod values + why  
+5. Payload/client checks – NBA + sync alert  
+6. Test status – freight flows  
+7. Final go / no-go recommendation (with any conditions)
+
+Do NOT edit code or run destructive commands. Just analyze and report.
