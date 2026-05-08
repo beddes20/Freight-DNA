@@ -1501,6 +1501,17 @@ getCarrierInOrg(id: string, orgId: string): Promise<Carrier | undefined>;
     dateFrom?: string;
     dateTo?: string;
     sort?: "priority" | "recency";
+    // Task #1140 — "Trusted" view filter. When true, exclude threads
+    // whose `attribution_inference_source` is a SUGGESTION-ONLY tier
+    // (`signature` / `weak`, per Task #1056) AND that have not yet been
+    // claimed (no owner) AND have no hard-attached account. These are the
+    // free-mail-attribution candidates the rep is supposed to confirm via
+    // the suggestion card, NOT triage from the inbox. Toggling the
+    // "Trusted" switch OFF in the UI sends `excludeLowConfidence=false`
+    // and surfaces them again. Has no effect when the caller filters by
+    // an explicit `linkedAccountId` (single-account drilldown), since at
+    // that point the rep is already viewing a specific account.
+    excludeLowConfidence?: boolean;
   }): Promise<{ threads: EmailConversationThread[]; nextCursor: string | null; totalCount: number }>;
   updateEmailConversationThread(id: string, orgId: string, data: Partial<InsertEmailConversationThread>): Promise<EmailConversationThread | undefined>;
   /**
@@ -9546,8 +9557,26 @@ export class DatabaseStorage implements IStorage {
     dateFrom?: string;
     dateTo?: string;
     sort?: "priority" | "recency";
+    // Task #1140 — see IStorage.listEmailConversationThreads docstring.
+    excludeLowConfidence?: boolean;
   }): Promise<{ threads: EmailConversationThread[]; nextCursor: string | null; totalCount: number }> {
     const conditions: SQL[] = [eq(emailConversationThreads.orgId, orgId)];
+
+    // Task #1140 — "Trusted" filter. Hide SUGGESTION-ONLY attribution
+    // tiers (`signature` / `weak`, per Task #1056) from the inbox unless
+    // the rep explicitly toggles the filter off. We require the thread
+    // to also be unowned AND unattached so we never hide a thread the
+    // rep has already worked. Skipped when an explicit linkedAccountId
+    // is set — in single-account drilldown mode the rep is past triage.
+    if (filters.excludeLowConfidence === true && !filters.linkedAccountId) {
+      conditions.push(
+        sql`NOT (
+          ${emailConversationThreads.attributionInferenceSource} IN ('signature', 'weak')
+          AND ${emailConversationThreads.linkedAccountId} IS NULL
+          AND ${emailConversationThreads.ownerUserId} IS NULL
+        )`,
+      );
+    }
 
     if (filters.archivedOnly) {
       conditions.push(isNotNull(emailConversationThreads.archivedAt));
@@ -9578,17 +9607,42 @@ export class DatabaseStorage implements IStorage {
       if (filters.ownerUserIdIn.length === 0) {
         conditions.push(sql`false`);
       } else {
-        // Team-scoped views include: (a) threads owned by team members, (b)
-        // unowned threads (so managers can see and claim unassigned work), and
-        // (c) threads linked to companies whose salesperson is on the team —
-        // covers the common case where auto-sync created a thread without
-        // ever stamping an owner on it, but the account itself is assigned.
+        // Team-scoped views include:
+        //   (a) threads owned by a team member,
+        //   (b) threads linked to a company whose salesperson is on the team
+        //       (auto-sync often creates threads without stamping an owner,
+        //       but the account itself is assigned), and
+        //   (c) UNOWNED threads that are *either* truly orphan (no linked
+        //       account at all — brand-new sender / PERSIST-UNKNOWN, every
+        //       team needs to see and claim these) OR linked to an in-tree
+        //       account.
+        // Task #1139: previously this branch unconditionally OR'd in every
+        // unowned thread in the org, which silently leaked other teams'
+        // unclaimed inbound mail to every rep. The unowned arm is now
+        // gated on the linked-account being null or in-tree.
         const teamOrs: SQL[] = [
           inArray(emailConversationThreads.ownerUserId, filters.ownerUserIdIn),
-          isNull(emailConversationThreads.ownerUserId),
         ];
         if (filters.teamAccountIdsIn && filters.teamAccountIdsIn.length > 0) {
           teamOrs.push(inArray(emailConversationThreads.linkedAccountId, filters.teamAccountIdsIn));
+          teamOrs.push(
+            and(
+              isNull(emailConversationThreads.ownerUserId),
+              or(
+                isNull(emailConversationThreads.linkedAccountId),
+                inArray(emailConversationThreads.linkedAccountId, filters.teamAccountIdsIn),
+              )!,
+            )!,
+          );
+        } else {
+          // No in-tree accounts → only true orphans (no linked account at all)
+          // are visible to this team's unowned bucket.
+          teamOrs.push(
+            and(
+              isNull(emailConversationThreads.ownerUserId),
+              isNull(emailConversationThreads.linkedAccountId),
+            )!,
+          );
         }
         conditions.push(or(...teamOrs)!);
       }

@@ -389,9 +389,17 @@ export function registerConversationsRoutes(app: Express): void {
       if (!user) return res.status(401).json({ error: "Unauthorized" });
 
       const orgId = user.organizationId;
-      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, snoozed, cursor, limit, search, dateFrom, dateTo, tz, signal, sort, audience } = req.query;
+      const { accountId, carrierId, ownerUserId, unowned, waitingState, responsePriority, overdue, threadId, archived, snoozed, cursor, limit, search, dateFrom, dateTo, tz, signal, sort, audience, trusted } = req.query;
 
       const filters: Parameters<typeof storage.listEmailConversationThreads>[1] = {};
+
+      // Task #1140 — "Trusted" view filter (default ON). Explicit
+      // `?trusted=false` disables it; any other value (including missing)
+      // keeps the suggestion-only attribution tier hidden from the inbox.
+      // Always disabled when the caller is drilling into a specific
+      // accountId or carrierId (single-account view is past triage).
+      filters.excludeLowConfidence =
+        trusted !== "false" && !accountId && !carrierId;
 
       if (accountId) filters.linkedAccountId = accountId as string;
       if (carrierId) filters.linkedCarrierId = carrierId as string;

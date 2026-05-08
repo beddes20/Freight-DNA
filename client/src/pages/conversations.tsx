@@ -76,6 +76,11 @@ const DENSITY_KEY = "conversations:density";
 const GROUP_BY_KEY_PREFIX = "conversations:groupBy:";
 const COLLAPSED_GROUPS_KEY_PREFIX = "conversations:collapsedGroups:";
 const AUDIENCE_KEY_PREFIX = "conversations:audience:";
+// Task #1140 — "Trusted" toggle persistence. Default ON (we hide
+// suggestion-only attribution tier threads from the inbox until the rep
+// confirms them via the suggestion card). Per-user so a director's pref
+// doesn't bleed into a rep's session on a shared browser.
+const TRUSTED_KEY_PREFIX = "conversations:trusted:";
 // Task #968 — rep filter persists per-user. URL `?rep=` wins on first
 // load (so a shared link still scopes correctly), then we mirror the
 // chosen value into localStorage so a follow-up reload without a query
@@ -98,6 +103,20 @@ function collapsedGroupsKey(userId: string | null | undefined): string | null {
 }
 function audienceKey(userId: string | null | undefined): string | null {
   return userId ? `${AUDIENCE_KEY_PREFIX}${userId}` : null;
+}
+function trustedKey(userId: string | null | undefined): string | null {
+  return userId ? `${TRUSTED_KEY_PREFIX}${userId}` : null;
+}
+
+// Task #1140 — Trusted view loader. Default ON when nothing has been
+// persisted yet (matches the server default in routes/conversations.ts).
+// Only an explicit "false" string disables it.
+export function loadTrusted(userId: string | null | undefined): boolean {
+  if (typeof window === "undefined") return true;
+  const k = trustedKey(userId);
+  if (!k) return true;
+  const v = window.localStorage.getItem(k);
+  return v === "false" ? false : true;
 }
 
 // "all" = both customer and carrier threads (default).
@@ -292,6 +311,22 @@ export default function ConversationsPage() {
   // pattern as groupBy. Defaults to "all" so directors/admins see the full
   // firehose on first load, but their last choice sticks across reloads.
   const [audience, setAudience] = useState<ConversationAudience>(() => loadAudience(user?.id));
+  // Task #1140 — "Trusted" filter toggle. Default ON; persisted per-user.
+  // When ON, the inbox hides threads whose attribution_inference_source
+  // is a SUGGESTION-ONLY tier (`signature` / `weak`) and that have no
+  // owner / no linked account. Reps confirm those via the suggestion
+  // card on the Profile page; they shouldn't trickle into triage.
+  const [trustedView, setTrustedView] = useState<boolean>(() => loadTrusted(user?.id));
+  useEffect(() => {
+    if (!user?.id) return;
+    setTrustedView(loadTrusted(user.id));
+  }, [user?.id]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const k = trustedKey(user?.id);
+    if (!k) return;
+    window.localStorage.setItem(k, trustedView ? "true" : "false");
+  }, [trustedView, user?.id]);
   // Re-hydrate when the authenticated user becomes known after first render
   // (useAuth resolves async on initial mount).
   useEffect(() => {
@@ -451,6 +486,9 @@ export default function ConversationsPage() {
     // so we only emit the param when the rep has narrowed it — keeps URLs
     // and request lines clean.
     if (audience !== "all") p.set("audience", audience);
+    // Task #1140 — "Trusted" filter. Server defaults to ON, so we only
+    // emit the param when the rep has explicitly turned it OFF.
+    if (!trustedView) p.set("trusted", "false");
     // Date range filter — applied on every bucket (Task #787). Uses the
     // *effective* values so an invalid (From > To) range is treated as
     // "no date filter" and never reaches the server. Task #858 also
@@ -486,6 +524,8 @@ export default function ConversationsPage() {
       // refetches the list (and resets the "Load more" accumulator via
       // the dep effect below).
       bucket === "quote_requests" ? quoteWaitingMode : "n/a",
+      // Task #1140 — toggling Trusted refetches and resets pagination.
+      trustedView,
     ],
     queryFn: async () => {
       const res = await fetch(`/api/internal/conversations?${buildParams()}`);
@@ -734,15 +774,22 @@ export default function ConversationsPage() {
     if (effectiveDateTo) p.set("dateTo", effectiveDateTo);
     if (effectiveDateFrom || effectiveDateTo) p.set("tz", browserTz);
   }
+  // Task #1140 — every sidebar count must respect the Trusted toggle so
+  // the badge matches what the rep sees in the visible list. Server
+  // default is ON; only emit when explicitly OFF.
+  function applyTrusted(p: URLSearchParams) {
+    if (!trustedView) p.set("trusted", "false");
+  }
   const dateRangeKey = `${effectiveDateFrom}|${effectiveDateTo}`;
 
   const { data: mineData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "mine-count", user?.id, audience, dateRangeKey],
+    queryKey: ["/api/internal/conversations", "mine-count", user?.id, audience, dateRangeKey, trustedView],
     queryFn: async () => {
       const p = new URLSearchParams({ waitingState: "waiting_on_us", limit: "1" });
       if (user?.id) p.set("ownerUserId", user.id);
       if (audience !== "all") p.set("audience", audience);
       applyDateRange(p);
+      applyTrusted(p);
       const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
@@ -752,11 +799,12 @@ export default function ConversationsPage() {
   });
 
   const { data: unownedData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "unowned-count", audience, dateRangeKey],
+    queryKey: ["/api/internal/conversations", "unowned-count", audience, dateRangeKey, trustedView],
     queryFn: async () => {
       const p = new URLSearchParams({ unowned: "true", waitingState: "waiting_on_us", limit: "1" });
       if (audience !== "all") p.set("audience", audience);
       applyDateRange(p);
+      applyTrusted(p);
       const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
@@ -765,11 +813,12 @@ export default function ConversationsPage() {
   });
 
   const { data: highPriData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "high-priority-count", audience, dateRangeKey],
+    queryKey: ["/api/internal/conversations", "high-priority-count", audience, dateRangeKey, trustedView],
     queryFn: async () => {
       const p = new URLSearchParams({ responsePriority: "high", waitingState: "waiting_on_us", limit: "1" });
       if (audience !== "all") p.set("audience", audience);
       applyDateRange(p);
+      applyTrusted(p);
       const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
@@ -782,11 +831,12 @@ export default function ConversationsPage() {
   // the sidebar split badge can show "X waiting · Y total" and the in-bucket
   // toggle's "All" label can render its companion count immediately.
   const { data: quoteTotalData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "quote-request-count", "total", audience, dateRangeKey],
+    queryKey: ["/api/internal/conversations", "quote-request-count", "total", audience, dateRangeKey, trustedView],
     queryFn: async () => {
       const p = new URLSearchParams({ signal: "quote_request", limit: "1" });
       if (audience !== "all") p.set("audience", audience);
       applyDateRange(p);
+      applyTrusted(p);
       const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
@@ -798,7 +848,7 @@ export default function ConversationsPage() {
   // This is what most reps care about (per the QA report on Task #862),
   // and it's the bucket's default view. Sidebar badge primary number.
   const { data: quoteWaitingData } = useQuery<ThreadsResponse>({
-    queryKey: ["/api/internal/conversations", "quote-request-count", "waiting", audience, dateRangeKey],
+    queryKey: ["/api/internal/conversations", "quote-request-count", "waiting", audience, dateRangeKey, trustedView],
     queryFn: async () => {
       const p = new URLSearchParams({
         signal: "quote_request",
@@ -807,6 +857,7 @@ export default function ConversationsPage() {
       });
       if (audience !== "all") p.set("audience", audience);
       applyDateRange(p);
+      applyTrusted(p);
       const res = await fetch(`/api/internal/conversations?${p.toString()}`);
       if (!res.ok) throw new Error("");
       return res.json();
@@ -1070,7 +1121,16 @@ export default function ConversationsPage() {
   // them in the bulk action queue.
   useEffect(() => {
     setSelectedIds(new Set());
-  }, [bucket, filterState, filterPriority, filterOverdue, filterRep, debouncedSearch, effectiveDateFrom, effectiveDateTo]);
+  }, [bucket, filterState, filterPriority, filterOverdue, filterRep, debouncedSearch, effectiveDateFrom, effectiveDateTo, trustedView]);
+
+  // Task #1140 — toggling Trusted is effectively a filter change; drop
+  // any "Load more" pages and the cursor so paginated rows from the
+  // pre-toggle view can't blend with the post-toggle list.
+  useEffect(() => {
+    setExtraPages([]);
+    setNextCursor(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trustedView]);
 
   function applySavedView(view: SavedView) {
     const f = view.filters ?? {};
@@ -1284,6 +1344,26 @@ export default function ConversationsPage() {
           >
             <RefreshCw className={cn("w-3.5 h-3.5", isManualRefreshing && "animate-spin")} />
             <span className="hidden sm:inline">Refresh</span>
+          </Button>
+          {/* Task #1140 — Trusted view toggle. Default ON; hides
+              suggestion-only attribution-tier threads (the free-mail
+              guesses the rep is meant to confirm via the suggestion
+              card on the Profile page). Reps can flip OFF to surface
+              every thread again. */}
+          <Button
+            variant={trustedView ? "default" : "outline"}
+            size="sm"
+            className="h-8 gap-1.5 text-xs"
+            onClick={() => setTrustedView(v => !v)}
+            data-testid="toggle-trusted-conversations"
+            aria-pressed={trustedView}
+            title={
+              trustedView
+                ? "Trusted view ON — hiding low-confidence attribution. Click to show all."
+                : "Trusted view OFF — showing every thread including unconfirmed attribution. Click to hide low-confidence."
+            }
+          >
+            {trustedView ? "Trusted" : "All threads"}
           </Button>
           <Button
             variant="outline"

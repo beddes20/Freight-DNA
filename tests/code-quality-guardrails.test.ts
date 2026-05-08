@@ -7518,3 +7518,152 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "the client helper must mirror server/lib/userLifecycle.ts precedence so the Customers tab and the server roster never disagree on which lifecycle marker wins",
   );
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1139: Conversations team-OR unowned visibility (Task #1139)
+// Pins the storage.listEmailConversationThreads `ownerUserIdIn` branch so an
+// unconditional `isNull(ownerUserId)` arm cannot silently leak every team's
+// unowned inbound mail back into a non-admin rep's inbox. The team-OR branch
+// must gate the unowned arm on the linked-account being null (true orphan /
+// brand-new sender) OR in the team's account set.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1139: Conversations team-OR unowned visibility ─────\n");
+  const storageSrc = readFile("server/storage.ts");
+  const fnIdx = storageSrc.indexOf("async listEmailConversationThreads");
+  assert(
+    "storage.ts — listEmailConversationThreads located",
+    fnIdx >= 0,
+    "could not find listEmailConversationThreads — Section 1139 cannot validate the contract",
+  );
+  if (fnIdx < 0) return;
+
+  // Slice the function body so we don't accidentally match the unrelated
+  // top-level `if (filters.unowned === true) { isNull(ownerUserId) }` arm
+  // that handles the explicit Unowned bucket request.
+  const branchIdx = storageSrc.indexOf("if (filters.ownerUserIdIn)", fnIdx);
+  assert(
+    "storage.ts — ownerUserIdIn branch located inside listEmailConversationThreads",
+    branchIdx > fnIdx,
+    "could not find the ownerUserIdIn branch in listEmailConversationThreads",
+  );
+  if (branchIdx < 0) return;
+
+  // The branch ends at the next top-level `if (filters.waitingState)` clause.
+  const branchEnd = storageSrc.indexOf("if (filters.waitingState)", branchIdx);
+  const branch = storageSrc.slice(branchIdx, branchEnd > 0 ? branchEnd : branchIdx + 4000);
+
+  // The bare unconditional `isNull(emailConversationThreads.ownerUserId)`
+  // entry inside the team-OR `teamOrs` array is the leak. After the fix the
+  // unowned arm must always be wrapped with `and(...)` — never standalone.
+  // We reject the legacy "isNull(...ownerUserId)," top-level entry pattern.
+  const legacyLeak = /teamOrs\s*:\s*SQL\[\]\s*=\s*\[[^\]]*?isNull\(\s*emailConversationThreads\.ownerUserId\s*\)\s*,/s.test(branch);
+  assert(
+    "storage.ts team-OR — no unconditional isNull(ownerUserId) leak in the initial teamOrs array",
+    !legacyLeak,
+    "Task #1139: the team-OR `teamOrs` initializer must NOT include a bare `isNull(emailConversationThreads.ownerUserId)` entry — that arm leaks every team's unowned mail. The unowned arm must be wrapped in `and(isNull(ownerUserId), …linked-account guard…)`.",
+  );
+
+  // Positive pin: the unowned arm must be wrapped together with a linked-account
+  // guard (either `isNull(linkedAccountId)` for true orphans, or an
+  // `inArray(linkedAccountId, ...teamAccountIdsIn)` membership check).
+  const wrappedUnowned = /and\(\s*\n?\s*isNull\(\s*emailConversationThreads\.ownerUserId\s*\),[^]*?(isNull\(\s*emailConversationThreads\.linkedAccountId\s*\)|inArray\(\s*emailConversationThreads\.linkedAccountId\s*,\s*filters\.teamAccountIdsIn)/.test(branch);
+  assert(
+    "storage.ts team-OR — unowned arm is wrapped with a linked-account guard",
+    wrappedUnowned,
+    "Task #1139: the team-OR branch must wrap `isNull(ownerUserId)` inside an `and(...)` with a linked-account guard so unowned threads on out-of-tree accounts stay hidden from non-admin callers. Truly orphan threads (`linkedAccountId IS NULL`) and unowned threads on in-tree accounts (`linkedAccountId IN teamAccountIdsIn`) must remain visible.",
+  );
+
+  // The Task #1139 anchor comment must be present so future refactors don't
+  // silently drop the visibility-leak rationale.
+  assert(
+    "storage.ts team-OR — Task #1139 anchor comment present",
+    /Task #1139/.test(branch),
+    "the team-OR branch must keep the `Task #1139` comment so the visibility-leak rationale survives future refactors",
+  );
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1140: Conversations "Trusted" view (Task #1140)
+// Pins the default-ON Trusted toggle on /conversations:
+//   • Storage filter `excludeLowConfidence` exists and predicates on
+//     attribution_inference_source IN ('signature','weak') AND no owner
+//     AND no linked account (matches the SUGGESTION-ONLY tier per #1056).
+//   • Route reads `?trusted=` and defaults ON (only `trusted=false` disables).
+//   • Single-account drilldowns bypass the filter (linkedAccountId set).
+//   • Client default is ON (loadTrusted returns true when unset) and the
+//     toggle's data-testid + queryKey participation are pinned.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1140: Conversations Trusted view ─────\n");
+
+  const storageSrc = readFile("server/storage.ts");
+  const routesSrc = readFile("server/routes/conversations.ts");
+  const pageSrc = readFile("client/src/pages/conversations.tsx");
+
+  // Storage interface + impl declare excludeLowConfidence.
+  assert(
+    "storage.ts — IStorage / impl declare excludeLowConfidence",
+    (storageSrc.match(/excludeLowConfidence\?:\s*boolean/g) ?? []).length >= 2,
+    "Task #1140: both the IStorage interface AND the impl filter signature must declare excludeLowConfidence",
+  );
+
+  // Predicate: NOT (attributionInferenceSource IN ('signature','weak') AND linkedAccountId IS NULL AND ownerUserId IS NULL).
+  // The SQL is built with Drizzle column interpolation (`${emailConversationThreads.<col>}`),
+  // so we pin against the column property names rather than the underlying snake_case identifiers.
+  assert(
+    "storage.ts — Trusted predicate matches the SUGGESTION-ONLY tier (signature/weak) + unowned + unlinked",
+    /excludeLowConfidence\s*===\s*true[^]*?attributionInferenceSource[^]*?'signature'[^]*?'weak'[^]*?linkedAccountId[^]*?IS\s+NULL[^]*?ownerUserId[^]*?IS\s+NULL/i.test(storageSrc),
+    "Task #1140: the Trusted predicate must filter on attribution tier signature/weak AND linkedAccountId IS NULL AND ownerUserId IS NULL — anything weaker risks hiding threads the rep already worked",
+  );
+
+  // Predicate must be skipped when caller scopes to a single account.
+  assert(
+    "storage.ts — Trusted predicate skipped when filters.linkedAccountId is set",
+    /excludeLowConfidence\s*===\s*true\s*&&\s*!filters\.linkedAccountId/.test(storageSrc),
+    "Task #1140: single-account drilldowns must bypass the Trusted filter — the rep is past triage at that point",
+  );
+
+  // Route reads ?trusted= and defaults ON (only `trusted=false` disables).
+  assert(
+    "routes/conversations.ts — destructures trusted from req.query",
+    /\bconst\s*\{[^}]*\btrusted\b[^}]*\}\s*=\s*req\.query/.test(routesSrc),
+    "Task #1140: the list endpoint must accept `?trusted=` so the client toggle can disable the filter",
+  );
+  assert(
+    "routes/conversations.ts — Trusted defaults ON (only `trusted=false` disables) and disables on accountId/carrierId drilldown",
+    /filters\.excludeLowConfidence\s*=\s*\n?\s*trusted\s*!==\s*"false"\s*&&\s*!accountId\s*&&\s*!carrierId/.test(routesSrc),
+    "Task #1140: server default must be ON (only literal `trusted=false` disables) AND the filter must be off when the caller scopes to an account or carrier",
+  );
+
+  // Client default-ON loader + per-user persistence + toggle UI.
+  assert(
+    "conversations.tsx — TRUSTED_KEY_PREFIX defined",
+    /TRUSTED_KEY_PREFIX\s*=\s*"conversations:trusted:"/.test(pageSrc),
+    "Task #1140: the per-user persistence key prefix `conversations:trusted:` must be defined so prefs don't bleed between users sharing a browser",
+  );
+  assert(
+    "conversations.tsx — loadTrusted defaults ON when unset",
+    /function\s+loadTrusted[^]*?return\s+v\s*===\s*"false"\s*\?\s*false\s*:\s*true/.test(pageSrc),
+    "Task #1140: loadTrusted must return true when localStorage is unset (matches the server default) — only an explicit \"false\" disables it",
+  );
+  assert(
+    "conversations.tsx — exposes data-testid=\"toggle-trusted-conversations\"",
+    /data-testid="toggle-trusted-conversations"/.test(pageSrc),
+    "Task #1140: the toolbar toggle must use the `toggle-trusted-conversations` testid so e2e selectors stay stable",
+  );
+  assert(
+    "conversations.tsx — buildParams emits trusted=false only when toggled off",
+    /if\s*\(!trustedView\)\s*p\.set\("trusted",\s*"false"\)/.test(pageSrc),
+    "Task #1140: the client must only emit `trusted=false` when the rep has turned the filter OFF — server defaults to ON",
+  );
+
+  // trustedView participates in the main list query key + every count query key
+  // so toggling refetches everything (and the sidebar badges match the visible list).
+  const queryKeyTrustedHits = (pageSrc.match(/trustedView/g) ?? []).length;
+  assert(
+    "conversations.tsx — trustedView referenced in enough call sites (state + 5 count queries + main list + buildParams + persistence + reset effects)",
+    queryKeyTrustedHits >= 10,
+    `Task #1140: expected trustedView to be wired into the main list queryKey, all 5 count queryKeys, buildParams, persistence effect, and reset effect — found only ${queryKeyTrustedHits} references`,
+  );
+})();
