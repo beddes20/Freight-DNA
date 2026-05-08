@@ -68,8 +68,42 @@ const TTL_MS = 60 * 1000;
 // only when something actually changed — avoiding noisy empty broadcasts.
 const lastPublishedIds = new Map<string, Set<string>>();
 
+// Task #1150 — Lightweight in-memory observability for the org-wide
+// follow-up cache bust. Every `PATCH /api/customer-quotes/quote/:id`
+// (and a handful of other CQ writers) calls clearStaleFollowUpCache,
+// which is correct for cache freshness but is org-wide on every
+// individual edit. This counter lets an admin see per-org bust volume
+// to decide whether per-rep busting is worth the complexity. Counts
+// reset on process restart — that's intentional, this is process-local
+// telemetry, not a durable metric.
+const followUpCacheBustCounts = new Map<string, number>();
+
+export function getFollowUpCacheBustStats(): {
+  totals: Record<string, number>;
+  totalBusts: number;
+  orgCount: number;
+} {
+  const totals: Record<string, number> = {};
+  let totalBusts = 0;
+  for (const [orgId, count] of followUpCacheBustCounts.entries()) {
+    totals[orgId] = count;
+    totalBusts += count;
+  }
+  return { totals, totalBusts, orgCount: followUpCacheBustCounts.size };
+}
+
+export function resetFollowUpCacheBustStatsForTests(): void {
+  followUpCacheBustCounts.clear();
+}
+
 export function clearStaleFollowUpCache(orgId?: string): void {
   if (orgId) {
+    followUpCacheBustCounts.set(orgId, (followUpCacheBustCounts.get(orgId) ?? 0) + 1);
+    // Task #1150 — debug-only signal so an operator tailing logs can
+    // see the per-org bust volume against the membership-tracker's
+    // "followup set changed" line below. Intentionally `console.debug`
+    // (not warn/error) — this is normal CQ traffic, not a fault.
+    console.debug(`[stale-followup] cache invalidated org=${orgId}`);
     cache.delete(orgId);
     // Also drop the per-org membership snapshot so the next recompute is
     // free to re-publish without the prior snapshot suppressing it. This
@@ -261,6 +295,12 @@ export async function getStaleQuoteFollowUps(
       || [...newIds].some(id => !prev.has(id));
     if (changed) {
       lastPublishedIds.set(orgId, newIds);
+      // Task #1150 — pair with the "cache invalidated" debug line at
+      // the bust call site so an operator can see the ratio of busts
+      // to actual membership transitions (most busts are no-ops).
+      console.debug(
+        `[stale-followup] followup set changed org=${orgId} prev=${prev?.size ?? 0} next=${newIds.size}`,
+      );
       publishLiveSync(orgId, "customer_quote_followup");
     }
   } catch {

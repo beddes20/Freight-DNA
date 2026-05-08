@@ -38,6 +38,7 @@ import {
   QUOTE_PIPELINE_DROP_REASONS,
   type QuotePipelineDropReason,
 } from "@shared/schema";
+import { getFollowUpCacheBustStats } from "../services/staleQuoteFollowup";
 
 function isAdmin(role: string | null | undefined): boolean {
   return role === "admin";
@@ -465,6 +466,39 @@ export function registerQuotePipelineHealthRoutes(app: Express): void {
           note: note ?? "Manually resolved by admin (no note provided).",
         });
         res.json({ ok: true, resolved: !!resolved });
+      } catch (err) {
+        res.status(500).json({ error: getErrorMessage(err) });
+      }
+    },
+  );
+
+  // ── GET /followup-cache-stats ──────────────────────────────────────────
+  // Task #1150 — Read-only observability on the org-wide follow-up cache
+  // bust. Every PATCH /api/customer-quotes/quote/:id (and a few other CQ
+  // writers) calls clearStaleFollowUpCache(orgId), which is correct for
+  // freshness but is org-wide on every individual quote edit. This admin
+  // endpoint exposes the per-org bust counter so we can tell whether
+  // moving to per-rep busting is worth the complexity. Counters live in
+  // process memory and reset on restart — that's intentional, this is
+  // process-local telemetry. Scoped to the requesting admin's org so we
+  // don't leak other orgs' IDs/volume into a tenant's response.
+  app.get(
+    "/api/admin/customer-quotes/followup-cache-stats",
+    requireUser,
+    async (req: Request, res: Response) => {
+      try {
+        const me = await storage.getUser((req as any).session.userId);
+        if (!isAdmin(me?.role)) return res.status(403).json({ error: "Forbidden" });
+        const org = orgIdFromReq(req);
+        if (!org) return res.status(400).json({ error: "Missing organization" });
+        const stats = getFollowUpCacheBustStats();
+        res.json({
+          ok: true,
+          orgId: org,
+          bustCount: stats.totals[org] ?? 0,
+          processTotalBusts: stats.totalBusts,
+          processOrgCount: stats.orgCount,
+        });
       } catch (err) {
         res.status(500).json({ error: getErrorMessage(err) });
       }
