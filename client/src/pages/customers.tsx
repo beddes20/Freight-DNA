@@ -154,21 +154,26 @@ export default function Customers() {
     return p.get(key) || fallback;
   };
 
+  const initBoolParam = (key: string) => {
+    const p = new URLSearchParams(window.location.search);
+    return p.get(key) === "true";
+  };
+
   const [searchQuery, setSearchQuery] = useState(() => initParam("q", ""));
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [showArchived, setShowArchived] = useState(false);
+  const [showArchived, setShowArchived] = useState(() => initBoolParam("archived"));
   // Task #1095 — when on, refetch with `includeEmailDerived=true` so admin
   // cleanup work can see the inbound-email auto-created stub rows that the
   // default Customers list hides.
-  const [showEmailDerived, setShowEmailDerived] = useState(false);
+  const [showEmailDerived, setShowEmailDerived] = useState(() => initBoolParam("emailDerived"));
   const [showFilters, setShowFilters] = useState(() => {
     const p = new URLSearchParams(window.location.search);
-    return ["rep", "industry", "touch"].some(k => p.has(k) && p.get(k) !== "all");
+    return ["rep", "industry", "touch", "mode"].some(k => p.has(k) && p.get(k) !== "all");
   });
   const [repFilter, setRepFilter] = useState(() => initParam("rep"));
   const [industryFilter, setIndustryFilter] = useState(() => initParam("industry"));
   const [touchFilter, setTouchFilter] = useState(() => initParam("touch"));
-  const [modeFilter, setModeFilter] = useState<string>("all");
+  const [modeFilter, setModeFilter] = useState<string>(() => initParam("mode"));
   const [sortBy, setSortBy] = useState(() => initParam("sort", "name"));
 
   useEffect(() => {
@@ -177,10 +182,13 @@ export default function Customers() {
     if (repFilter !== "all") p.set("rep", repFilter);
     if (industryFilter !== "all") p.set("industry", industryFilter);
     if (touchFilter !== "all") p.set("touch", touchFilter);
+    if (modeFilter !== "all") p.set("mode", modeFilter);
     if (sortBy !== "name") p.set("sort", sortBy);
+    if (showArchived) p.set("archived", "true");
+    if (showEmailDerived) p.set("emailDerived", "true");
     const qs = p.toString();
     window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
-  }, [searchQuery, repFilter, industryFilter, touchFilter, sortBy]);
+  }, [searchQuery, repFilter, industryFilter, touchFilter, modeFilter, sortBy, showArchived, showEmailDerived]);
 
   const [quickTouch, setQuickTouch] = useState<{ company: Company; contacts: Contact[] } | null>(null);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
@@ -198,7 +206,7 @@ export default function Customers() {
   const [saveFilterName, setSaveFilterName] = useState("");
   const [showSaveFilter, setShowSaveFilter] = useState(false);
 
-  type SavedFilter = { name: string; search: string; rep: string; industry: string; touch: string; mode: string; sort: string };
+  type SavedFilter = { name: string; search: string; rep: string; industry: string; touch: string; mode: string; sort: string; archived?: boolean; emailDerived?: boolean };
 
   const { data: savedFiltersData } = useQuery<{ filters: SavedFilter[] }>({
     queryKey: ["/api/users/saved-filters"],
@@ -221,7 +229,7 @@ export default function Customers() {
       toast({ title: "Maximum 10 saved views", description: "Remove an existing view first.", variant: "destructive" });
       return;
     }
-    const newFilter: SavedFilter = { name: saveFilterName.trim(), search: searchQuery, rep: repFilter, industry: industryFilter, touch: touchFilter, mode: modeFilter, sort: sortBy };
+    const newFilter: SavedFilter = { name: saveFilterName.trim(), search: searchQuery, rep: repFilter, industry: industryFilter, touch: touchFilter, mode: modeFilter, sort: sortBy, archived: showArchived, emailDerived: showEmailDerived };
     saveFilterMutation.mutate([...savedFilters.filter(f => f.name !== newFilter.name), newFilter]);
   };
 
@@ -232,7 +240,9 @@ export default function Customers() {
     setTouchFilter(f.touch || "all");
     setModeFilter(f.mode || "all");
     setSortBy(f.sort || "name");
-    if (f.rep !== "all" || f.industry !== "all" || f.touch !== "all") setShowFilters(true);
+    setShowArchived(f.archived ?? false);
+    setShowEmailDerived(f.emailDerived ?? false);
+    if (f.rep !== "all" || f.industry !== "all" || f.touch !== "all" || (f.mode && f.mode !== "all")) setShowFilters(true);
   };
 
   const handleDeleteFilter = (name: string) => {
@@ -324,10 +334,13 @@ export default function Customers() {
     queryKey: ["/api/users/sales"],
   });
   const salesPersonMap = new Map(salesUsers.map(u => [u.id, u.name]));
-  const accountOwnerMap = useMemo(
-    () => new Map(teamMembers.map(u => [u.id, u.name])),
-    [teamMembers],
-  );
+  // Display-only: union team + sales users so cross-team owners resolve.
+  const accountOwnerMap = useMemo(() => {
+    const m = new Map<string, string>();
+    teamMembers.forEach(u => m.set(u.id, u.name));
+    salesUsers.forEach(u => { if (!m.has(u.id)) m.set(u.id, u.name); });
+    return m;
+  }, [teamMembers, salesUsers]);
 
   type MsSummaryRow = { companyId: string; currentPct: number | null };
   const { data: msSummary = [] } = useQuery<MsSummaryRow[]>({
@@ -384,15 +397,11 @@ export default function Customers() {
   }, [companies]);
 
   // Derive assignable users for the rep filter dropdown — all non-admin roles can own accounts
-  const isAdminOrDirector = currentUser?.role === "admin" || currentUser?.role === "director";
   const amUsers = useMemo(() => {
     return teamMembers
       .filter(u => u.role !== "admin")
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [teamMembers]);
-
-  // Set of NAM/AM user IDs so we can filter company lists
-  const namAmIds = useMemo(() => new Set(amUsers.map(u => u.id)), [amUsers]);
 
   const activeFiltersCount = [repFilter !== "all", industryFilter !== "all", touchFilter !== "all", modeFilter !== "all"].filter(Boolean).length;
 
@@ -410,7 +419,6 @@ export default function Customers() {
       // getVisibleCompanyIds. Collapses the prior three-way split-brain
       // between display, this filter, and the server visibility gate.
       const canonicalOwnerId = company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null;
-      if (isAdminOrDirector && repFilter === "all" && canonicalOwnerId && !namAmIds.has(canonicalOwnerId) && !sharedRepIds.some(id => namAmIds.has(id))) return false;
       if (repFilter !== "all" && canonicalOwnerId !== repFilter && !sharedRepIds.includes(repFilter)) return false;
       if (industryFilter !== "all" && company.industry !== industryFilter) return false;
       if (touchFilter !== "all") {
@@ -739,13 +747,9 @@ export default function Customers() {
                             );
                           })()}
                           {(() => {
-                            // Canonical Customers-tab owner-label rule
-                            // (read-side coalesce, no writes):
-                            // ownerRepId ?? assignedTo ?? salesPersonId.
-                            // "Unassigned" only when all three are null.
                             const ownerId = company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null;
                             const ownerName = ownerId ? accountOwnerMap.get(ownerId) : null;
-                            const display = ownerName || "Unassigned";
+                            const display = ownerName ?? (ownerId ? "Assigned" : "Unassigned");
                             return (
                               <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5" data-testid={`text-account-owner-${company.id}`}>
                                 <UserCheck className="h-3 w-3" />
