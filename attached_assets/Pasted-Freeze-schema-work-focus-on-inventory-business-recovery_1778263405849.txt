@@ -1,0 +1,77 @@
+Freeze schema work — focus on inventory + business recovery
+
+I want to pause all further schema / migration work for now and shift to two explicit goals:
+
+Protect prod and inventory drift
+
+Help me restore a usable workflow for my reps today, even if that’s outside the publish path
+
+Guardrails (effective immediately)
+
+No more drizzle-kit push or schema-changing SQL, even on dev
+
+No changes to production DB
+
+No publish attempts
+
+Read-only analysis only until I explicitly say otherwise
+
+What I need from you now
+
+Drift inventory (read-only)
+
+Based on everything you’ve already observed (FK differences, missing tables, rename prompts like webex_user_tokens.reauth_reason), produce a written inventory of dev↔prod schema drift:
+
+Tables that exist in prod but not dev
+
+Columns that differ (missing, extra, different types/defaults)
+
+Constraints/FKs that differ
+
+Any known rename prompts Drizzle is surfacing (like scopes_version → reauth_reason), listed explicitly
+
+This should be a document, not a migration plan — I want a clear picture of how far dev has drifted.
+
+Recovery-focused recommendations (no execution yet)
+
+Given that publish is currently blocked by this drift, propose 2–3 realistic repair strategies, clearly labeled, for a future, dedicated maintenance window, not today. For each option, include:
+
+Scope (which tables/areas it touches)
+
+Rough effort/complexity
+
+Main risks
+
+Likely impact on existing prod data
+
+Examples could include: “clean dev schema realignment using drizzle migrations,” “recreate dev from prod snapshot then re-apply recent changes,” etc., but I want your concrete proposals for this repo.
+
+Help me restore a usable workflow for reps today
+
+Assume publish will remain paused for now. Within that constraint, recommend the fastest way for my sales reps to work with contacts, touchpoints, RFPs, and tasks today, even if it’s a temporary or partial solution.
+
+Ideas might include:
+
+A small, safe change to the existing prod app that doesn’t require publish (if such a thing exists in Replit’s model)
+
+Or designing a temporary external workflow (e.g., spreadsheet/Airtable schema that mirrors our key entities) that we can quickly stand up while the app is partially broken
+
+I do not want more time spent trying to brute-force publish right now. I want a clear, pragmatic recommendation for how my team can operate while we schedule the real fix.
+
+Important recap
+
+Dev DB backup already exists at .local/dev-db-backups/dev_schema_20260508_175432.sql. Keep that safe; do not overwrite it.
+
+Dev DB is currently unchanged from before the attempted drizzle-kit push. Prod is untouched.
+
+The goal for the rest of today is clarity (drift inventory + options) and a concrete, business-focused recommendation for how my reps can work, not more schema experiments.
+
+Please respond with:
+
+The drift inventory
+
+The 2–3 repair strategy options for a future maintenance window
+
+Your best recommendation for the quickest, realistic temporary workflow for my reps, given that publish is paused
+
+No schema changes or publishes until I explicitly approve a specific strategy.
