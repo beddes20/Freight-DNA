@@ -1,0 +1,62 @@
+Freight-DNA — Publish Pipeline Triage (Emergency, Read-Only)
+
+You are helping me fix a broken publish pipeline that is blocking all deployments.
+
+Before doing anything, adopt these rules for THIS task:
+
+- Read-only only. Do NOT change code, migrations, schema, or production DB.
+- Do NOT run drizzle-kit generate, push, migrate, or any schema-changing command.
+- Do NOT create or edit .sql migration files.
+- Do NOT click Publish on my behalf or attempt a deployment.
+- The goal is IDENTIFICATION of the bad emitter and a small, reversible fix plan I can review later.
+
+Context (confirmed so far):
+
+- Prod already has the correct FK: tasks.opportunity_id → crm_opportunities.id with the canonical Drizzle name.
+- No file in migrations/ or server/runMigrations.ts contains the unguarded statement:
+  ALTER TABLE "tasks" DROP CONSTRAINT "tasks_opportunity_id_crm_opportunities_id_fk";
+- drizzle-kit generate against the current repo wants to create a huge convergence migration (0005_flippant_komodo.sql), so a simple meta-refresh is NOT safe.
+- The failing DROP uses drizzle-style double-quoted identifiers, so it is almost certainly being emitted by a drizzle-kit–style diff in the publish pipeline, not by my hand-written SQL.
+
+TASK:
+
+Do a read-only investigation to identify EXACTLY where that unguarded DROP is coming from in the publish path, without changing anything.
+
+I need you to:
+
+1) Inspect the repo for deployment-related config or scripts that could be calling drizzle-kit or db:push:
+   - .replit, replit.toml, replit.nix, any deploy*.sh or predeploy* files
+   - package.json "scripts" block
+   - any CI configs (e.g., .github/workflows) that might run deployment commands
+   - search for “drizzle-kit” and “db:push” in the repo
+
+2) Based on those files + what you know about Replit’s Deployments, infer the most likely place the publish pipeline would:
+   - run drizzle-kit migrate / push, OR
+   - run any custom script that could be emitting ALTER TABLE ... DROP CONSTRAINT
+
+3) Tell me exactly what evidence you still need from ME (logs / screenshots / deployment settings) to confirm whether the failing DROP is coming from:
+   - a repo script we control,
+   - a Replit deployment config setting,
+   - or a Replit-internal schema-sync step I can’t directly edit.
+
+Output format:
+
+A. Current best hypothesis for the emitter (repo script vs deploy config vs Replit-internal)
+B. Files and commands you found that are relevant (paths + script names only, no edits)
+C. What I should capture from the next failed publish (exact log slices, deployment settings, toggles) so you can pinpoint the emitter
+D. The smallest safe *future* fix, assuming:
+   - the emitter is in the repo (e.g., add IF EXISTS, or remove a db:push step), OR
+   - the emitter is in the deployment config (e.g., turn off schema-sync), OR
+   - the emitter is platform-internal (e.g., we avoid that step entirely)
+
+Stop rule:
+
+You are NOT allowed to:
+
+- Modify any file
+- Add or edit migrations
+- Run drizzle-kit or any schema-changing command
+- Change deployment settings
+- Start a new publish
+
+Investigation and a written plan only.
