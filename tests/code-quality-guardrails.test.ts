@@ -5314,6 +5314,41 @@ console.log("\n── Section 1051: Unified ReplitDailyUpload contract ──\n"
       !/\(company as any\)\.isEmailDerived/.test(customersPageSrc),
     "Customers page must use the typed Company.isEmailDerived field, not a cast",
   );
+  // Task #1176 — Top Opportunities (`/api/opportunities`) must inherit the
+  // Task #1095 default-exclude on email-derived stub companies. The route
+  // lives in server/routes/financials.ts; the `storage.getCompanies(` call
+  // inside the handler must pass the explicit `includeEmailDerived: false`
+  // option so RFPs attached to inbound-email auto-created stubs don't
+  // surface here as "real" Top Opportunities matches. Other callers in the
+  // file (e.g. `linkSalespersonsFromRows`) are admin/back-office paths and
+  // intentionally still see every row.
+  const financialsRoutesSrc = readFile("server/routes/financials.ts");
+  const oppHandlerStart = financialsRoutesSrc.indexOf('app.get("/api/opportunities"');
+  const oppHandlerEnd = financialsRoutesSrc.indexOf('app.get("/api/opportunities/', oppHandlerStart + 1);
+  const oppHandlerSlice = oppHandlerStart >= 0
+    ? financialsRoutesSrc.slice(oppHandlerStart, oppHandlerEnd > 0 ? oppHandlerEnd : oppHandlerStart + 8000)
+    : "";
+  const oppGetCompaniesCalls = oppHandlerSlice.match(/storage\.getCompanies\([^)]*\)/g) ?? [];
+  const oppBareCalls = oppGetCompaniesCalls.filter(call => !/includeEmailDerived/.test(call));
+  assert(
+    "server/routes/financials.ts — /api/opportunities passes includeEmailDerived guard to storage.getCompanies",
+    oppGetCompaniesCalls.length > 0 &&
+      oppBareCalls.length === 0 &&
+      /storage\.getCompanies\([^)]*includeEmailDerived:\s*false[^)]*\)/.test(oppHandlerSlice),
+    "Top Opportunities handler must call storage.getCompanies with { includeEmailDerived: false }; bare calls inside this handler are forbidden",
+  );
+  // Task #1176 — defense-in-depth: even with the getCompanies guard, the
+  // RFP loop must skip RFPs whose companyId is not present in companyMap
+  // (i.e. the company was excluded as email-derived). Without this gate
+  // the match would still be pushed with companyName: "Unknown", which
+  // re-opens the gap.
+  assert(
+    "server/routes/financials.ts — /api/opportunities skips RFPs whose company was excluded from companyMap",
+    /const\s+company\s*=\s*companyMap\.get\(\s*rfp\.companyId\s*\)\s*;[\s\S]{0,400}?if\s*\(\s*!company\s*\)\s*continue\s*;/.test(
+      oppHandlerSlice,
+    ) && !/companyName\s*=\s*company\?\.name\s*\|\|\s*"Unknown"/.test(oppHandlerSlice),
+    "RFP loop must early-`continue` when companyMap.get(rfp.companyId) is missing, and must not fall back to a literal 'Unknown' label",
+  );
 })();
 
 

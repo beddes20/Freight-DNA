@@ -271,7 +271,10 @@ export function registerFinancialRoutes(app: Express): void {
       if (visibleIds !== null) {
         allRfps = allRfps.filter(r => visibleIds.includes(r.companyId));
       }
-      const allCompanies = await storage.getCompanies(req.session.organizationId!);
+      // Task #1176 — explicitly default-exclude email-derived stub companies
+      // (Task #1095 contract) so RFPs attached to inbound-email auto-created
+      // stubs don't surface here as "real" Top Opportunities matches.
+      const allCompanies = await storage.getCompanies(req.session.organizationId!, { includeEmailDerived: false });
       const companyMap = new Map(allCompanies.map(c => [c.id, c]));
 
       const hotLocationSet = new Map<string, { peakWeekly: number; avgWeekly: number }>();
@@ -302,7 +305,13 @@ export function registerFinancialRoutes(app: Express): void {
         if (!fileData || !Array.isArray(fileData.highVolumeLanes)) continue;
 
         const company = companyMap.get(rfp.companyId);
-        const companyName = company?.name || "Unknown";
+        // Task #1176 — hard-skip RFPs whose company is missing from
+        // companyMap. With the email-derived guard above, a missing
+        // entry means the RFP belongs to an email-derived stub company
+        // (or another excluded row); surfacing it as "Unknown" would
+        // re-open the gap Task #1095 / #1176 close.
+        if (!company) continue;
+        const companyName = company.name;
 
         for (const lane of fileData.highVolumeLanes) {
           const originCity = (lane.origin || "").trim();
