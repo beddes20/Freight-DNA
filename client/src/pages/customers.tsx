@@ -294,9 +294,9 @@ export default function Customers() {
   });
 
   const { data: archivedCompanies, isLoading: archivedLoading, isError: archivedError, refetch: refetchArchived } = useQuery<Company[]>({
-    queryKey: ["/api/companies", { includeArchived: true }],
+    queryKey: ["/api/companies", { includeArchived: true, includeEmailDerived: true }],
     queryFn: async () => {
-      const res = await fetch("/api/companies?includeArchived=true", { credentials: "include" });
+      const res = await fetch("/api/companies?includeArchived=true&includeEmailDerived=true", { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
       const all: Company[] = await res.json();
       return all.filter(c => c.archivedAt);
@@ -418,6 +418,15 @@ export default function Customers() {
       // applied in the owner-label display below and in server/auth.ts
       // getVisibleCompanyIds. Collapses the prior three-way split-brain
       // between display, this filter, and the server visibility gate.
+      //
+      // NOTE: when repFilter === "all" we do NOT post-filter by viewer-scoped
+      // team membership. The server's getVisibleCompanyIds is the single
+      // source of truth for "what is this user allowed to see"; any further
+      // client-side drop here would silently hide accounts the server
+      // intentionally returned (e.g. shared-rep / collaborator accounts whose
+      // canonical owner sits outside the viewer's reporting tree, or
+      // admin-owned rows for an admin viewer). "All" must mean "everything
+      // the server returned".
       const canonicalOwnerId = company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null;
       if (repFilter !== "all" && canonicalOwnerId !== repFilter && !sharedRepIds.includes(repFilter)) return false;
       if (industryFilter !== "all" && company.industry !== industryFilter) return false;
