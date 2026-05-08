@@ -39,6 +39,10 @@ interface MinimalPool {
 const IGNORED_TABLES = new Set<string>([
   // session table is owned by connect-pg-simple, not declared in shared/schema.ts.
   "public.session",
+  // freight_opportunity_import_audit is owned by raw SQL in
+  // server/availableFreightImporter.ts (CREATE TABLE IF NOT EXISTS at runtime),
+  // not declared in shared/schema.ts.
+  "public.freight_opportunity_import_audit",
 ]);
 
 interface ExpectedSchema {

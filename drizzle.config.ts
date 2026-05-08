@@ -11,5 +11,10 @@ export default defineConfig({
   dbCredentials: {
     url: process.env.DATABASE_URL,
   },
-  tablesFilter: ["!session"],
+  // Tables managed outside shared/schema.ts (raw SQL CREATE TABLE IF NOT EXISTS
+  // at runtime, or owned by external libs). Mirrored in
+  // server/checkSchemaDrift.ts IGNORED_TABLES — keep the two lists in sync.
+  // - session: owned by connect-pg-simple
+  // - freight_opportunity_import_audit: created by server/availableFreightImporter.ts
+  tablesFilter: ["!session", "!freight_opportunity_import_audit"],
 });
