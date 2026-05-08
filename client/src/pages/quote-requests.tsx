@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { resolveEffectiveMineOnlyMeta } from "@/lib/quoteRequestsMineOnlyMeta";
 import { useAuth } from "@/hooks/use-auth";
 import { useLiveSync } from "@/hooks/useLiveSync";
 import { useToast } from "@/hooks/use-toast";
@@ -157,7 +158,7 @@ type Quote = {
   repFromCustomerOwner?: boolean;
 };
 
-type ListResult = { rows: Quote[]; total: number; offset: number; limit: number };
+type ListResult = { rows: Quote[]; total: number; offset: number; limit: number; mineOnlyMeta?: MineOnlyMeta };
 
 type Customer = {
   id: string;
@@ -960,6 +961,55 @@ function QuoteRequestsInner(): JSX.Element {
     retry: 1,
   });
 
+  // Task #1149 — read mineOnlyMeta from whichever query has it so the
+  // honesty banner / toggle indicator survives a degraded snapshot (or
+  // a degraded list). The snapshot-then-list precedence (and the
+  // warning-code predicate) live in `client/src/lib/quoteRequestsMineOnlyMeta.ts`
+  // so they can be unit-tested directly without a React-DOM render
+  // harness.
+  const effectiveMineOnlyMeta: MineOnlyMeta | undefined =
+    resolveEffectiveMineOnlyMeta(snapshotQuery.data, listQuery.data);
+  const showMineOnlyWarning =
+    effectiveMineOnlyMeta?.warningCode === "NO_QUOTE_REP_MAPPING";
+
+  // Task #1170 — let the rep dismiss the honesty banner for the
+  // current session. The toggle indicator (intentionally) stays
+  // visible after dismissal so the warning state is never silently
+  // hidden. Dismissal is keyed off the active warning code so that
+  // if the warning re-appears for a different reason in the future
+  // (or re-appears after a transient happy state), the banner re-
+  // opens automatically.
+  const mineOnlyBannerDismissKey = "freightdna.qr.mineOnlyBannerDismissed";
+  const activeWarningCode = effectiveMineOnlyMeta?.warningCode ?? null;
+  const [dismissedWarningCode, setDismissedWarningCode] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return window.sessionStorage.getItem(mineOnlyBannerDismissKey);
+    } catch {
+      return null;
+    }
+  });
+  // Auto-clear the dismissal when the underlying warning changes
+  // (e.g. rep gets mapped → warning clears → rep gets unmapped again).
+  useEffect(() => {
+    if (activeWarningCode === null) return;
+    if (dismissedWarningCode && dismissedWarningCode !== activeWarningCode) {
+      setDismissedWarningCode(null);
+      try {
+        window.sessionStorage.removeItem(mineOnlyBannerDismissKey);
+      } catch {}
+    }
+  }, [activeWarningCode, dismissedWarningCode]);
+  const dismissMineOnlyBanner = useCallback(() => {
+    if (!activeWarningCode) return;
+    setDismissedWarningCode(activeWarningCode);
+    try {
+      window.sessionStorage.setItem(mineOnlyBannerDismissKey, activeWarningCode);
+    } catch {}
+  }, [activeWarningCode]);
+  const showMineOnlyBanner =
+    showMineOnlyWarning && dismissedWarningCode !== activeWarningCode;
+
   // Keep status-by-bucket counts for KPIs that aren't in snapshot.
   const wonTodayCount = snapshotQuery.data?.kpis?.won ?? 0;
   const openCount = snapshotQuery.data?.kpis?.pending ?? 0;
@@ -1354,6 +1404,26 @@ function QuoteRequestsInner(): JSX.Element {
             <label className="flex items-center gap-1.5 cursor-pointer" data-testid="toggle-mine-only">
               <Switch checked={mineOnly} onCheckedChange={setMineOnly} className="h-4 w-7" />
               Mine only
+              {/* Task #1149 — surface the no-rep-mapping warning on the
+                  toggle itself so the state stays visible even if the
+                  banner is dismissed/scrolled past or the snapshot
+                  request is degraded (banner sourced from list). */}
+              {showMineOnlyWarning && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      className="inline-flex text-amber-600 dark:text-amber-400"
+                      data-testid="indicator-mine-only-warning"
+                      aria-label="Mine only is on but you're not mapped to a quote rep"
+                    >
+                      <AlertTriangle className="h-3.5 w-3.5" aria-hidden />
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="top">
+                    You're not mapped to a quote rep — showing all org rows.
+                  </TooltipContent>
+                </Tooltip>
+              )}
             </label>
             <label className="flex items-center gap-1.5 cursor-pointer" data-testid="toggle-free-email">
               <Switch checked={freeEmailOnly} onCheckedChange={setFreeEmailOnly} className="h-4 w-7" />
@@ -1454,8 +1524,11 @@ function QuoteRequestsInner(): JSX.Element {
             backend deliberately returns un-scoped (org-wide) rows in
             that case instead of a fake-zero list, and surfaces this via
             snapshot.mineOnlyMeta so we can name the failure and give a
-            one-click escape hatch. */}
-        {snapshotQuery.data?.mineOnlyMeta?.warningCode === "NO_QUOTE_REP_MAPPING" && (
+            one-click escape hatch.
+            Task #1149 — read from `effectiveMineOnlyMeta` so the banner
+            survives a degraded snapshot (sourced from list) or a
+            degraded list (sourced from snapshot). */}
+        {showMineOnlyBanner && (
           <div
             className="mx-6 mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 flex items-center justify-between gap-3"
             data-testid="banner-mine-only-no-rep"
@@ -1471,6 +1544,53 @@ function QuoteRequestsInner(): JSX.Element {
               data-testid="button-mine-only-show-all"
             >
               Turn off Mine only
+            </Button>
+            {/* Task #1170 — per-session dismiss. The toggle warning
+                indicator (`indicator-mine-only-warning`) intentionally
+                stays visible after dismissal so the warning state is
+                never silently hidden; this only collapses the larger
+                strip to reclaim screen space. */}
+            <button
+              type="button"
+              onClick={dismissMineOnlyBanner}
+              className="rounded-full p-1 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+              data-testid="button-mine-only-dismiss"
+              aria-label="Dismiss for this session"
+              title="Dismiss for this session (toggle indicator stays visible)"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          </div>
+        )}
+
+        {/* Task #1171 — surface snapshot/list fetch failures as a thin
+            amber strip so the rep is never left looking at silently-
+            degraded data. Snapshot has its own error banner above the
+            KPI strip (line ~1168); this strip catches the list-fetch
+            case which previously only surfaced inside the table. Both
+            queries also drive the Task #1149 mineOnly banner — that
+            still works because the resolver falls back to whichever
+            side succeeded. */}
+        {listQuery.isError && (
+          <div
+            className="mx-6 mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 flex items-center justify-between gap-3"
+            data-testid="strip-list-error"
+          >
+            <div className="flex items-center gap-2 flex-1 min-w-0">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span className="truncate">
+                <span className="font-semibold">Couldn't refresh the quotes table.</span>{" "}
+                {(listQuery.error as Error)?.message ?? "Network or server error."}
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => listQuery.refetch()}
+              disabled={listQuery.isFetching}
+              data-testid="button-list-error-retry"
+            >
+              {listQuery.isFetching ? "Retrying…" : "Retry"}
             </Button>
           </div>
         )}
