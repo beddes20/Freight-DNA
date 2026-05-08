@@ -441,16 +441,31 @@ export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] 
     return reps.some(r => r.userId === user.id);
   };
 
+  // Canonical Customers-tab ownership rule (read-side coalesce, no writes):
+  // ownerRepId ?? assignedTo ?? salesPersonId. Mirrors the same coalesce
+  // applied in client/src/pages/customers.tsx (owner-label display + rep
+  // filter predicates). Collapses the prior three-way split-brain where the
+  // `sales` / `sales_director` branches read salesPersonId exclusively (a
+  // nearly-empty column in prod), the director / NAM branch read assignedTo,
+  // and the client display read ownerRepId — locking sales-role reps out of
+  // accounts they actually own. Behavior is monotone non-decreasing per
+  // user: anyone who saw an account before still sees it.
+  const ownerOf = (c: Company): string | null =>
+    c.ownerRepId ?? c.assignedTo ?? (c as any).salesPersonId ?? null;
+
   if (user.role === "director" || user.role === "national_account_manager") {
     const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
     return allCompanies
-      .filter(c => (c.assignedTo && (teamIds.includes(c.assignedTo) || c.assignedTo === user.id)) || isSharedRep(c))
+      .filter(c => {
+        const oid = ownerOf(c);
+        return (oid && (teamIds.includes(oid) || oid === user.id)) || isSharedRep(c);
+      })
       .map(c => c.id);
   }
 
   if (user.role === "sales") {
     return allCompanies
-      .filter(c => (c as any).salesPersonId === user.id || isSharedRep(c))
+      .filter(c => ownerOf(c) === user.id || isSharedRep(c))
       .map(c => c.id);
   }
 
@@ -458,7 +473,10 @@ export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] 
     const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);
     const allIds = new Set([user.id, ...teamIds]);
     return allCompanies
-      .filter(c => ((c as any).salesPersonId && allIds.has((c as any).salesPersonId)) || isSharedRep(c))
+      .filter(c => {
+        const oid = ownerOf(c);
+        return (oid && allIds.has(oid)) || isSharedRep(c);
+      })
       .map(c => c.id);
   }
 
@@ -470,7 +488,7 @@ export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] 
   }
 
   return allCompanies
-    .filter(c => c.assignedTo === user.id || isSharedRep(c))
+    .filter(c => ownerOf(c) === user.id || isSharedRep(c))
     .map(c => c.id);
 }
 

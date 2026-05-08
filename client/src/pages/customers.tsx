@@ -404,8 +404,14 @@ export default function Customers() {
         if (!company.name.toLowerCase().includes(q) && !company.industry?.toLowerCase().includes(q)) return false;
       }
       const sharedRepIds = ((company.sharedReps || []) as SharedRep[]).map(r => r.userId);
-      if (isAdminOrDirector && repFilter === "all" && company.assignedTo && !namAmIds.has(company.assignedTo) && !sharedRepIds.some(id => namAmIds.has(id))) return false;
-      if (repFilter !== "all" && company.assignedTo !== repFilter && !sharedRepIds.includes(repFilter)) return false;
+      // Canonical Customers-tab ownership rule (read-side coalesce, no writes):
+      // ownerRepId ?? assignedTo ?? salesPersonId. Mirrors the same coalesce
+      // applied in the owner-label display below and in server/auth.ts
+      // getVisibleCompanyIds. Collapses the prior three-way split-brain
+      // between display, this filter, and the server visibility gate.
+      const canonicalOwnerId = company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null;
+      if (isAdminOrDirector && repFilter === "all" && canonicalOwnerId && !namAmIds.has(canonicalOwnerId) && !sharedRepIds.some(id => namAmIds.has(id))) return false;
+      if (repFilter !== "all" && canonicalOwnerId !== repFilter && !sharedRepIds.includes(repFilter)) return false;
       if (industryFilter !== "all" && company.industry !== industryFilter) return false;
       if (touchFilter !== "all") {
         const tps = tpSummary[company.id] || { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
@@ -733,7 +739,11 @@ export default function Customers() {
                             );
                           })()}
                           {(() => {
-                            const ownerId = company.ownerRepId;
+                            // Canonical Customers-tab owner-label rule
+                            // (read-side coalesce, no writes):
+                            // ownerRepId ?? assignedTo ?? salesPersonId.
+                            // "Unassigned" only when all three are null.
+                            const ownerId = company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null;
                             const ownerName = ownerId ? accountOwnerMap.get(ownerId) : null;
                             const display = ownerName || "Unassigned";
                             return (
