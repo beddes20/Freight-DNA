@@ -1,0 +1,59 @@
+Proceed with scheduling and execution prep based on the restore + republish runbook.
+
+My decisions:
+
+Restore target: use the least destructive viable restore point that still returns production to a trustworthy, usable state for contacts, touchpoints, tasks, and RFPs.
+
+Start by auditing the primary recommended target 2026-04-29T23:30:00Z against the fallback 2026-05-04T23:00:00Z.
+
+My preference is to lose the fewest possible days of data while still actually fixing production.
+
+If your pre-restore audit shows 2026-05-04T23:00:00Z is sufficient, recommend that instead.
+
+If not, we use 2026-04-29T23:30:00Z.
+
+Workspace target: use commit 9949c373 as the code rollback target.
+
+Replit support / DB restore: assume we need support involved.
+
+I want you to help me prepare for the restore path that requires the least risk.
+
+If there is a self-serve restore in the Database UI, tell me exactly where to go and what to click.
+
+If support/PITR is required, help me prepare the exact request.
+
+Maintenance window: plan for the earliest realistic maintenance window, not “sometime Sunday” by default.
+
+If this can be done safely sooner, recommend the soonest time.
+
+I want urgency here.
+
+Dev-side realignment: keep it as a separate follow-up window. Do not roll it into this restore + republish operation.
+
+Next steps I want from you right now:
+
+Run Step 2: pre-restore prod audit immediately (read-only only).
+
+Compare the primary and fallback restore targets in terms of what data/functionality would be recovered or lost.
+
+Recommend the least destructive restore point that gets production back to a trustworthy state.
+
+Then give me a very explicit operator checklist for the restore window:
+
+exact order of actions,
+
+exact UI areas I need to open,
+
+exact settings/toggles I need to change,
+
+and exact verification steps after restore + publish.
+
+Also draft the exact support message I should send Replit if PITR/help is required for the DB restore.
+
+Important:
+
+I am no longer looking for more broad design exploration.
+
+I need the shortest path to a trustworthy, usable production environment with the code state at 9949c373.
+
+Keep all guardrails in place until I explicitly approve the restore execution.
