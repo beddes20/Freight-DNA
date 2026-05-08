@@ -7328,3 +7328,193 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     'The client-side canManage check must mirror the server role list verbatim. Drift here makes the trash UI appear for users whose dismiss attempts will 403 (or vice-versa).',
   );
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1143: Customers-tab ownership canon & lifecycle hygiene
+// Pins the four contracts the Customers tab now relies on so a future
+// contributor cannot silently re-introduce the trust failures #1143
+// paid down:
+//   1. Canonical owner-coalesce string is identical in all three call
+//      sites (server visibility gate, client filter, client owner
+//      label) — `ownerRepId ?? assignedTo ?? salesPersonId`.
+//   2. `GET /api/team-members` passes an explicit `UserListFilter` to
+//      `storage.getUsers` (never the legacy no-arg overload that leaks
+//      deleted / service / quarantined / demo / fixture rows).
+//   3. The Customers-tab `amUsers` rep-picker source drops deactivated
+//      reps (`isActive !== false`) so they never appear as filterable
+//      owners while remaining resolvable as label fallbacks.
+//   4. The new client helper at `client/src/lib/userAttribution.ts`
+//      stays wired into the Customers-tab `OwnerLabel` sub-component.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1143: Customers-tab ownership canon ─────────\n");
+
+  // ── 1. Canonical owner-coalesce in all three sites ──
+  // The string varies only by parameter name (`c` in auth.ts,
+  // `company` in customers.tsx). Both forms must end with
+  // `?? (… as any).salesPersonId ?? null` so the precedence is
+  // unambiguous. A new contributor who reorders or drops a column
+  // must update this section deliberately.
+  const coalesceRx = /(?:c|company)\.ownerRepId\s*\?\?\s*(?:c|company)\.assignedTo\s*\?\?\s*\((?:c|company) as any\)\.salesPersonId\s*\?\?\s*null/g;
+
+  let authSrc = "";
+  try {
+    authSrc = fs.readFileSync("server/auth.ts", "utf8");
+  } catch {
+    assert("server/auth.ts — file exists", false);
+    return;
+  }
+  const authMatches = (authSrc.match(coalesceRx) || []).length;
+  assert(
+    "server/auth.ts — getVisibleCompanyIds uses the canonical owner-coalesce",
+    authMatches === 1,
+    `expected exactly 1 occurrence of \`c.ownerRepId ?? c.assignedTo ?? (c as any).salesPersonId ?? null\` in server/auth.ts; found ${authMatches}. Splitting or duplicating the coalesce re-introduces the visibility split-brain.`,
+  );
+
+  let customersSrc = "";
+  try {
+    customersSrc = fs.readFileSync("client/src/pages/customers.tsx", "utf8");
+  } catch {
+    assert("client/src/pages/customers.tsx — file exists", false);
+    return;
+  }
+  const customersMatches = (customersSrc.match(coalesceRx) || []).length;
+  assert(
+    "client/src/pages/customers.tsx — uses the canonical owner-coalesce in BOTH applyFilters and OwnerLabel",
+    customersMatches === 2,
+    `expected exactly 2 occurrences of the coalesce in customers.tsx (applyFilters + the OwnerLabel parent); found ${customersMatches}. Adding/removing one means updating Section 1143.`,
+  );
+
+  // No alternative ordering may sneak into the Customers page.
+  // Forbid the obvious rewrites that would silently re-order the
+  // precedence (assignedTo-first or salesPersonId-first).
+  assert(
+    "customers.tsx — no `assignedTo ?? ownerRepId` reordering",
+    !/assignedTo\s*\?\?\s*(?:c|company)\.ownerRepId/.test(customersSrc),
+    "the canonical precedence is ownerRepId → assignedTo → salesPersonId; a different order forks the contract",
+  );
+  assert(
+    "customers.tsx — no `salesPersonId ?? ownerRepId` reordering",
+    !/salesPersonId\s*\?\?\s*(?:c|company)\.ownerRepId/.test(customersSrc),
+    "the canonical precedence is ownerRepId → assignedTo → salesPersonId; a different order forks the contract",
+  );
+
+  // ── 2. /api/team-members must pass an explicit UserListFilter ──
+  let companiesRoutesSrc = "";
+  try {
+    companiesRoutesSrc = fs.readFileSync("server/routes/companies.ts", "utf8");
+  } catch {
+    assert("server/routes/companies.ts — file exists", false);
+    return;
+  }
+  // Locate the GET /api/team-members handler block.
+  const teamMembersRx = /app\.get\(\s*"\/api\/team-members"[^]+?\n\s*\}\);/;
+  const tmMatch = companiesRoutesSrc.match(teamMembersRx);
+  assert(
+    "server/routes/companies.ts — GET /api/team-members handler resolved",
+    !!tmMatch,
+    "could not locate the GET /api/team-members handler — Section 1143 cannot validate its filter",
+  );
+  if (tmMatch) {
+    const body = tmMatch[0];
+    // Must call getUsers with a second arg that is an inline include* object.
+    assert(
+      "GET /api/team-members — calls storage.getUsers with an explicit UserListFilter",
+      /storage\.getUsers\(\s*req\.session\.organizationId![^)]*,\s*\{[^}]*include[A-Za-z]+\s*:/.test(body),
+      "the no-arg `storage.getUsers(orgId)` overload returns deleted/service/quarantined/demo/fixture rows; this route MUST pass a UserListFilter",
+    );
+    // Must keep includeInactive: true so historical owners still resolve
+    // through accountOwnerMap on the Customers tab.
+    assert(
+      "GET /api/team-members — keeps includeInactive: true so name resolvers still see deactivated reps",
+      /includeInactive\s*:\s*true/.test(body),
+      "dropping includeInactive would force every historical-owner card to fall back to /api/users/:id; keep it true",
+    );
+    // Sensitive lifecycle buckets stay excluded — no opt-in here.
+    for (const flag of ["includeDeleted", "includeServiceAccounts", "includeQuarantined", "includeDemo"]) {
+      assert(
+        `GET /api/team-members — does NOT opt in to ${flag}`,
+        !new RegExp(`${flag}\\s*:\\s*true`).test(body),
+        `${flag}=true would re-leak the bucket Section 1143 just fenced off; opt-in must happen in admin tooling, not here`,
+      );
+    }
+  }
+
+  // ── 3. Customers-tab amUsers picker drops deactivated reps ──
+  // Locate the amUsers useMemo body and assert the lifecycle predicate.
+  const amUsersRx = /const\s+amUsers\s*=\s*useMemo\([^]+?\},\s*\[teamMembers\]\s*\)\s*;/;
+  const amMatch = customersSrc.match(amUsersRx);
+  assert(
+    "customers.tsx — amUsers useMemo resolved",
+    !!amMatch,
+    "could not locate the amUsers useMemo — Section 1143 cannot validate the picker filter",
+  );
+  if (amMatch) {
+    const body = amMatch[0];
+    assert(
+      "customers.tsx — amUsers excludes admins from the picker",
+      /role\s*!==\s*"admin"/.test(body),
+      "admins are not assignable owners on the Customers tab; the picker must continue to exclude them",
+    );
+    assert(
+      "customers.tsx — amUsers excludes deactivated reps (`isActive !== false`)",
+      /isActive\s*!==\s*false/.test(body),
+      "the picker must drop deactivated reps even though they remain in accountOwnerMap for label resolution",
+    );
+  }
+
+  // ── 4. OwnerLabel + userAttribution helper stay wired together ──
+  assert(
+    "customers.tsx — imports formatUserAttribution + useUserAttribution from @/lib/userAttribution",
+    /import\s*\{\s*formatUserAttribution\s*,\s*useUserAttribution\s*\}\s*from\s*"@\/lib\/userAttribution"/.test(customersSrc),
+    "the OwnerLabel fallback path depends on both helpers; either import is removable only via a Section 1143 update",
+  );
+  assert(
+    "customers.tsx — declares the OwnerLabel sub-component",
+    /function\s+OwnerLabel\s*\(/.test(customersSrc),
+    "OwnerLabel is the single render-side enforcement point for the lifecycle suffix; do not inline it back into the card without a Section 1143 update",
+  );
+  assert(
+    "customers.tsx — OwnerLabel renders the lifecycle suffix testid",
+    /data-testid=\{`text-account-owner-lifecycle-\$\{companyId\}`\}/.test(customersSrc),
+    "the lifecycle suffix must stay queryable by e2e tests via text-account-owner-lifecycle-<id>",
+  );
+
+  // The helper file itself must export both names so the import above
+  // is meaningful.
+  let helperSrc = "";
+  try {
+    helperSrc = fs.readFileSync("client/src/lib/userAttribution.ts", "utf8");
+  } catch {
+    assert("client/src/lib/userAttribution.ts — file exists", false);
+    return;
+  }
+  assert(
+    "client/src/lib/userAttribution.ts — exports formatUserAttribution",
+    /export\s+function\s+formatUserAttribution\b/.test(helperSrc),
+  );
+  assert(
+    "client/src/lib/userAttribution.ts — exports useUserAttribution",
+    /export\s+function\s+useUserAttribution\b/.test(helperSrc),
+  );
+  // Helper must keep the same lifecycle precedence the server uses
+  // (deleted > inactive > quarantined > service > demo > fixture).
+  // Pin the order by string presence; a contributor who reorders these
+  // branches must update Section 1143 deliberately.
+  const lifecycleOrder = ['"deleted"', '"inactive"', '"quarantined"', '"service"', '"demo"', '"fixture"'];
+  let lastIdx = -1;
+  let orderOk = true;
+  for (const tag of lifecycleOrder) {
+    const idx = helperSrc.indexOf(tag);
+    if (idx < 0 || idx < lastIdx) {
+      orderOk = false;
+      break;
+    }
+    lastIdx = idx;
+  }
+  assert(
+    "client/src/lib/userAttribution.ts — lifecycle precedence matches server (deleted > inactive > quarantined > service > demo > fixture)",
+    orderOk,
+    "the client helper must mirror server/lib/userLifecycle.ts precedence so the Customers tab and the server roster never disagree on which lifecycle marker wins",
+  );
+})();

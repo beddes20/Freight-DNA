@@ -46,6 +46,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/use-auth";
 import { useIsAdmin } from "@/lib/feature-visibility";
 import { fmtMoney } from "@/lib/rep-utils";
+import { formatUserAttribution, useUserAttribution } from "@/lib/userAttribution";
 import type { Company, Contact, User, SharedRep } from "@shared/schema";
 
 type MonthBucket = { totalLoads: number; spotLoads: number; totalMargin: number; totalRevenue?: number };
@@ -396,10 +397,14 @@ export default function Customers() {
     return Array.from(set).sort();
   }, [companies]);
 
-  // Derive assignable users for the rep filter dropdown — all non-admin roles can own accounts
+  // Derive assignable users for the rep filter dropdown — all non-admin roles can own accounts.
+  // Task #1143 — also drop deactivated reps (`isActive === false`) from the PICKER source so
+  // the dropdown only lists reps who can currently own new work. Deactivated reps remain in
+  // `teamMembers`/`accountOwnerMap` so historical owner labels still resolve from the cleaned
+  // `/api/team-members` response without forcing an extra `/api/users/:id` round-trip.
   const amUsers = useMemo(() => {
     return teamMembers
-      .filter(u => u.role !== "admin")
+      .filter(u => u.role !== "admin" && u.isActive !== false)
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [teamMembers]);
 
@@ -757,13 +762,12 @@ export default function Customers() {
                           })()}
                           {(() => {
                             const ownerId = company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null;
-                            const ownerName = ownerId ? accountOwnerMap.get(ownerId) : null;
-                            const display = ownerName ?? (ownerId ? "Assigned" : "Unassigned");
                             return (
-                              <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5" data-testid={`text-account-owner-${company.id}`}>
-                                <UserCheck className="h-3 w-3" />
-                                {display}
-                              </p>
+                              <OwnerLabel
+                                companyId={company.id}
+                                ownerId={ownerId}
+                                activeOwnerName={ownerId ? accountOwnerMap.get(ownerId) ?? null : null}
+                              />
                             );
                           })()}
                         </div>
@@ -1160,5 +1164,64 @@ export default function Customers() {
         isLoading={momentumScoreLoading}
       />
     </div>
+  );
+}
+
+// Task #1143 — Renders the per-card owner label with a stable name
+// for reps that have been deactivated / soft-deleted / quarantined and
+// therefore are no longer in the cleaned `/api/team-members` map. Falls
+// back to a per-id fetch of `GET /api/users/:id` (cached by react-query
+// so each missing rep id is fetched at most once) and surfaces a small,
+// neutral lifecycle suffix. With no `ownerId` at all we still render
+// "Unassigned" to preserve the existing semantics.
+function OwnerLabel({
+  companyId,
+  ownerId,
+  activeOwnerName,
+}: {
+  companyId: string;
+  ownerId: string | null;
+  activeOwnerName: string | null;
+}) {
+  // Only fetch when we have an id AND the active roster did not resolve
+  // it — avoids a needless round-trip for the common case where the
+  // owner is a currently-active rep already in `accountOwnerMap`.
+  const needsFallback = !!ownerId && !activeOwnerName;
+  const { data: historicalUser } = useUserAttribution(needsFallback ? ownerId : null);
+
+  let display = "Unassigned";
+  let lifecycleHint: string | undefined;
+  if (ownerId) {
+    if (activeOwnerName) {
+      display = activeOwnerName;
+    } else if (historicalUser) {
+      const formatted = formatUserAttribution(historicalUser);
+      display = formatted.name;
+      lifecycleHint = formatted.lifecycleHint;
+    } else {
+      // While the fallback fetch is in flight (or after a 404) keep the
+      // pre-#1143 behavior so a missing rep still reads as "Unassigned"
+      // rather than a half-rendered hint. Cached hits resolve
+      // synchronously on subsequent renders.
+      display = "Unassigned";
+    }
+  }
+
+  return (
+    <p
+      className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5"
+      data-testid={`text-account-owner-${companyId}`}
+    >
+      <UserCheck className="h-3 w-3" />
+      {display}
+      {lifecycleHint && (
+        <span
+          className="text-muted-foreground/70"
+          data-testid={`text-account-owner-lifecycle-${companyId}`}
+        >
+          ({lifecycleHint})
+        </span>
+      )}
+    </p>
   );
 }

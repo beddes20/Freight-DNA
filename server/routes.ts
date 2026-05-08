@@ -6104,6 +6104,29 @@ Respond with valid JSON only:
     }
   });
 
+  // Task #1143 — Stable owner labels for deactivated reps.
+  // Per-id lookup that returns minimal lifecycle-aware fields for any
+  // user in the caller's org, regardless of lifecycle state. Powers the
+  // Customers tab's owner-label fallback when an `ownerRepId` points at
+  // a rep that has been deactivated / soft-deleted / quarantined and is
+  // therefore absent from the cleaned `/api/team-members` response.
+  // Read-only, org-scoped, no PII beyond what `/api/users` already
+  // exposes. Registered AFTER all other GET /api/users/* routes so the
+  // `:id` param does not shadow `/api/users/sales`, `/api/users/streak`,
+  // `/api/users/saved-filters`, or `/api/users/me/*`.
+  app.get("/api/users/:id", requireAuth, async (req, res) => {
+    try {
+      const currentUser = await getCurrentUser(req);
+      if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
+      const target = await storage.getUserInOrg(String(req.params.id), currentUser.organizationId);
+      if (!target) return res.status(404).json({ error: "User not found" });
+      const { password, ...safe } = target;
+      res.json(safe);
+    } catch (err) {
+      res.status(500).json({ error: "Failed to fetch user" });
+    }
+  });
+
   registerDashboardRoutes(app);
 
   // ─── Promotion Criteria ──────────────────────────────────────────────────────

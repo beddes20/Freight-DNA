@@ -142,7 +142,15 @@ export function registerCompanyRoutes(app: Express): void {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      const allUsers = await storage.getUsers(req.session.organizationId!);
+      // Task #1143 — pass an explicit lifecycle filter instead of the
+      // legacy no-arg overload (which returns every row, including
+      // deleted / service / quarantined / demo / fixture). `includeInactive:
+      // true` keeps deactivated reps in the response so name-resolver
+      // consumers (Customers tab `accountOwnerMap`, NBA cards, internal
+      // comms, etc.) still render historical owners; pickers (this tab's
+      // `amUsers`, task-dialog, callout-dialog, account-sharing) further
+      // narrow on the client.
+      const allUsers = await storage.getUsers(req.session.organizationId!, { includeInactive: true });
       // Task #970 — annotate every team member with the canonical
       // cockpit team they belong to (per `shared/data/cockpitTeamMap.json`).
       // Surfaces like LWQ thread `teamId`/`teamLabel` into
