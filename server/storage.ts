@@ -10253,8 +10253,38 @@ export class DatabaseStorage implements IStorage {
         return refreshed;
       }
     }
-    const [inserted] = await db.insert(quotePipelineDrops).values(input).returning();
-    return inserted;
+    // Race-safe insert: the SELECT-then-INSERT above is idempotent under
+    // single-writer load, but inbound email webhooks can fire two ticks for
+    // the same messageId concurrently — both pass the SELECT (no row), both
+    // attempt INSERT, second one violates the `quote_pipeline_drops_open_uq`
+    // partial unique index and the caller logs a 23505. Adding
+    // `.onConflictDoNothing()` collapses the loser of the race into a no-op
+    // INSERT; we then re-fetch the row the winner just wrote so we still
+    // return a valid QuotePipelineDrop. Drops with messageId=null cannot
+    // conflict (partial index requires message_id IS NOT NULL) and behave
+    // exactly as before.
+    const [inserted] = await db
+      .insert(quotePipelineDrops)
+      .values(input)
+      .onConflictDoNothing()
+      .returning();
+    if (inserted) return inserted;
+    if (input.messageId) {
+      const [winner] = await db
+        .select()
+        .from(quotePipelineDrops)
+        .where(and(
+          eq(quotePipelineDrops.orgId, input.orgId),
+          eq(quotePipelineDrops.messageId, input.messageId),
+          eq(quotePipelineDrops.reasonCode, input.reasonCode),
+          sql`${quotePipelineDrops.resolvedAt} IS NULL`,
+        ))
+        .limit(1);
+      if (winner) return winner;
+    }
+    throw new Error(
+      `recordQuotePipelineDrop: insert returned no row and no concurrent open drop found (orgId=${input.orgId} messageId=${input.messageId ?? "null"} reasonCode=${input.reasonCode})`,
+    );
   }
 
   async resolveQuotePipelineDrop(
