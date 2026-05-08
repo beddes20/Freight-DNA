@@ -27,6 +27,7 @@ import { SavedViewsDropdown, type QuoteViewFilters } from "@/components/quote-re
 import { SpotQuoteSearchPanel } from "@/components/quote-requests/SpotQuoteSearchPanel";
 import { QuoteDetailsCard } from "@/components/quote-requests/QuoteDetailsCard";
 import { PricingIntelGate } from "@/components/quote-requests/PricingIntelGate";
+import { shouldShowSnoozedHiddenHint } from "@/lib/quoteRequestsSnoozedHiddenHint";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -242,6 +243,8 @@ type Snapshot = {
     // empty-state subtitle when today happens to be quiet but the
     // pipeline isn't actually empty.
     pendingLast7d?: number;
+    // Task #1152 — currently-snoozed rows in scope, hidden by default.
+    snoozedHidden?: number;
     trend: { winRate: number; total: number; avgMargin: number; avgResponse: number };
   };
   customers: Customer[];
@@ -1586,6 +1589,25 @@ function QuoteRequestsInner(): JSX.Element {
               <Switch checked={includeSnoozed} onCheckedChange={setIncludeSnoozed} className="h-4 w-7" />
               Include snoozed
             </label>
+            {shouldShowSnoozedHiddenHint({
+              includeSnoozed,
+              snoozedHidden: snapshotQuery.data?.kpis?.snoozedHidden,
+            }) && (
+              <span
+                className="text-xs text-muted-foreground"
+                data-testid="text-snoozed-hidden-hint"
+              >
+                {snapshotQuery.data!.kpis.snoozedHidden} snoozed hidden —{" "}
+                <button
+                  type="button"
+                  className="underline underline-offset-2 hover:text-foreground"
+                  onClick={() => setIncludeSnoozed(true)}
+                  data-testid="button-show-snoozed-hidden"
+                >
+                  show
+                </button>
+              </span>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs" data-testid="button-domain-filter">

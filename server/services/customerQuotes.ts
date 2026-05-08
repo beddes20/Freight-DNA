@@ -205,6 +205,8 @@ export type Snapshot = {
     // the empty-state subtitle on `/quote-requests` so a quiet today
     // never reads as a dead pipeline when 7-day pending volume exists.
     pendingLast7d: number;
+    // Task #1152 — currently-snoozed rows in scope; 0 when includeSnoozed is true.
+    snoozedHidden: number;
     trend: { winRate: number; total: number; avgMargin: number; avgResponse: number };
   };
   customers: QuoteCustomer[];
@@ -1913,6 +1915,21 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
 
   const nonCustomerIds = await loadNonCustomerCustomerIds(orgId, ctx.customerMap);
   const filtered = applyFilters(allOpps, filters, nonCustomerIds, ctx.visibleRepIds);
+  // Task #1152 — currently-snoozed rows in the active filter set; 0 when
+  // includeSnoozed is on so the UI hint hides.
+  let snoozedHidden = 0;
+  if (!filters.includeSnoozed) {
+    const nowMsForSnooze = Date.now();
+    const filteredWithSnoozed = applyFilters(
+      allOpps,
+      { ...filters, includeSnoozed: true },
+      nonCustomerIds,
+      ctx.visibleRepIds,
+    );
+    snoozedHidden = filteredWithSnoozed.filter(
+      r => r.snoozedUntil && r.snoozedUntil.getTime() > nowMsForSnooze,
+    ).length;
+  }
   const won = filtered.filter(r => isWon(r.outcomeStatus));
   const lost = filtered.filter(r => isLost(r.outcomeStatus));
   const pending = filtered.filter(r => r.outcomeStatus === "pending");
@@ -2298,6 +2315,7 @@ export async function getSnapshot(orgId: string, filters: QuoteFilters): Promise
       avgFirstQuoteMin, pctFirstQuoteUnder60, quotedCount,
       autoCapturedToday,
       pendingLast7d,
+      snoozedHidden,
       trend,
     },
     customers: ctx.customers, reps: ctx.reps, reasons: ctx.reasons, laneGroups: ctx.laneGroups, carriers: ctx.carriers,
