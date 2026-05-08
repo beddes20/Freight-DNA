@@ -244,11 +244,50 @@ const KNOWN_SORT_KEYS = new Set<string>([
   "repName", "responseTimeHours", "source", "score",
 ]);
 
+// Task #1147 — Surface unknown sort keys instead of silently rewriting.
+// Stale saved views / bookmarked URLs can carry a retired sort key
+// (e.g. `carrierPaid`, `marginDollar`, `marginPct`). The list endpoint
+// keeps the safe `requestDate desc` fallback so we don't 400 those
+// requests, but the response now carries a `sortMeta` block whenever a
+// coercion happened so the UI can show a one-line notice and operators
+// can grep server logs for the tagged debug line. Exported for the
+// route-level unit test in tests/customer-quotes-sort-meta.test.ts.
+export type SortMeta = {
+  requested: string;
+  applied: string;
+  coerced: boolean;
+};
+export function resolveSortKey(
+  requested: string | undefined,
+  fallback: ListSortKey = "requestDate",
+): { sortKey: ListSortKey; meta: SortMeta } {
+  const req = requested ?? fallback;
+  if (KNOWN_SORT_KEYS.has(req)) {
+    return {
+      sortKey: req as ListSortKey,
+      meta: { requested: req, applied: req, coerced: false },
+    };
+  }
+  return {
+    sortKey: fallback,
+    meta: { requested: req, applied: fallback, coerced: true },
+  };
+}
+
 const listQuerySchema = queryFiltersSchema.extend({
   sortKey: z.string().optional(),
   sortDir: z.enum(["asc", "desc"]).optional(),
   offset: z.preprocess(v => v === undefined ? 0 : Number(v), z.number().int().min(0).max(100000)),
   limit: z.preprocess(v => v === undefined ? 50 : Number(v), z.number().int().min(1).max(500)),
+  // Task #1148 — opt-in weak-signal trust filter. Truthy strings ("1",
+  // "true") flip on; absence / falsy strings keep the legacy behavior
+  // so older callers and tests don't change shape. Drops rows whose
+  // composite `isWeakSignal` flag is true (see `EnrichedQuote` doc).
+  hideWeakSignal: z.preprocess(v => {
+    if (v === undefined || v === null || v === "") return false;
+    const s = String(v).toLowerCase().trim();
+    return s === "1" || s === "true" || s === "yes";
+  }, z.boolean()).optional(),
 });
 
 // Task #1148 — Telemetry for silently-dropped filter keys.
@@ -826,14 +865,18 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // Task #816 — coerce stale saved-view sort keys (carrierPaid /
       // marginDollar / marginPct, retired with the carrier columns) into
       // the safe default so the request can't crash the list endpoint.
-      const requestedSort = d.sortKey ?? "requestDate";
-      const sortKey: ListSortKey = (KNOWN_SORT_KEYS.has(requestedSort)
-        ? requestedSort
-        : "requestDate") as ListSortKey;
+      // Task #1147 — surface the coercion via `sortMeta` (and a tagged
+      // debug line) so reps and operators aren't silently misled.
+      const { sortKey, meta: sortMeta } = resolveSortKey(d.sortKey);
+      if (sortMeta.coerced) {
+        console.debug(
+          `[customer-quotes][sort-coerce] requested=${sortMeta.requested} applied=${sortMeta.applied} org=${user.organizationId}`,
+        );
+      }
       const sortDir = d.sortDir ?? "desc";
       const { filters: scopedFilters, meta: mineOnlyMeta } = await applyMineOnly(req, filters);
-      const result = await listQuotes(user.organizationId, scopedFilters, sortKey, sortDir, d.offset, d.limit);
-      res.json({ ...result, mineOnlyMeta });
+      const result = await listQuotes(user.organizationId, scopedFilters, sortKey, sortDir, d.offset, d.limit, { hideWeakSignal: !!d.hideWeakSignal });
+      res.json({ ...result, mineOnlyMeta, sortMeta });
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] list error:", err);

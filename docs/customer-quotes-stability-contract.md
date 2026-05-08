@@ -342,6 +342,64 @@ While stabilization is in flight:
 | CQ-4     | Section 34 (Phase 1 Response-Time read-only) + Section 1100 | `customer-quotes-attribution-endpoint.test.ts` |
 | CQ-5     | Section 1100 (null-passthrough invariant)           | `customer-quotes-customer-only-filter.test.ts` |
 | CQ-6     | Section 1100 (diagnostics omits rep gate)           | `freight-capture-funnel.test.ts` (audit visibility) |
+| CQ-7     | Section 1148 (weak-signal heuristic + post-enrich filter) | `customer-quotes-weak-signal.test.ts` |
+
+## CQ-7 — Weak-signal trust filter is additive, conservative, and bypass-safe
+
+**Problem this contract guards.** The Customer Quotes default list ("All"
+status) was getting polluted by auto-captured email stubs: rows where
+the inbound email path had created a placeholder `quote_opportunities`
+row AND a placeholder `companies` row (`is_email_derived = true`,
+Task #1095) AND nobody had ever quoted, replied, or assigned a rep.
+Reps couldn't tell real customer quotes apart from these stubs
+without opening each row.
+
+**The contract.**
+
+1. `enrich()` derives a per-row boolean `isWeakSignal` that is TRUE iff
+   ALL FIVE of the following hold:
+   - `r.source === "email"`
+   - `r.repId == null`
+   - `r.quotedAmount == null` (or numerically `0`)
+   - `r.responseTimeHours == null` (or numerically `<= 0` — no priced
+     reply was ever ingested)
+   - the row's `customerId` is in the `emailDerivedCustomerIds` set
+     built by `loadContext` (linked CRM company has
+     `companies.is_email_derived = true`)
+
+   The five-AND is deliberately conservative — flipping any one input
+   to a real-world value (a real rep, a real quote, a real priced
+   reply, a non-email source, or a non-email-derived company)
+   disqualifies the row from being flagged. This is so that no real
+   customer quote is ever silently hidden.
+
+2. The filter is **additive and post-enrich**. `applyFilters` is NOT
+   modified (CQ-2 frozen). `listQuotes` accepts an `opts.hideWeakSignal`
+   flag; when true it filters `enrichedAll` (after `enrich()`,
+   before pagination) and reports the dropped count via
+   `ListResult.weakSignalHiddenCount`. When false / omitted, the row
+   set is unchanged. KPI tiles intentionally skip the filter so
+   operational counts stay honest.
+
+3. `loadContext` extends the existing `orgCompanies` SELECT with
+   `is_email_derived` (no extra round-trip) and exposes
+   `emailDerivedCustomerIds: Set<string>` on the returned context.
+   Built once per request, shared across every `enrich()` caller in
+   the request.
+
+4. The route surfaces the toggle as `?hideWeakSignal=1`. Truthy
+   strings (`"1"`, `"true"`, `"yes"`) opt in; absence is "off". The
+   UI default-on'es it for the rep; the chip
+   `data-testid="chip-weak-signal-hidden"` shows "Hiding N low-signal
+   rows · Show all" when the server actually dropped rows. When the
+   user clicks Show all, every row that would have been flagged
+   renders the per-row badge `data-testid="badge-weak-signal-${id}"`.
+
+**Out of scope (do not regress here).** No edits to `applyFilters` (CQ-2),
+no edits to `attachResponseTimes` (CQ-4), no edits to
+`__none__` resolver (CQ-1), no changes to KPI / snapshot counts,
+no email-ingestion or company-creation changes, no schema migration
+(reuses `companies.is_email_derived` from Task #1095).
 
 Section 1100 is the consolidated "stability contract" guardrail block. It
 exists so that if a future edit silently weakens any contract above, the

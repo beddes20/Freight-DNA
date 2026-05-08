@@ -111,6 +111,21 @@ export type EnrichedQuote = QuoteOpportunity & {
   // renders this as "<Owner Name> (owner)" so account managers see who
   // would catch the email if the inbox-recipient routing had fired.
   ownerRepName?: string | null;
+  // Task #1148 — composite weak-trust signal computed read-only in
+  // `enrich()` from already-loaded fields. TRUE when ALL of:
+  //   - source === "email" (auto-captured from inbound mail)
+  //   - repId IS NULL (no explicit assignment; rep cell is owner
+  //     projection at best)
+  //   - quotedAmount IS NULL (never priced)
+  //   - responseTimeHours IS NULL (no priced reply ingested)
+  //   - linked customer maps to a `companies` row flagged
+  //     `is_email_derived = true` (the company itself is a
+  //     stub auto-created from a single inbound email — Task #1095)
+  // Default-on `hideWeakSignal` query flag drops these from the
+  // visible page. The five-AND is deliberately conservative so a real
+  // customer's quote cannot be flagged. UI surfaces a single "Low
+  // signal" badge when the row is shown anyway (toggle off).
+  isWeakSignal: boolean;
 };
 
 export type AlertSeverity = "high" | "medium" | "low";
@@ -233,6 +248,13 @@ export type ListResult = {
   total: number;
   offset: number;
   limit: number;
+  // Task #1148 — count of weak-signal rows the server dropped from
+  // `rows`/`total` because `hideWeakSignal=true` was passed. Always 0
+  // when the toggle is off (or when no rows match the heuristic) so
+  // the UI can render "Hiding N low-signal rows · Show all" without
+  // an extra fetch. KPI tiles intentionally still count these rows
+  // (operational truth); the chip surfaces the discrepancy honestly.
+  weakSignalHiddenCount: number;
 };
 
 const WON_STATUSES: QuoteOutcomeStatus[] = ["won", "won_low_margin"];
@@ -1114,6 +1136,15 @@ function enrich(
      * resolved rep but the customer's CRM company has an `ownerRepId`.
      */
     ownerRepNameByCustomerId?: Map<string, string>;
+    /**
+     * Task #1148 — set of `quote_customers.id` values whose linked
+     * CRM company has `is_email_derived = true`. Used as one of the
+     * five inputs to the `isWeakSignal` heuristic. Built once per
+     * `loadContext` call. When omitted (legacy callers), `isWeakSignal`
+     * is conservatively false for every row — never silently
+     * over-flags.
+     */
+    emailDerivedCustomerIds?: Set<string>;
   } = {},
 ): EnrichedQuote[] {
   const now = opts.now ?? Date.now();
@@ -1165,6 +1196,18 @@ function enrich(
     const ownerRepName = repName === "—"
       ? (opts.ownerRepNameByCustomerId?.get(r.customerId) ?? null)
       : null;
+    // Task #1148 — composite weak-trust signal. See `EnrichedQuote`
+    // doc above for the contract. All five conditions must hold; any
+    // single resolved fact (a real rep, a quoted amount, a priced
+    // reply, a non-email source, or a non-email-derived company)
+    // disqualifies the row from being flagged. Intentionally read-only
+    // — does not touch `applyFilters` (CQ-2 frozen surface).
+    const isWeakSignal =
+      r.source === "email"
+      && r.repId == null
+      && (r.quotedAmount == null || num(r.quotedAmount) === 0)
+      && (r.responseTimeHours == null || num(r.responseTimeHours) <= 0)
+      && (opts.emailDerivedCustomerIds?.has(r.customerId) ?? false);
     return {
       ...r,
       customerName,
@@ -1184,6 +1227,7 @@ function enrich(
         ? Math.round(num(r.responseTimeHours) * 60)
         : null,
       ownerRepName,
+      isWeakSignal,
     };
   });
 }
@@ -1232,7 +1276,11 @@ async function loadContext(orgId: string) {
     // sluggified quote_customers display names like "Mohawkind" to the
     // canonical CRM name "Mohawk Industries". Light query — companies
     // tables in this app stay in the low hundreds per org.
-    db.select({ id: companies.id, name: companies.name, ownerRepId: companies.ownerRepId }).from(companies).where(eq(companies.organizationId, orgId)),
+    // Task #1148 — also pull `is_email_derived` so we can build the
+    // `emailDerivedCustomerIds` set used by the weak-signal heuristic
+    // in `enrich()`. Cheap (same already-loaded companies row); no
+    // extra round-trip.
+    db.select({ id: companies.id, name: companies.name, ownerRepId: companies.ownerRepId, isEmailDerived: companies.isEmailDerived }).from(companies).where(eq(companies.organizationId, orgId)),
   ]);
   // Task #1011 — preload user display names so the owner-rep fallback
   // can render "<Name> (owner)" without per-row lookups.
@@ -1295,6 +1343,20 @@ async function loadContext(orgId: string) {
     const display = userNameById.get(co.ownerRepId);
     if (display) ownerRepNameByCustomerId.set(cust.id, display);
   }
+  // Task #1148 — `quote_customers.id` set whose linked CRM company has
+  // `is_email_derived = true`. Same canonical-name bridge as the
+  // owner-rep map (a quote_customers row links to a companies row by
+  // canonical name). Used as the company-side input to the
+  // weak-signal heuristic in `enrich()`.
+  const companyEmailDerivedByName = new Map<string, boolean>();
+  for (const co of orgCompanies) {
+    if (co.name) companyEmailDerivedByName.set(co.name, !!co.isEmailDerived);
+  }
+  const emailDerivedCustomerIds = new Set<string>();
+  for (const cust of customers) {
+    const canonical = canonicalCustomerNames.get(cust.id) ?? cust.name;
+    if (companyEmailDerivedByName.get(canonical)) emailDerivedCustomerIds.add(cust.id);
+  }
   return {
     customers,
     // Public rep list (snapshot.reps consumes this directly).
@@ -1314,10 +1376,11 @@ async function loadContext(orgId: string) {
     visibleRepIds,
     canonicalCustomerNames,
     ownerRepNameByCustomerId,
+    emailDerivedCustomerIds,
   };
 }
 
-export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: ListSortKey, sortDir: "asc" | "desc", offset: number, limit: number): Promise<ListResult> {
+export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: ListSortKey, sortDir: "asc" | "desc", offset: number, limit: number, opts: { hideWeakSignal?: boolean } = {}): Promise<ListResult> {
   // Task #597 — fire-and-forget classifier so unknown rows are graded into
   // customer/carrier without blocking the response.
   maybeBackfillPartyTypesAsync(orgId);
@@ -1343,13 +1406,25 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
   // `email_messages.to_email`. Built per-request because it depends on the
   // page's specific opportunities, not the org-level context.
   const repByOpportunityId = await resolveRepsFromSourceEmails(orgId, filtered);
-  const enriched = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, {
+  const enrichedAll = enrich(filtered, ctx.customerMap, ctx.repMap, ctx.carrierMap, ctx.reasonMap, {
     funnelEligibleRepIds: ctx.customerFacingRepIds,
     repDisplayNames: ctx.repDisplayNames,
     repByOpportunityId,
     canonicalCustomerNames: ctx.canonicalCustomerNames,
     ownerRepNameByCustomerId: ctx.ownerRepNameByCustomerId,
+    emailDerivedCustomerIds: ctx.emailDerivedCustomerIds,
   });
+  // Task #1148 — drop weak-signal rows from the visible list when the
+  // caller opts in. Applied AFTER `enrich` (which is where
+  // `isWeakSignal` is computed) and BEFORE pagination so `total`
+  // reflects what the user actually sees. KPI / snapshot endpoints
+  // intentionally skip this filter so operational counts stay honest.
+  const weakSignalHiddenCount = opts.hideWeakSignal
+    ? enrichedAll.reduce((n, r) => n + (r.isWeakSignal ? 1 : 0), 0)
+    : 0;
+  const enriched = opts.hideWeakSignal
+    ? enrichedAll.filter(r => !r.isWeakSignal)
+    : enrichedAll;
 
   const dir = sortDir === "asc" ? 1 : -1;
   enriched.sort((a, b) => {
@@ -1392,6 +1467,7 @@ export async function listQuotes(orgId: string, filters: QuoteFilters, sortKey: 
     rows: page,
     total: enriched.length,
     offset, limit,
+    weakSignalHiddenCount,
   };
 }
 

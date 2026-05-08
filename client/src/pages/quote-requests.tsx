@@ -156,9 +156,35 @@ type Quote = {
   // us render an "owner" badge so operators understand they're seeing
   // a fallback display rather than an explicit assignment.
   repFromCustomerOwner?: boolean;
+  // Task #1148 — server-computed weak-trust signal (see EnrichedQuote
+  // doc on the server). When the `hideWeakSignal` toggle is OFF, the
+  // row renders an amber "Low signal" badge so reps still see why the
+  // row would normally be hidden. Optional in case a stale cache /
+  // older payload arrives without the field.
+  isWeakSignal?: boolean;
 };
 
-type ListResult = { rows: Quote[]; total: number; offset: number; limit: number; mineOnlyMeta?: MineOnlyMeta };
+// Task #1147 — `sortMeta` is appended by the list route whenever the
+// requested sort key was unknown (typically a stale saved view or
+// bookmarked URL referencing a retired column like `carrierPaid`).
+// `coerced: true` means the server fell back to the default
+// `requestDate` ordering; we surface a one-line dismissible notice
+// above the table so reps know they're not looking at the sort they
+// asked for. Block is omitted entirely on healthy requests, so older
+// callers and tests that ignore it stay unaffected.
+type SortMeta = { requested: string; applied: string; coerced: boolean };
+type ListResult = {
+  rows: Quote[];
+  total: number;
+  offset: number;
+  limit: number;
+  mineOnlyMeta?: MineOnlyMeta;
+  sortMeta?: SortMeta;
+  // Task #1148 — count of weak-signal rows the server hid because
+  // `?hideWeakSignal=true` was passed. Optional so older payloads /
+  // tests stay valid; we treat undefined as 0.
+  weakSignalHiddenCount?: number;
+};
 
 type Customer = {
   id: string;
@@ -556,6 +582,18 @@ function QuoteRequestsInner(): JSX.Element {
   const [includeSnoozed, setIncludeSnoozed] = useState(!!initialOverride.includeSnoozed);
   const [sortKey, setSortKey] = useState<SortKey>("requestDate");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Task #1147 — local dismissal of the sort-coercion notice. Holds the
+  // requested-but-unknown key the user dismissed so a different unknown
+  // key (e.g. another stale saved view) re-shows the notice.
+  const [dismissedSortNoticeKey, setDismissedSortNoticeKey] = useState<string | null>(null);
+  // Task #1148 — weak-signal trust filter. Default-on so reps don't
+  // see auto-captured email-derived stub rows (no rep, no quoted
+  // amount, no priced reply, company itself was email-stub-created)
+  // mixed in with real customer quotes. Toggle persists in component
+  // state for the session; no preset/route auto-flips it. KPI tiles
+  // intentionally keep counting hidden rows — chip surfaces "Hiding N
+  // low-signal rows · Show all" so the discrepancy stays honest.
+  const [hideWeakSignal, setHideWeakSignal] = useState<boolean>(true);
   const [offset, setOffset] = useState(0);
   // selectedId controls the drawer (open/closed). focusedId is the
   // keyboard cursor (j/k) — separating them so j/k navigation never
@@ -743,7 +781,7 @@ function QuoteRequestsInner(): JSX.Element {
   }, [searchInput]);
 
   // Reset offset when filters change.
-  useEffect(() => { setOffset(0); }, [status, age, mineOnly, freeEmailOnly, showUnknownSenders, domainFilter, search, sortKey, sortDir]);
+  useEffect(() => { setOffset(0); }, [status, age, mineOnly, freeEmailOnly, showUnknownSenders, domainFilter, search, sortKey, sortDir, hideWeakSignal]);
 
   const currentFilters: QuoteViewFilters = useMemo(() => ({
     status, age, mineOnly, freeEmailOnly, showUnknownSenders, includeSnoozed, search, domainFilter, pastSlaOnly,
@@ -848,8 +886,12 @@ function QuoteRequestsInner(): JSX.Element {
     p.set("limit", String(PAGE_SIZE));
     p.set("offset", String(offset));
     if (includeSnoozed) p.set("includeSnoozed", "1");
+    // Task #1148 — opt into the server-side weak-signal filter when
+    // the toggle is on. Server treats absence as "off" so existing
+    // tests / older callers stay unaffected.
+    if (hideWeakSignal) p.set("hideWeakSignal", "1");
     return p.toString();
-  }, [listFilterParams, sortKey, sortDir, offset, includeSnoozed]);
+  }, [listFilterParams, sortKey, sortDir, offset, includeSnoozed, hideWeakSignal]);
 
   // ─── Queries ─────────────────────────────────────────────────────────
   const snapshotQuery = useQuery<Snapshot & { myRepId: string | null }>({
@@ -1664,6 +1706,89 @@ function QuoteRequestsInner(): JSX.Element {
           );
         })()}
 
+        {/* Task #1147 — Sort coercion notice. The list endpoint silently
+            falls back to `requestDate desc` when a stale saved view or
+            bookmarked URL carries a retired sort key (e.g. `carrierPaid`).
+            Surface that to the rep with a one-line dismissible banner so
+            the table doesn't look unsorted-but-isn't. Dismissal is keyed
+            off the requested key, so a different unknown key on a later
+            request will re-show the notice. */}
+        {/* Task #1148 — weak-signal trust filter chip. Renders when the
+            toggle is on AND the server actually hid rows; clicking
+            "Show all" turns the toggle off so the rep can audit the
+            full set. KPI tiles (above the table) intentionally still
+            count hidden rows so the operational total stays honest —
+            the chip surfaces that discrepancy explicitly. When the
+            toggle is OFF, the chip flips to a quieter "Hide low-signal
+            rows" affordance so reps can re-engage the filter without
+            hunting for a settings menu. */}
+        {(() => {
+          const hidden = listQuery.data?.weakSignalHiddenCount ?? 0;
+          if (hideWeakSignal) {
+            if (hidden <= 0) return null;
+            return (
+              <div className="px-6 pt-3" data-testid="chip-weak-signal-hidden">
+                <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                  <div className="flex-1">
+                    Hiding {hidden} low-signal {hidden === 1 ? "row" : "rows"} (auto-captured email stubs with no rep, no quoted amount, no priced reply). KPI tiles still count them.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setHideWeakSignal(false)}
+                    className="rounded px-2 py-0.5 font-medium hover:bg-amber-500/20 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                    data-testid="toggle-weak-signal-show-all"
+                  >
+                    Show all
+                  </button>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div className="px-6 pt-3" data-testid="chip-weak-signal-shown">
+              <div className="flex items-center gap-2 rounded-md border border-muted bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                <div className="flex-1">
+                  Showing all rows including low-signal (auto-captured) stubs.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHideWeakSignal(true)}
+                  className="rounded px-2 py-0.5 font-medium hover:bg-muted focus:outline-none focus:ring-2 focus:ring-ring"
+                  data-testid="toggle-weak-signal-hide"
+                >
+                  Hide low-signal rows
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
+        {(() => {
+          const meta = listQuery.data?.sortMeta;
+          if (!meta || !meta.coerced) return null;
+          if (dismissedSortNoticeKey === meta.requested) return null;
+          return (
+            <div className="px-6 pt-3" data-testid="notice-sort-coerced">
+              <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" aria-hidden />
+                <div className="flex-1">
+                  Sort key <code className="font-mono">{meta.requested}</code> isn't available anymore — showing <code className="font-mono">{meta.applied}</code> instead. Pick a column header to choose a different sort.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDismissedSortNoticeKey(meta.requested)}
+                  className="rounded p-0.5 hover:bg-amber-500/20 focus:outline-none focus:ring-2 focus:ring-amber-500/40"
+                  data-testid="button-notice-sort-coerced-dismiss"
+                  aria-label="Dismiss sort notice"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Body: table + drawer */}
         <div className="flex flex-1 overflow-hidden relative">
           <div className={`flex-1 overflow-hidden transition-all ${selectedId ? "pr-[520px]" : ""}`}>
@@ -2438,6 +2563,19 @@ function ListRow({
           <HoverCardTrigger asChild>
             <span className="hover:underline" data-testid={`text-customer-${q.id}`}>{customerLabel}</span>
           </HoverCardTrigger>
+          {/* Task #1148 — per-row weak-signal indicator. Renders only
+              when the row reached the table despite scoring weak (i.e.
+              the Hide low-signal toggle is OFF). The chip above the
+              table explains what the badge means. */}
+          {q.isWeakSignal && (
+            <span
+              className="ml-1.5 inline-flex items-center px-1.5 h-4 text-[9px] font-medium uppercase rounded border bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-900 align-middle"
+              title="Auto-captured email stub: no rep, no quoted amount, no priced reply. Likely noise."
+              data-testid={`badge-weak-signal-${q.id}`}
+            >
+              Low signal
+            </span>
+          )}
           <HoverCardContent className="w-72 text-xs" align="start">
             <div className="font-semibold mb-1">{customerLabel}</div>
             {q.customerId ? (

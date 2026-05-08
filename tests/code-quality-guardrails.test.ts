@@ -3441,7 +3441,11 @@ console.log("\n── Section 32: Quote Requests Mine-only trust contract ──
 
   assert(
     "customerQuotes.ts — /list endpoint propagates mineOnlyMeta in response",
-    /res\.json\(\{\s*\.\.\.result,\s*mineOnlyMeta\s*\}\)/.test(routesSrc),
+    // Task #1147 — the /list response now also carries `sortMeta` so
+    // the UI can surface stale-saved-view sort coercions. Allow any
+    // additional sibling fields after `mineOnlyMeta` so future
+    // additive response fields don't trip this guard.
+    /res\.json\(\{\s*\.\.\.result,\s*mineOnlyMeta(\s*,\s*[a-zA-Z][a-zA-Z0-9_]*)*\s*\}\)/.test(routesSrc),
     "/api/customer-quotes/list response does not include mineOnlyMeta — UI cannot detect no-rep state",
   );
 
@@ -4458,7 +4462,7 @@ console.log("\n── Section 1029: LWQ D — Row redesign (reason chip + lifecy
     fs.existsSync(docPath),
   );
   const docSrc = fs.existsSync(docPath) ? fs.readFileSync(docPath, "utf8") : "";
-  for (const id of ["CQ-1", "CQ-2", "CQ-3", "CQ-4", "CQ-5", "CQ-6"]) {
+  for (const id of ["CQ-1", "CQ-2", "CQ-3", "CQ-4", "CQ-5", "CQ-6", "CQ-7"]) {
     assert(
       `[CQ-doc] contract ${id} is documented`,
       new RegExp(`##\\s+${id}\\b`).test(docSrc),
@@ -4628,6 +4632,125 @@ console.log("\n── Section 1029: LWQ D — Row redesign (reason chip + lifecy
   assert(
     "[CQ-default-hide] applyFilters body does NOT reference UNKNOWN_CUSTOMER_NAME or showUnknownSenders (post-filter is client-side)",
     !!applyFiltersMatch && !/UNKNOWN_CUSTOMER_NAME|showUnknownSenders/.test(applyFiltersMatch[0]),
+  );
+}
+
+// ── Section 1148: CQ-7 Weak-signal trust filter ─────────────────────────────
+// Task #1148 — pin the five-AND `isWeakSignal` heuristic, the
+// post-enrich (NOT applyFilters) hide path, the loadContext set
+// build, and the route + UI surfaces. Section 1100 above already
+// guards CQ-1..CQ-6; this is its sibling for CQ-7. A failure here
+// means somebody silently weakened the heuristic (would start
+// hiding real customer quotes) or moved the filter into
+// `applyFilters` (CQ-2 frozen).
+//
+{
+  console.log("\n── Section 1148: Weak-signal trust filter (CQ-7) ──\n");
+
+  const cqSvc = readFile("server/services/customerQuotes.ts");
+  const cqRoutes = readFile("server/routes/customerQuotes.ts");
+  const pageSrc = readFile("client/src/pages/quote-requests.tsx");
+
+  // Heuristic must use ALL FIVE inputs combined with `&&`. We pin
+  // each clause individually so a partial weakening (e.g. dropping
+  // the email-derived-company check) trips this guard.
+  const weakSignalMatch = cqSvc.match(/const\s+isWeakSignal\s*=\s*[\s\S]{0,600}?;/);
+  assert("[CQ-7] enrich() declares isWeakSignal", !!weakSignalMatch);
+  if (weakSignalMatch) {
+    const body = weakSignalMatch[0];
+    assert(
+      "[CQ-7] isWeakSignal requires source === \"email\"",
+      /r\.source\s*===\s*"email"/.test(body),
+    );
+    assert(
+      "[CQ-7] isWeakSignal requires repId == null",
+      /r\.repId\s*==\s*null/.test(body),
+    );
+    assert(
+      "[CQ-7] isWeakSignal requires quotedAmount empty (null or 0)",
+      /r\.quotedAmount\s*==\s*null/.test(body)
+        && /num\(r\.quotedAmount\)\s*===\s*0/.test(body),
+    );
+    assert(
+      "[CQ-7] isWeakSignal requires responseTimeHours empty (null or <=0)",
+      /r\.responseTimeHours\s*==\s*null/.test(body)
+        && /num\(r\.responseTimeHours\)\s*<=\s*0/.test(body),
+    );
+    assert(
+      "[CQ-7] isWeakSignal requires emailDerivedCustomerIds.has(r.customerId)",
+      /opts\.emailDerivedCustomerIds\?\.has\(r\.customerId\)/.test(body),
+    );
+  }
+
+  // applyFilters is CQ-2 frozen — the weak-signal filter must NOT
+  // live inside it. Re-grab the function body and assert no
+  // weak-signal terminology / reads slipped in.
+  const applyFiltersMatch = cqSvc.match(/export function applyFilters\([\s\S]*?\n\}\n/);
+  assert("[CQ-7] applyFilters helper still resolved", !!applyFiltersMatch);
+  if (applyFiltersMatch) {
+    const body = applyFiltersMatch[0];
+    assert(
+      "[CQ-7] applyFilters does NOT mention isWeakSignal / hideWeakSignal",
+      !/isWeakSignal|hideWeakSignal/.test(body),
+    );
+    assert(
+      "[CQ-7] applyFilters does NOT read companies / emailDerivedCustomerIds (frozen surface)",
+      !/emailDerivedCustomerIds|isEmailDerived/.test(body),
+    );
+  }
+
+  // loadContext must extend the orgCompanies SELECT with isEmailDerived
+  // and expose emailDerivedCustomerIds in the returned context.
+  assert(
+    "[CQ-7] loadContext SELECTs companies.isEmailDerived",
+    /isEmailDerived:\s*companies\.isEmailDerived/.test(cqSvc),
+  );
+  assert(
+    "[CQ-7] loadContext exposes emailDerivedCustomerIds in returned ctx",
+    /emailDerivedCustomerIds,/.test(cqSvc),
+  );
+
+  // listQuotes must accept hideWeakSignal opt and apply it AFTER
+  // enrich (post-pagination would be wrong — total would be off).
+  assert(
+    "[CQ-7] listQuotes signature accepts opts.hideWeakSignal",
+    /export async function listQuotes\([\s\S]*?opts:\s*\{\s*hideWeakSignal\?:\s*boolean\s*\}/.test(cqSvc),
+  );
+  assert(
+    "[CQ-7] listQuotes filters enrichedAll by !r.isWeakSignal under the flag",
+    /enrichedAll\.filter\(r\s*=>\s*!r\.isWeakSignal\)/.test(cqSvc),
+  );
+  assert(
+    "[CQ-7] listQuotes returns weakSignalHiddenCount in ListResult",
+    /weakSignalHiddenCount/.test(cqSvc),
+  );
+
+  // Route schema accepts the flag and forwards it to the service.
+  assert(
+    "[CQ-7] /list route schema declares hideWeakSignal",
+    /hideWeakSignal:\s*z\.preprocess/.test(cqRoutes),
+  );
+  assert(
+    "[CQ-7] /list route forwards hideWeakSignal to listQuotes",
+    /listQuotes\([\s\S]{0,200}?\{\s*hideWeakSignal:\s*!!d\.hideWeakSignal\s*\}/.test(cqRoutes),
+  );
+
+  // UI surfaces — chip + per-row badge + opt-in default-on.
+  assert(
+    "[CQ-7] quote-requests.tsx defaults hideWeakSignal to true",
+    /useState<boolean>\(true\)[\s\S]{0,200}?hideWeakSignal|hideWeakSignal[\s\S]{0,40}?useState<boolean>\(true\)/.test(pageSrc),
+  );
+  assert(
+    "[CQ-7] quote-requests.tsx renders chip-weak-signal-hidden when rows are hidden",
+    /data-testid="chip-weak-signal-hidden"/.test(pageSrc),
+  );
+  assert(
+    "[CQ-7] quote-requests.tsx renders per-row badge-weak-signal-${id} for flagged rows",
+    /data-testid=\{`badge-weak-signal-\$\{q\.id\}`\}/.test(pageSrc),
+  );
+  assert(
+    "[CQ-7] listParams sets hideWeakSignal=1 when toggle is on",
+    /if\s*\(hideWeakSignal\)\s*p\.set\("hideWeakSignal",\s*"1"\)/.test(pageSrc),
   );
 }
 
