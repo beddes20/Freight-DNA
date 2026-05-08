@@ -1,9 +1,22 @@
 # Production Restore + Republish Plan
 
-**Authored:** 2026-05-08
+**Authored:** 2026-05-08. **Last updated:** 2026-05-08 (post-audit, decisions locked).
 **Status:** plan / runbook. **No execution has been performed.** All guardrails (no schema changes, no prod writes, no publish) remain in effect until you explicitly say "execute."
-**Companion docs:** `docs/dev-prod-schema-drift-2026-05-08.md` (drift inventory).
-**Related backups:** `.local/dev-db-backups/dev_schema_20260508_175432.sql` (dev schema snapshot, do not overwrite).
+**Companion docs:** `docs/dev-prod-schema-drift-2026-05-08.md` (drift inventory), `docs/preservation-plan-2026-05-08.md` (commits-after-9949c373 inventory), `docs/restore-target-recommendation-2026-05-08.md` (X-vs-Y audit and restore-target recommendation), `docs/operator-maintenance-window-checklist-2026-05-08.md` (short operator checklist).
+**Related backups:** `.local/dev-db-backups/dev_schema_20260508_175432.sql` (dev schema snapshot, do not overwrite); `.local/dev-db-backups/prod-after-restore-target/` (rep-entered tables exported pre-restore).
+
+---
+
+## Locked decisions (2026-05-08, post-audit)
+
+The following are CONFIRMED by the operator and must not silently change. If any of these need to change, this entire runbook needs to be re-reviewed.
+
+- **Restore target (production database):** `2026-05-04T00:00:00Z` (Option X). Rationale lives in `docs/restore-target-recommendation-2026-05-08.md`.
+- **Workspace code target:** commit `9949c373` ("Update ownership logic for consistent customer data display").
+- **Code preservation:** Option A — after rollback, cherry-pick three docs back: `docs/dev-prod-schema-drift-2026-05-08.md`, `docs/prod-restore-and-republish-plan-2026-05-08.md` (this doc), `docs/preservation-plan-2026-05-08.md`.
+- **Data export:** small rep-entered tables already exported to `.local/dev-db-backups/prod-after-restore-target/` (contacts.csv, touchpoints.csv, tasks.csv, crm_opportunities.csv). Bulk QO/email export delegated to Replit support via server-side `pg_dump` if forensic archive is desired.
+
+These supersede the "what I'm asking you to decide" prompts in Section 7 below — Section 7 is retained for historical context only.
 
 ---
 
@@ -27,7 +40,9 @@ What I am being honest about up front:
 
 ## 1. Proposed restore target — production database
 
-### Recommended primary target
+> **2026-05-08 update (post-audit):** the recommended primary target was originally `2026-04-29T23:30:00Z`. The X-vs-Y audit (see `docs/restore-target-recommendation-2026-05-08.md`) revealed that the 4/30–5/3 backfill-window writes are *legitimate repairs* of a prior P0, not corruption — and that the duplication problem is solved by publishing `7f577c98`, not by restoring further back. **The locked target is now `2026-05-04T00:00:00Z` (Option X)**, replacing the original recommendation. The original Section 1 text is retained below for historical context.
+
+### Recommended primary target (ORIGINAL — superseded by Locked Decisions block above)
 
 **Restore prod to a snapshot from approximately 2026-04-29 23:30 UTC** — i.e. ~30 minutes before the start of the documented `backfill-incident` window (`tools/backfill-incident-window.ts` declares `WINDOW_START = 2026-04-30T00:00:00Z`).
 
@@ -122,6 +137,28 @@ If you'd rather **not** roll back code at all, the alternative is: drop only the
 
 Estimated window: **3–4 hours total.** Best run on a Sunday morning or other low-traffic period. Roles below: **OPERATOR** = you (or a designated human with publish authority), **AGENT** = me (running read-only verification, code edits inside the workspace, and `suggestDeploy` prompts).
 
+### Step 0 — Support-confirmed plan (BLOCKING; lead time 24–48h) — **OPERATOR + Replit support**
+
+**Goal:** do not enter the maintenance window until Replit support has confirmed in writing that the two operations we depend on will behave as expected. This is a HARD GATE on every step below.
+
+**What support must confirm before Step 1 begins:**
+
+1. **PITR target is reachable for production:** confirm Replit's point-in-time-recovery / snapshot system can restore the production database to **`2026-05-04T00:00:00Z`** specifically. If this exact timestamp is not reachable, support must propose the **closest reachable timestamp at or before** 2026-05-04T00:00:00Z (never after — that would import post-restore-window writes we already accepted as lost). Document the actual confirmed timestamp here before proceeding.
+   - Confirmed restore timestamp (fill in after support reply): `__________________________`
+   - Snapshot identifier / restore method (fill in): `__________________________`
+2. **Restore-to-new-DB vs restore-in-place:** confirm which mode Replit will use. If restore-to-new-DB, document the swap procedure and downtime estimate. If restore-in-place, document the rollback path if the restore lands wrong (e.g. did support take a pre-restore forensic snapshot we can return to?).
+3. **Migration behavior on first publish post-restore:** confirm Replit's publish flow will run forward migrations against the *restored* prod schema (not the pre-restore schema), and that the migration runner will detect the dev-vs-prod additive diff correctly. Specifically confirm: when we publish workspace HEAD = `9949c373`, the publish UI will surface `CREATE TABLE company_financial_aliases`, `CREATE TABLE user_lifecycle_events`, and the additive `ADD COLUMN` operations from Tasks #1051/#1093/#1095/#1126 — and **no DROP operations**.
+4. **Bulk forensic export window (optional):** if the operator chose to request a server-side `pg_dump` of post-restore-target `quote_opportunities` and `email_messages` rows for forensic archive (per Step 3 of `docs/restore-target-recommendation-2026-05-08.md`), support must complete and deliver that archive **before** the restore lands — once the restore runs, the forensic source is gone.
+
+**Actions:**
+
+1. **OPERATOR** opens Replit support ticket using the template in `docs/restore-target-recommendation-2026-05-08.md` Step 3, plus the four items above.
+2. Wait for support's written confirmation. Typical lead time 24–48h.
+3. **OPERATOR** logs the confirmed restore timestamp and method in the blanks above. **AGENT** will reference these in Step 3.
+4. **OPERATOR** schedules the maintenance window to start **after** support's confirmation lands and after the optional bulk forensic archive (if requested) is downloaded and verified.
+
+**Exit criterion:** support has confirmed PITR reachability for `2026-05-04T00:00:00Z` (or proposed an at-or-before alternative which the operator has accepted in writing); migration behavior on first publish is confirmed; optional forensic archive (if requested) is in hand. **Do not proceed to Step 1 until all of this is true.**
+
 ### Step 1 — Maintenance mode (15 min) — **OPERATOR**
 
 **Goal:** prevent reps and inbound integrations from writing to prod during the restore window.
@@ -150,19 +187,30 @@ Estimated window: **3–4 hours total.** Best run on a Sunday morning or other l
 
 **Decision point at end of step:** I report findings; **OPERATOR** confirms the restore-target timestamp from Section 1 (or revises it). If the audit shows the corruption window is wider than expected, we move to the conservative fallback (`2026-04-25T00:00:00Z`).
 
-### Step 3 — Restore production database (30–60 min) — **OPERATOR + Replit support**
+### Step 3 — Restore production database to `2026-05-04T00:00:00Z` (30–60 min) — **OPERATOR + Replit support**
 
-**Goal:** restore prod to the chosen timestamp.
+**Goal:** restore prod to **`2026-05-04T00:00:00Z`** (the locked target from the X-vs-Y audit), or to the closest at-or-before timestamp Replit support confirmed in Step 0.
 
 **Actions:**
 
-1. **OPERATOR** opens the Database pane → Production → Backups/PITR.
-2. Select the snapshot/timestamp confirmed in Step 2. **Stage the restore — do not execute yet.**
+1. **OPERATOR** opens the Database pane → Production → Backups/PITR (or coordinates with Replit support directly if PITR is support-driven on this plan).
+2. Select the snapshot/timestamp confirmed in Step 0:
+   - **Primary target:** `2026-05-04T00:00:00Z`
+   - **Acceptable alternative:** any timestamp at or before `2026-05-04T00:00:00Z` that Replit support confirmed is reachable. Never accept a target *after* `2026-05-04T00:00:00Z` — the audit-derived data-loss estimates do not cover that case.
+   - **Stage the restore — do not execute yet.**
 3. **AGENT** runs a final read-only sanity SELECT against the *staging* restored snapshot if Replit's UI exposes it as a separate connection (some plans allow restore-to-new-DB, then swap; others restore in place). If swap-only is available, skip to step 4.
 4. **OPERATOR** executes the restore. Wait for the database to come back online (typically 5–20 min).
-5. **AGENT** runs read-only verification: `SELECT count(*) FROM contacts; SELECT max(created_at) FROM touchpoints; SELECT count(*) FROM crm_opportunities;` — confirm row counts roughly match the snapshot's expected size and `max(created_at)` is on or before the chosen restore timestamp.
+5. **AGENT** runs read-only verification:
+   - `SELECT count(*) FROM contacts WHERE deleted_at IS NULL;`
+   - `SELECT max(date) FROM touchpoints;`
+   - `SELECT count(*), max(created_at) FROM crm_opportunities;`
+   - `SELECT count(*), max(created_at) FROM quote_opportunities;`
+   - `SELECT count(*), max(created_at) FROM email_messages;`
+   - `SELECT count(*), max(created_at) FROM tasks;`
+   - **Pass criteria:** every `max(created_at)` / `max(date)` returns a value ≤ `2026-05-04T00:00:00Z`. `quote_opportunities` count drops by ≈16,000 vs the pre-restore figure (the audit estimate). `email_messages` count drops by ≈66,000 vs pre-restore.
+   - **Pre-restore reference counts** for diff: see `.local/dev-db-backups/prod-after-restore-target/audit_results.md` (captured 2026-05-08).
 
-**Exit criterion:** prod DB is back online; row counts confirm restore landed at the intended timestamp; agent's read-only queries succeed.
+**Exit criterion:** prod DB is back online; the verification SELECTs above all pass; no row's `created_at` is after `2026-05-04T00:00:00Z` for any audited table.
 
 ### Step 4 — Restore workspace code (15 min) — **OPERATOR**
 
@@ -225,7 +273,42 @@ I re-run the same drift inventory queries from `docs/dev-prod-schema-drift-2026-
 4. **RFPs:** upload a small test RFP Excel; verify it parses; respond to one row and submit; verify the response is captured.
 5. **Customers list:** confirm at least one of the previously-misattributed accounts (Armstrong World Industries, MASONITE MEXICO) now displays under the correct rep.
 
-**Exit criterion:** all four flows pass UI smoke test; no errors in deployment logs from `fetchDeploymentLogs`.
+#### Post-restore acceptance checklist — email & quotes (NEW; addresses the 7f577c98 race-fix and the post-restore inbound flow)
+
+This is the single most important verification block in the entire runbook because it confirms (a) the QO race-condition fix is actually live in prod, (b) M365 resync is processing inbound correctly, and (c) high-value accounts are not silently broken.
+
+**(A) No duplicate-key errors on QO inserts in the first 30–60 minutes — AGENT**
+
+- **AGENT** runs `fetchDeploymentLogs(message: "duplicate key value violates unique constraint", message_context: { lines: 10, limit: 5 })` at T+15 min, T+30 min, and T+60 min after re-enabling `CONTACT_JOBS_ENABLED=true` (Step 8).
+- **Pass criterion:** zero matches at all three checkpoints. The `7f577c98` fix uses `ON CONFLICT DO NOTHING` (or equivalent) so the unique-constraint path should never raise.
+- **Fail criterion:** any match means `7f577c98` did NOT actually ship in this publish — re-publish required before declaring the window complete. Treat this as a blocker.
+- **Also check:** `fetchDeploymentLogs(message: "(?i)quote_opportunit.*conflict|quote_opportunit.*duplicate", message_context: { lines: 5, limit: 5 })` — secondary phrasing.
+
+**(B) Sample of emails → QO creation flows working as expected — AGENT (read-only) + OPERATOR (sample selection)**
+
+- **AGENT** waits 30 min after `CONTACT_JOBS_ENABLED=true` (Step 8) for the M365 resync to land a meaningful batch of post-restore inbound emails.
+- **AGENT** runs:
+  - `SELECT count(*) FROM email_messages WHERE created_at > '<step-8-restart-timestamp>';` — confirm > 0 (resync is working).
+  - `SELECT count(*) FROM quote_opportunities WHERE created_at > '<step-8-restart-timestamp>';` — confirm > 0.
+  - `SELECT em.provider_message_id, em.from_email, em.subject, em.created_at AS email_at, q.id AS qo_id, q.created_at AS qo_at FROM email_messages em LEFT JOIN quote_opportunities q ON q.organization_id = em.org_id AND q.source_reference = em.provider_message_id WHERE em.created_at > '<step-8-restart-timestamp>' AND em.subject ILIKE '%quote%' ORDER BY em.created_at DESC LIMIT 20;` — sample of recent quote-shaped inbound emails with their derived QO (or NULL if not yet processed / not classified as a quote).
+- **AGENT** checks: for each email row that *should* have produced a QO (subject/body indicates a quote request), is there exactly one matching QO row? Zero is acceptable if the classifier judged it not a quote; **two or more is a regression** of the race-condition fix.
+- **AGENT** runs the post-restore duplicate-detection check: `SELECT source_reference, count(*) c FROM quote_opportunities WHERE organization_id = 'da3ed822-8846-4435-bb13-3cc4bf26f71d' AND created_at > '<step-8-restart-timestamp>' GROUP BY 1 HAVING count(*) > 1;` — **expected result: zero rows.** Any rows here = the race fix is not live.
+- **Pass criterion:** at least 1 sample email→QO chain exists; the post-restart QO duplicate check returns zero rows.
+- **OPERATOR** picks one specific email from the sample, opens it in the prod app's mail/quote view, and confirms the linked QO renders correctly with the right account and right contact attribution.
+
+**(C) High-value accounts verified by hand — OPERATOR**
+
+- **OPERATOR** picks 3–5 high-value accounts (e.g., the largest revenue customers, or the accounts most affected by the prior visibility bug). For each:
+  - **(C.1) Emails visible:** open the account → Activity / Inbound tab → confirm recent inbound emails are listed (post-restore + post-Step-8 emails should appear; pre-restore emails up to `2026-05-04T00:00:00Z` should also appear).
+  - **(C.2) QOs present, exactly once:** open the account → Quotes / Opportunities tab → confirm each known recent quote appears as a single row (not duplicated). For at least one quote, confirm `source_reference` matches a real `provider_message_id` of a real inbound email (cross-check via `AGENT` SELECT if needed).
+  - **(C.3) Lifecycle fields correct:** confirm the account's owner, `is_email_derived` flag, and contact roster look correct — specifically:
+    - Owner is the rep the team expects (not `Unknown user`, not the wrong rep from the prior visibility bug).
+    - `is_email_derived` is `false` for established customer accounts; `true` only for accounts that were truly auto-created from inbound emails.
+    - Primary contact is set; soft-deleted contacts do not appear in the active list; restored contacts (if any from the export bundle) appear correctly.
+- **Pass criterion:** all 3–5 high-value accounts pass C.1, C.2, and C.3 with zero hand-corrections needed. If a single account fails any sub-check, hot-fix and re-verify before declaring the window complete.
+- **Fail criterion:** any high-value account shows duplicate QOs, missing emails, wrong owner, or incorrect lifecycle flags. This blocks declaring the window successful.
+
+**Exit criterion:** all four operator flows pass UI smoke test; **all three blocks (A), (B), (C) of the email & quotes acceptance checklist pass**; no errors in deployment logs from `fetchDeploymentLogs`.
 
 ### Step 8 — Re-enable inbound integrations & exit maintenance (15 min) — **OPERATOR**
 
@@ -273,6 +356,16 @@ Print this and tick off as you go.
 - [ ] `getDeploymentInfo()` reports `hasSuccessfulBuild: true`
 - [ ] No 5xx responses in the deploy logs during the smoke test
 - [ ] Migration log line `[boot] CONTACT_JOBS_ENABLED=true` present after re-enable
+
+**Email & quotes acceptance (AGENT + OPERATOR) — see Step 7 for details:**
+
+- [ ] (A) Zero `duplicate key value violates unique constraint` matches in deploy logs at T+15 / T+30 / T+60 min after `CONTACT_JOBS_ENABLED=true`
+- [ ] (A) Zero `quote_opportunit.*conflict|duplicate` matches in deploy logs over the same window
+- [ ] (B) Post-restart `email_messages` count > 0 (M365 resync confirmed flowing)
+- [ ] (B) Post-restart `quote_opportunities` count > 0 (inline classifier confirmed flowing)
+- [ ] (B) Post-restart `quote_opportunities` duplicate check (`GROUP BY source_reference HAVING count > 1`) returns zero rows
+- [ ] (B) At least one specific email→QO chain hand-verified end-to-end in the prod UI
+- [ ] (C) 3–5 high-value accounts each pass: emails visible (C.1), QOs present exactly once (C.2), lifecycle fields correct (C.3)
 
 ---
 
