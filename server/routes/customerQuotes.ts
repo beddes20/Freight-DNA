@@ -1,5 +1,5 @@
 import type { Express, Request } from "express";
-import { z } from "zod";
+import { z, type ZodIssue } from "zod";
 import { getCurrentUser, requireAuth, requireUser } from "../auth";
 import {
   getSnapshot, getQuoteDetail, getQuoteFreshness,
@@ -251,9 +251,100 @@ const listQuerySchema = queryFiltersSchema.extend({
   limit: z.preprocess(v => v === undefined ? 50 : Number(v), z.number().int().min(1).max(500)),
 });
 
+// Task #1148 — Telemetry for silently-dropped filter keys.
+//
+// `filtersSchema` is intentionally non-strict (see comment above) so that
+// list/snapshot requests carrying sort/paging keys don't 400 and silently
+// drop every filter. The symmetrical risk: a typo'd or stale filter key
+// from a future client build (e.g. `?lostOnly2=true`) is silently ignored
+// and the rep sees an unfiltered queue with no signal anywhere.
+//
+// `logDroppedFilterKeys` diffs the request's query keys against the union
+// of the declared `filtersSchema` keys and the well-known list-route
+// sort/paging keys, and emits a single `console.debug` line if and only
+// if there is at least one unknown key. No response shape change, no 400.
+//
+// Exported for the unit test in
+// tests/customer-quotes-dropped-filter-telemetry.test.ts.
+const KNOWN_FILTER_KEYS: ReadonlySet<string> = new Set(Object.keys(filtersSchema.shape));
+const KNOWN_LIST_ROUTE_KEYS: ReadonlySet<string> = new Set([
+  "sortKey", "sortDir", "offset", "limit", "mineOnly", "includeSnoozed",
+]);
+
+export function diffDroppedFilterKeys(query: Record<string, unknown>): string[] {
+  const dropped: string[] = [];
+  for (const key of Object.keys(query)) {
+    if (!KNOWN_FILTER_KEYS.has(key) && !KNOWN_LIST_ROUTE_KEYS.has(key)) {
+      dropped.push(key);
+    }
+  }
+  return dropped;
+}
+
+export function logDroppedFilterKeys(
+  route: string,
+  organizationId: string,
+  query: Record<string, unknown>,
+): void {
+  const dropped = diffDroppedFilterKeys(query);
+  if (dropped.length === 0) return;
+  console.debug(
+    `[customer-quotes] ${route} dropped unknown filter keys org=${organizationId} keys=${dropped.join(",")}`,
+  );
+}
+
+// Task #1148 (extension) — Telemetry for invalid filter VALUES.
+//
+// Symmetrical risk to `logDroppedFilterKeys`: when a request carries a
+// known filter key with a malformed value (e.g. `?startDate=garbage` or
+// `?limit=NaN`), `parseFilters`'s `safeParse` returns `success=false` and
+// the function returns `{}` — silently dropping EVERY filter, including
+// the valid ones. The rep sees an unfiltered queue with no warning.
+//
+// `summarizeFilterParseFailure` produces a short list of `path:code`
+// tokens (e.g. `startDate:invalid_string`) so the debug line is grep-able
+// without exposing user input. `logFilterParseFailure` emits at most one
+// `console.debug` line per call. Both are exported for the unit test in
+// tests/customer-quotes-dropped-filter-telemetry.test.ts.
+export function summarizeFilterParseFailure(issues: ZodIssue[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const issue of issues) {
+    const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+    const token = `${path}:${issue.code}`;
+    if (seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+  return out;
+}
+
+export function logFilterParseFailure(
+  route: string,
+  organizationId: string,
+  issues: ZodIssue[],
+): void {
+  const summary = summarizeFilterParseFailure(issues);
+  if (summary.length === 0) return;
+  console.debug(
+    `[customer-quotes] ${route} dropped all filters: parse failure org=${organizationId} issues=${summary.join(",")}`,
+  );
+}
+
 function parseFilters(req: Request): QuoteFilters {
   const parsed = queryFiltersSchema.safeParse(req.query);
-  if (!parsed.success) return {};
+  if (!parsed.success) {
+    // Task #1148 (extension) — emit one structured debug line per
+    // request when the entire filter set is silently dropped due to a
+    // malformed value. Route name is `parseFilters` because this helper
+    // is shared across snapshot/list/funnel/funnel-csv/etc. — the
+    // call-site routes already emit their own `logDroppedFilterKeys`
+    // line for unknown KEYS, so callers that want richer attribution
+    // can wrap parseFilters themselves.
+    const orgId = req.user?.organizationId ?? "unknown";
+    logFilterParseFailure("parseFilters", orgId, parsed.error.issues);
+    return {};
+  }
   const f: QuoteFilters = {};
   const d = parsed.data;
   if (d.customerId) f.customerId = d.customerId;
@@ -675,6 +766,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // rows can never re-seed an org via the dashboard. Demo seeding is
       // now strictly opt-in via the dev-only seed script.
       void ensureEmailBackfill(user.organizationId);
+      logDroppedFilterKeys("snapshot", user.organizationId, req.query as Record<string, unknown>);
       const { filters, meta: mineOnlyMeta } = await applyMineOnly(req, parseFilters(req));
       const snap = await getSnapshot(user.organizationId, filters);
       // Task #850 + #1007 — surface the requesting user's quote_reps.id
@@ -725,6 +817,7 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const parsed = listQuerySchema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
       const d = parsed.data;
+      logDroppedFilterKeys("list", user.organizationId, req.query as Record<string, unknown>);
       const filters = parseFilters(req);
       // Task #816 — coerce stale saved-view sort keys (carrierPaid /
       // marginDollar / marginPct, retired with the carrier columns) into
