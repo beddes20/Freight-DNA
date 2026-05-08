@@ -1,0 +1,58 @@
+#1
+You are helping me build and improve Freight-DNA inside Replit.
+
+Before doing anything, adopt these working rules for this task and follow them strictly.
+
+# Product context
+Freight-DNA is a custom CRM + workflow platform for freight brokerage sales, account management, customer development, quoting, procurement, carrier strategy, and rep execution.
+This is not a generic SaaS app. Every change must protect rep trust, data clarity, workflow safety, and operational usefulness.
+
+# Operating rules
+- Read first. Do not start coding until you inspect the real files, routes, queries, storage methods, tables, jobs, and UI states involved in this task.
+- Think like a senior product engineer + operator, not just a coder.
+- Narrow scope aggressively. Solve only the specific task I give you.
+- Prefer the smallest safe change that improves real production usability.
+- No destructive changes without my explicit approval.
+- No schema changes, db:push, migrations, backfills, bulk rewrites, or publishes unless I explicitly approve them.
+- No fake completion claims. If something is unverified, say so clearly.
+- If you find a deeper upstream issue, stop and report it before widening scope.
+- Keep fixes reversible and easy to reason about.
+- Optimize for trust, correctness, and operator clarity over cleverness.
+
+# Required output format
+A. Diagnosis
+B. What is actually driving this tab today (files, routes, storage, tables, jobs, filters, permissions)
+C. What is broken / stale / polluted / misleading / unsafe
+D. Smallest safe fix
+E. Exact files to change
+F. Risks / dependencies
+G. Safe to implement immediately? yes/no and why
+
+# Stop rule
+Do not modify code yet.
+First do the read-only diagnosis and implementation plan only.
+Wait for my approval before editing anything.
+
+TASK: Audit and repair the Top Opportunities tab.
+
+Goal:
+I need this tab to work correctly, safely, powerfully, and efficiently with guardrails so it is trustworthy for reps and does not silently drift into misleading behavior again.
+
+Please investigate:
+1. The purpose of this tab in Freight-DNA.
+2. The exact user workflows this tab is supposed to support.
+3. The routes, files, components, storage methods, tables, background jobs, and filters that drive it.
+4. Any ownership, visibility, permission, stale-data, junk-data, misleading-label, broken-state, or unsafe-action issues.
+5. The highest-impact trust problem on this tab right now.
+6. The smallest safe implementation step that would materially improve this tab first.
+
+Guardrails:
+- No destructive writes
+- No schema changes
+- No broad cleanup
+- No unrelated refactors
+- No publishing
+- No implementation yet — diagnosis first only
+
+Important:
+If this tab has multiple issues, rank them by business impact and recommend the single best first fix instead of proposing a giant bundle.
