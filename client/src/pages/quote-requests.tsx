@@ -14,7 +14,7 @@ import { EmailThreadViewerModal } from "@/components/conversations/email-thread-
 import { PricingRecommendationCard } from "@/components/PricingRecommendationCard";
 import { NewContactReviewStrip } from "@/components/customer-quotes/NewContactReviewStrip";
 import { AttributionDrawer } from "@/components/customer-quotes/AttributionDrawer";
-import { formatQuoteConfidence } from "@/lib/customerQuotes";
+import { formatQuoteConfidence, resolveMarkWonHandoff } from "@/lib/customerQuotes";
 import { QuoteFreshnessStrip } from "@/components/QuoteFreshnessStrip";
 import { NewQuoteDialog, type NewQuoteInitialValues } from "@/components/quote-requests/NewQuoteDialog";
 import { BulkMutationErrorDetails } from "@/components/customer-quotes/BulkMutationErrorDetails";
@@ -3270,11 +3270,16 @@ function DetailDrawer({
     },
     onSuccess: (resp: unknown) => {
       // Pilot trust fix — hero-aware Won toast. The PATCH route returns
-      // `_handoff: { state: "auto"|"pending_approval"|"none", opportunityId }`
-      // alongside the quote detail. Branch the toast so reps see exactly
-      // what happened to the won quote (auto-routed to AF vs. waiting on
-      // NAM/AM approval) instead of the generic "Quote updated".
-      const handoff = (resp as { _handoff?: { state?: string; opportunityId?: string | null } } | null)?._handoff;
+      // `handoff: { state: "auto"|"pending_approval"|"none", opportunityId }`
+      // alongside the quote detail (Task #1153 renamed from `_handoff`;
+      // server still ships `_handoff` as a one-release compatibility
+      // alias). `resolveMarkWonHandoff` reads `handoff` first and falls
+      // back to `_handoff` so an old server + new client and new server
+      // + old client both keep the toast branching. Branch the toast so
+      // reps see exactly what happened to the won quote (auto-routed to
+      // AF vs. waiting on NAM/AM approval) instead of the generic
+      // "Quote updated".
+      const handoff = resolveMarkWonHandoff(resp);
       if (handoff?.state === "auto") {
         const oppId = handoff.opportunityId ?? "";
         toast({

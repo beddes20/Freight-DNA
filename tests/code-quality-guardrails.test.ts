@@ -7790,3 +7790,96 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     `Task #1140: expected trustedView to be wired into the main list queryKey, all 5 count queryKeys, buildParams, persistence effect, and reset effect — found only ${queryKeyTrustedHits} references`,
   );
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1153 — Won-quote `_handoff` → `handoff` toast contract (Task #1153)
+//
+// `PATCH /api/customer-quotes/quote/:id` returns the full quote detail with
+// a routing-decision side-channel. The field was renamed from `_handoff` to
+// `handoff`; `_handoff` is kept as a one-release compatibility alias so an
+// old server + new client AND a new server + old client both keep branching
+// the markWon toast (auto / pending_approval / none).
+//
+// Pinned here so a future response normalizer that strips underscore-
+// prefixed fields can't silently degrade the Won toast to "Quote updated"
+// and rob reps of the AF-handoff signal.
+//
+// Out of scope (do NOT regress here):
+//   - server/services/customerQuotes.ts (CQ stability contract — Section 1100)
+//   - the server-side handoff decision logic (createFreightOpportunityFromWonQuote)
+//   - CQ-1..CQ-6 frozen surfaces
+// Future additions land as Section 1153.x sub-sections instead of mutating
+// this one.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1153: Won-quote handoff toast contract ──────────────────\n");
+
+  const CQ_ROUTE = readFile("server/routes/customerQuotes.ts");
+  const QR_PAGE  = readFile("client/src/pages/quote-requests.tsx");
+  const CQ_LIB   = readFile("client/src/lib/customerQuotes.ts");
+
+  // ── Server: PATCH response carries BOTH `handoff` and `_handoff` ─────────
+  // The PATCH /api/customer-quotes/quote/:id handler ships the routing
+  // metadata back to the client via `res.json({ ...detail, handoff,
+  // _handoff: handoff })`. The literal `...detail, handoff` and
+  // `_handoff: handoff` substrings appear ONLY in this handler today —
+  // there is exactly one PATCH route for the quote detail — so file-
+  // level assertions are safe and avoid the brittle nested-brace slicing
+  // problem that ate Section 1140's first cut.
+  assert(
+    "Section 1153 — PATCH response includes canonical top-level `handoff` field on the detail spread",
+    /res\.json\(\s*\{\s*\.\.\.\s*detail\s*,\s*handoff\s*,/.test(CQ_ROUTE),
+    'PATCH /api/customer-quotes/quote/:id must return a top-level `handoff` field on the success response (`res.json({ ...detail, handoff, _handoff: handoff })`). The client uses it to branch the markWon toast (auto / pending_approval / none).',
+  );
+  assert(
+    "Section 1153 — PATCH response keeps `_handoff: handoff` as compatibility alias",
+    /_handoff\s*:\s*handoff\b/.test(CQ_ROUTE),
+    'PATCH /api/customer-quotes/quote/:id must keep `_handoff: handoff` alongside the canonical `handoff` for one release so an old client paired with a new server still gets the Won toast branching. Removing the alias before old clients are upgraded silently degrades the toast to "Quote updated".',
+  );
+
+  // ── Client lib: resolveMarkWonHandoff exists and prefers `handoff` ──────
+  assert(
+    "Section 1153 — client/src/lib/customerQuotes.ts exports resolveMarkWonHandoff",
+    /export\s+function\s+resolveMarkWonHandoff\b/.test(CQ_LIB),
+    "client/src/lib/customerQuotes.ts must export `resolveMarkWonHandoff` — the pure helper the markWon toast uses to pick the auto / pending_approval / none branch.",
+  );
+  assert(
+    "Section 1153 — resolveMarkWonHandoff prefers canonical `handoff` over `_handoff` alias",
+    /r\.handoff\s*\?\?\s*r\._handoff/.test(CQ_LIB),
+    "resolveMarkWonHandoff must read the canonical `handoff` field FIRST and fall back to `_handoff` only when missing. Reversing the precedence breaks new-server-old-client AND new-server-new-client (alias drift).",
+  );
+
+  // ── Client page: markWon toast reads through the helper ──────────────────
+  assert(
+    "Section 1153 — quote-requests.tsx imports resolveMarkWonHandoff",
+    /import\s*\{[^}]*\bresolveMarkWonHandoff\b[^}]*\}\s*from\s*["']@\/lib\/customerQuotes["']/.test(QR_PAGE),
+    "client/src/pages/quote-requests.tsx must import resolveMarkWonHandoff from @/lib/customerQuotes so the markWon toast branches consistently with the runtime test in tests/customer-quotes-handoff-toast-contract.test.ts.",
+  );
+  assert(
+    "Section 1153 — markOutcomeMut.onSuccess uses resolveMarkWonHandoff(resp)",
+    /const\s+handoff\s*=\s*resolveMarkWonHandoff\(\s*resp\s*\)/.test(QR_PAGE),
+    "markOutcomeMut.onSuccess in quote-requests.tsx must derive the handoff via resolveMarkWonHandoff(resp). Hand-rolling the `resp.handoff ?? resp._handoff` read here lets the canonical/alias precedence drift without anyone noticing.",
+  );
+  assert(
+    "Section 1153 — markOutcomeMut.onSuccess branches on state===\"auto\"",
+    /handoff\?\.\s*state\s*===\s*["']auto["']/.test(QR_PAGE),
+    'The auto branch ("Quote won — auto-routed to Available Freight") must remain wired in markOutcomeMut.onSuccess.',
+  );
+  assert(
+    "Section 1153 — markOutcomeMut.onSuccess branches on state===\"pending_approval\"",
+    /handoff\?\.\s*state\s*===\s*["']pending_approval["']/.test(QR_PAGE),
+    'The pending_approval branch ("Quote won — waiting on NAM/AM approval") must remain wired in markOutcomeMut.onSuccess.',
+  );
+  assert(
+    "Section 1153 — markOutcomeMut.onSuccess falls through to generic \"Quote updated\" toast",
+    /title:\s*["']Quote updated["']/.test(QR_PAGE),
+    'The generic "Quote updated" fallback toast (none branch / unknown payload) must remain in markOutcomeMut.onSuccess so non-Won edits still surface a confirmation.',
+  );
+
+  // ── Runtime test exists and is wired to the same helper ─────────────────
+  assert(
+    "Section 1153 — runtime test tests/customer-quotes-handoff-toast-contract.test.ts exists",
+    fs.existsSync(path.join(ROOT, "tests", "customer-quotes-handoff-toast-contract.test.ts")),
+    "tests/customer-quotes-handoff-toast-contract.test.ts must exist and pin the three toast branches (auto / pending_approval / none) plus the `_handoff` alias fallback. Deleting it removes the runtime fence Task #1153 added.",
+  );
+})();

@@ -970,12 +970,19 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // recomputes; the membership tracker inside the service will then
       // publish `customer_quote_followup` if the set actually changed.
       clearStaleFollowUpCache(user.organizationId);
-      // Pilot trust fix — hero-aware Won toast. The client uses `_handoff`
-      // to branch the markWon toast: `auto` → "auto-routed to AF" with a
+      // Pilot trust fix — hero-aware Won toast. The client uses `handoff`
+      // (with `_handoff` kept as a one-release compatibility alias) to
+      // branch the markWon toast: `auto` → "auto-routed to AF" with a
       // View-in-AF action, `pending_approval` → "waiting on NAM/AM
       // approval", `none` → generic "Quote updated". Read-only reflection
       // of the routing decision updateQuote already made.
-      res.json({ ...detail, _handoff: handoff });
+      // Task #1153 — `handoff` is the canonical field; `_handoff` is the
+      // compatibility alias kept for one release so an old client paired
+      // with a new server still gets the toast branching. New readers
+      // (server or client) MUST prefer `handoff` and fall back to
+      // `_handoff`. Removing either half here is enforced by Section 1153
+      // of tests/code-quality-guardrails.test.ts.
+      res.json({ ...detail, handoff, _handoff: handoff });
     } catch (err) {
       const msg = getErrorMessage(err);
       console.error("[customer-quotes] update error:", err);
