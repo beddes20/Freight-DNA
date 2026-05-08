@@ -1,0 +1,68 @@
+Act as a release gatekeeper doing a final READ-ONLY production verification for Freight-DNA before I click Republish on HEAD 74736c92.
+
+Important rules:
+- READ-ONLY only. You may not change code, schema, feature flags, app settings, env vars, or data.
+- No workflows or tests need to be rerun for this task; focus only on verifying production state.
+
+Goal:
+Resolve the 3 UNKNOWN items from the Phase 1 Platform Safety Sweep and give a final GO / NO-GO recommendation based on real production values.
+
+Production checks to perform (read-only):
+
+1) lane_carrier_outreach_v1 flag for the dev/test org
+- Determine the org (or tenant) used by lane-system-e2e and dev testing.
+- Check in production whether the equivalent of `lane_carrier_outreach_v1` is:
+  - present,
+  - its current value, and
+  - whether that value matches what lane-system-e2e assumes.
+- Do NOT change it; just report value and safety assessment.
+
+2) oneOnOne.listEndpointsCreateSessions setting
+- In the production settings store, look up the application setting:
+  - key: "oneOnOne.listEndpointsCreateSessions"
+- Report:
+  - whether it exists,
+  - its value if present,
+  - and what the effective behavior is (auto-create sessions or read-only mode).
+- Do NOT modify; just describe whether the current state is safe for this deploy.
+
+3) tasks.description column in production
+- In the production database, check the schema for the tasks table and verify:
+  - whether a column named "description" exists,
+  - its type, and
+  - whether that matches what the code expects.
+- Do NOT alter the table; just confirm presence and compatibility.
+
+Return format (strict):
+
+1. lane_carrier_outreach_v1 (dev/test org)
+- value in prod:
+- expected by tests:
+- safety: SAFE / RISK
+- reason (1–2 sentences):
+
+2. oneOnOne.listEndpointsCreateSessions
+- exists in prod: yes/no
+- value (if any):
+- effective behavior:
+- safety: SAFE / RISK
+- reason (1–2 sentences):
+
+3. tasks.description column
+- exists in prod: yes/no
+- type (if exists):
+- matches code expectation: yes/no
+- safety: SAFE / RISK
+- reason (1–2 sentences):
+
+4. Final publish recommendation
+Give exactly one of:
+- FINAL CALL: PUBLISH NOW
+- FINAL CALL: DO NOT PUBLISH
+
+Then include 3–5 short bullets explaining why, based only on:
+- these three production checks, and
+- the previously-known fact that all critical workflows and tests are green on this HEAD.
+
+Do NOT make any changes.
+Verification and recommendation only.

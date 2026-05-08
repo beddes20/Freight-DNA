@@ -1,0 +1,96 @@
+Act as a release gatekeeper doing a final “100% confidence” check for Freight-DNA on HEAD 74736c92 before I click Republish.
+
+Important: You are NOT allowed to change code, migrations, env vars, app-settings, or database data in this task. Read-only verification only.
+
+Context (current status):
+- contacts soft-delete columns: present in Production Database (deleted_at, deleted_by, delete_reason).
+- quote_opportunities.source: boot-time migration guarantees DEFAULT 'email' in all environments.
+- test:freight-capture-funnel: PASS (all tests).
+- test:lane-system-e2e: PASS (15/15, SSE cross-tab #1130 stable in ~40s).
+- typecheck: PASS.
+- guardrails: PASS.
+- storage-integration: PASS.
+- shared-inbox: PASS.
+
+Goal:
+Give me a final GO / NO-GO decision for publishing this commit, based on a short, focused checklist.
+
+Tasks (read-only):
+
+1. Verify latest workflow statuses
+- Confirm the *most recent* runs of:
+  - test:freight-capture-funnel
+  - test:lane-system-e2e
+  - typecheck
+  - guardrails
+  - storage-integration
+  - shared-inbox
+  all finished green on this exact HEAD.
+- If any are not green, do NOT re-run them, just report which and why.
+
+2. Verify database safety for critical tables (read-only)
+Using only SELECT queries or existing inspection tools, confirm:
+- contacts has: deleted_at, deleted_by, delete_reason (Production Database).
+- quote_opportunities.source is:
+  - NOT NULL
+  - has DEFAULT 'email'
+- tasks table schema matches what the code expects for createTask (including description column).
+Report any discrepancies and whether they are likely to cause runtime 500s after deploy.
+
+3. Verify feature flags / settings for critical flows (read-only)
+Confirm that:
+- lane_carrier_outreach_v1 (or equivalent) is enabled for the dev/test org used in lane-system-e2e.
+- oneOnOne.listEndpointsCreateSessions is either unset or true (preserving current behavior).
+- CONTACT_JOBS_ENABLED env var is unset or not literally "false" in the deploy environment.
+Just report the effective values; do not change them.
+
+4. Sanity-check recent code changes
+Scan the diff from the last deployed prod commit to HEAD 74736c92 and verify:
+- No unexpected changes to:
+  - email plumbing (graph/webhook, capture-first/DROP-GATE, routing_status, classifier thresholds, LLM prompts, backfill scripts, quote_pipeline_drops semantics).
+  - authentication / multi-tenant org scoping.
+- All changes to tests are scoped to freight/lane stability and do not silently weaken assertions.
+If anything looks risky or out-of-scope for this release, call it out explicitly.
+
+5. Final manual-check suggestion
+Based on the diff and tests, list 3–5 **specific** manual flows I should click through in the UI after deploy (e.g., “Assign a lane from LWQ and confirm it appears in a second tab”, “Create a new contact and ensure it doesn’t 500”, etc.).
+
+Return format (strict):
+
+1. Workflow status
+- freight-capture-funnel: PASS / FAIL (latest run) + short reason
+- lane-system-e2e: PASS / FAIL + short reason
+- typecheck: PASS / FAIL
+- guardrails: PASS / FAIL
+- storage-integration: PASS / FAIL
+- shared-inbox: PASS / FAIL
+
+2. Schema safety
+For each table:
+- contacts: SAFE / RISK
+- quote_opportunities: SAFE / RISK
+- tasks: SAFE / RISK
+Include 1–2 sentence explanation for each.
+
+3. Flags & settings
+For each:
+- lane_carrier_outreach_v1 (dev/test org): value + SAFE / RISK
+- oneOnOne.listEndpointsCreateSessions: value + SAFE / RISK
+- CONTACT_JOBS_ENABLED: value + SAFE / RISK
+
+4. Unexpected risk items
+List any unexpected risky changes or discrepancies discovered. If none, say “None found.”
+
+5. Manual test checklist
+Provide a short bulleted list (3–5 bullets) of the **highest-value manual flows** to sanity-check immediately after publish.
+
+6. Final decision
+Give exactly one of:
+- FINAL CALL: PUBLISH NOW
+- FINAL CALL: DO NOT PUBLISH
+
+And in 3–5 bullets, justify that final call in plain language.
+
+Do NOT run or schedule any new tests.
+Do NOT modify anything.
+Verification and recommendation only.
