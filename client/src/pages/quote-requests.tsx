@@ -17,6 +17,12 @@ import { AttributionDrawer } from "@/components/customer-quotes/AttributionDrawe
 import { formatQuoteConfidence } from "@/lib/customerQuotes";
 import { QuoteFreshnessStrip } from "@/components/QuoteFreshnessStrip";
 import { NewQuoteDialog, type NewQuoteInitialValues } from "@/components/quote-requests/NewQuoteDialog";
+import { BulkMutationErrorDetails } from "@/components/customer-quotes/BulkMutationErrorDetails";
+import {
+  parseBulkMutationError,
+  formatBulkMutationErrorTitle,
+  type BulkMutationErrorInfo,
+} from "@/lib/bulkMutationError";
 import { SavedViewsDropdown, type QuoteViewFilters } from "@/components/quote-requests/SavedViewsDropdown";
 import { SpotQuoteSearchPanel } from "@/components/quote-requests/SpotQuoteSearchPanel";
 import { QuoteDetailsCard } from "@/components/quote-requests/QuoteDetailsCard";
@@ -992,6 +998,98 @@ function QuoteRequestsInner(): JSX.Element {
     },
   });
 
+  // Bulk-action selection + shared partial-failure plumbing for the two
+  // CQ bulk routes (bulk-status, bulk-reassign-customer).
+  const [selectedQuoteIds, setSelectedQuoteIds] = useState<Set<string>>(() => new Set());
+  const [bulkError, setBulkError] = useState<
+    { info: BulkMutationErrorInfo; totalAttempted: number } | null
+  >(null);
+  const clearSelection = useCallback(() => {
+    setSelectedQuoteIds(prev => (prev.size === 0 ? prev : new Set()));
+  }, []);
+  const toggleQuoteSelection = useCallback((id: string) => {
+    setSelectedQuoteIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const handleBulkError = useCallback((err: Error, totalAttempted: number, operationLabel?: string) => {
+    const info = parseBulkMutationError(err);
+    const title = formatBulkMutationErrorTitle(info, totalAttempted, operationLabel);
+    toast({
+      title,
+      description: info.affectedCount > 0
+        ? "Open the bulk-failure details to see the affected ids."
+        : info.message,
+      variant: "destructive",
+    });
+    setBulkError({ info, totalAttempted });
+  }, [toast]);
+
+  const bulkStatusMutation = useMutation<
+    { updated?: number },
+    Error,
+    { quoteIds: string[]; status: "ignored" | "pending" }
+  >({
+    mutationFn: async (vars) => {
+      const res = await apiRequest(
+        "POST",
+        "/api/customer-quotes/quotes/bulk-status",
+        { quoteIds: vars.quoteIds, status: vars.status },
+      );
+      return res.json();
+    },
+    onSuccess: (data, vars) => {
+      const updated = typeof data?.updated === "number" ? data.updated : vars.quoteIds.length;
+      toast({
+        title: "Bulk update applied",
+        description: `${updated} quote${updated === 1 ? "" : "s"} marked ${vars.status}.`,
+      });
+      clearSelection();
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/action-queue"] });
+    },
+    onError: (err, vars) => handleBulkError(err, vars.quoteIds.length, "status update"),
+  });
+
+  const [reassignDialogOpen, setReassignDialogOpen] = useState(false);
+  const [reassignTargetCustomerId, setReassignTargetCustomerId] = useState<string>("");
+  const bulkReassignMutation = useMutation<
+    { updated?: number },
+    Error,
+    { quoteIds: string[]; targetCustomerId: string }
+  >({
+    mutationFn: async (vars) => {
+      const res = await apiRequest(
+        "POST",
+        "/api/customer-quotes/quotes/bulk-reassign-customer",
+        { quoteIds: vars.quoteIds, targetCustomerId: vars.targetCustomerId },
+      );
+      return res.json();
+    },
+    onSuccess: (data, vars) => {
+      const updated = typeof data?.updated === "number" ? data.updated : vars.quoteIds.length;
+      toast({
+        title: "Bulk reassign applied",
+        description: `${updated} quote${updated === 1 ? "" : "s"} moved to the selected customer.`,
+      });
+      setReassignDialogOpen(false);
+      setReassignTargetCustomerId("");
+      clearSelection();
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/list"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/snapshot"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/customer-quotes/action-queue"] });
+    },
+    onError: (err, vars) => {
+      setReassignDialogOpen(false);
+      handleBulkError(err, vars.quoteIds.length, "reassign");
+    },
+  });
+
   const automationQuery = useQuery<AutomationCounters>({
     queryKey: ["/api/quote-requests/automation-counters", "today"],
     queryFn: async () => {
@@ -1879,6 +1977,21 @@ function QuoteRequestsInner(): JSX.Element {
               }
               pendingLast7d={snapshotQuery.data?.kpis?.pendingLast7d ?? 0}
               onShowLast7Days={() => { setAge("7d"); setOffset(0); }}
+              selectedQuoteIds={selectedQuoteIds}
+              onToggleQuoteSelection={toggleQuoteSelection}
+              onSelectAllVisible={(ids) => setSelectedQuoteIds(new Set(ids))}
+              onClearSelection={clearSelection}
+              onBulkMarkIgnored={(ids) =>
+                bulkStatusMutation.mutate({ quoteIds: ids, status: "ignored" })
+              }
+              onBulkMarkPending={(ids) =>
+                bulkStatusMutation.mutate({ quoteIds: ids, status: "pending" })
+              }
+              onBulkReassignCustomer={() => {
+                setReassignTargetCustomerId("");
+                setReassignDialogOpen(true);
+              }}
+              isBulkMutationPending={bulkStatusMutation.isPending || bulkReassignMutation.isPending}
             />
             )}
           </div>
@@ -1917,6 +2030,89 @@ function QuoteRequestsInner(): JSX.Element {
           open={!!attributionQuoteId}
           onOpenChange={(open) => { if (!open) setAttributionQuoteId(null); }}
         />
+
+        <Dialog
+          open={reassignDialogOpen}
+          onOpenChange={(o) => {
+            if (!o && !bulkReassignMutation.isPending) {
+              setReassignDialogOpen(false);
+              setReassignTargetCustomerId("");
+            }
+          }}
+        >
+          <DialogContent className="max-w-md" data-testid="dialog-bulk-reassign">
+            <DialogHeader>
+              <DialogTitle>Reassign {selectedQuoteIds.size} quote{selectedQuoteIds.size === 1 ? "" : "s"} to a customer</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3 text-sm">
+              <Select
+                value={reassignTargetCustomerId}
+                onValueChange={setReassignTargetCustomerId}
+              >
+                <SelectTrigger data-testid="select-bulk-reassign-target">
+                  <SelectValue placeholder="Choose a customer…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(snapshotQuery.data?.customers ?? [])
+                    .filter(c => !!c.id && !!c.name)
+                    .slice(0, 200)
+                    .map(c => (
+                      <SelectItem key={c.id} value={c.id} data-testid={`select-bulk-reassign-option-${c.id}`}>
+                        {c.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+              <div className="flex justify-end gap-2">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={bulkReassignMutation.isPending}
+                  onClick={() => {
+                    setReassignDialogOpen(false);
+                    setReassignTargetCustomerId("");
+                  }}
+                  data-testid="button-bulk-reassign-cancel"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={!reassignTargetCustomerId || bulkReassignMutation.isPending || selectedQuoteIds.size === 0}
+                  onClick={() => bulkReassignMutation.mutate({
+                    quoteIds: Array.from(selectedQuoteIds),
+                    targetCustomerId: reassignTargetCustomerId,
+                  })}
+                  data-testid="button-bulk-reassign-confirm"
+                >
+                  Reassign
+                </Button>
+              </div>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={!!bulkError}
+          onOpenChange={(o) => { if (!o) setBulkError(null); }}
+        >
+          <DialogContent className="max-w-md" data-testid="dialog-bulk-error">
+            <DialogHeader>
+              <DialogTitle data-testid="text-bulk-error-title">
+                {bulkError
+                  ? formatBulkMutationErrorTitle(bulkError.info, bulkError.totalAttempted)
+                  : ""}
+              </DialogTitle>
+            </DialogHeader>
+            {bulkError ? (
+              <BulkMutationErrorDetails
+                info={bulkError.info}
+                totalAttempted={bulkError.totalAttempted}
+                repMappingHref="/admin/users"
+              />
+            ) : null}
+          </DialogContent>
+        </Dialog>
       </div>
     </TooltipProvider>
   );
@@ -2347,6 +2543,8 @@ function ListTable({
   onRefresh,
   emptyStateFilters, onResetFilters,
   age, openCount, autoCapturedToday, pendingLast7d, onShowLast7Days,
+  selectedQuoteIds, onToggleQuoteSelection, onSelectAllVisible, onClearSelection,
+  onBulkMarkIgnored, onBulkMarkPending, onBulkReassignCustomer, isBulkMutationPending,
 }: {
   rows: Quote[];
   isLoading: boolean;
@@ -2365,6 +2563,14 @@ function ListTable({
   isElevated: boolean;
   myRepId: string | null;
   onRefresh: () => void;
+  selectedQuoteIds: Set<string>;
+  onToggleQuoteSelection: (id: string) => void;
+  onSelectAllVisible: (ids: string[]) => void;
+  onClearSelection: () => void;
+  onBulkMarkIgnored: (ids: string[]) => void;
+  onBulkMarkPending: (ids: string[]) => void;
+  onBulkReassignCustomer: (ids: string[]) => void;
+  isBulkMutationPending: boolean;
   // Task #967 — filter signal flowed down so ZeroState can render the
   // shared EmptyStateRecovery (filtered-empty pane) when appropriate.
   emptyStateFilters?: ReadonlyArray<string>;
@@ -2424,12 +2630,81 @@ function ListTable({
     );
   }
 
+  const visibleIds = rows.map(r => r.id);
+  const selectedVisibleCount = visibleIds.filter(id => selectedQuoteIds.has(id)).length;
+  const allVisibleSelected = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+  const bulkBusy = isBulkMutationPending;
+  const selectedIdsArray = Array.from(selectedQuoteIds);
+
   return (
     <div className="flex flex-col h-full">
+      {selectedQuoteIds.size > 0 && (
+        <div
+          className="flex items-center justify-between gap-3 border-b border-border bg-amber-500/10 px-4 py-2"
+          data-testid="bulk-action-bar"
+        >
+          <div className="text-xs text-foreground" data-testid="text-bulk-selection-count">
+            {selectedQuoteIds.size} selected
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={bulkBusy}
+              onClick={() => onBulkMarkPending(selectedIdsArray)}
+              data-testid="button-bulk-mark-pending"
+            >
+              Mark pending
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={bulkBusy}
+              onClick={() => onBulkMarkIgnored(selectedIdsArray)}
+              data-testid="button-bulk-mark-ignored"
+            >
+              Mark ignored
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={bulkBusy}
+              onClick={() => onBulkReassignCustomer(selectedIdsArray)}
+              data-testid="button-bulk-reassign-customer"
+            >
+              Reassign customer…
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={bulkBusy}
+              onClick={onClearSelection}
+              data-testid="button-bulk-clear-selection"
+            >
+              Clear
+            </Button>
+          </div>
+        </div>
+      )}
       <div ref={containerRef} className="flex-1 overflow-auto">
         <table className="w-full text-left text-[13px] border-collapse">
           <thead className="sticky top-0 z-10 bg-card border-b border-border shadow-sm">
             <tr className="text-muted-foreground uppercase tracking-wider text-[10px] font-semibold">
+              <th className="w-8 py-2 px-3">
+                <input
+                  type="checkbox"
+                  aria-label="Select all visible quotes"
+                  data-testid="checkbox-bulk-select-all"
+                  checked={allVisibleSelected}
+                  ref={el => {
+                    if (el) el.indeterminate = !allVisibleSelected && selectedVisibleCount > 0;
+                  }}
+                  onChange={(e) => {
+                    if (e.target.checked) onSelectAllVisible(visibleIds);
+                    else onClearSelection();
+                  }}
+                />
+              </th>
               <th className="w-6 py-2 px-3"></th>
               <SortableHeader label="Customer" k="customerName" sortKey={sortKey as SortKey} sortDir={sortDir} onSort={onSort} />
               <SortableHeader label="Lane" k="originCity" sortKey={sortKey as SortKey} sortDir={sortDir} onSort={onSort} />
@@ -2452,6 +2727,8 @@ function ListTable({
                 q={q}
                 selected={selectedId === q.id}
                 focused={focusedId === q.id && selectedId !== q.id}
+                isChecked={selectedQuoteIds.has(q.id)}
+                onToggleCheck={() => onToggleQuoteSelection(q.id)}
                 onClick={() => { onSelect(q.id); onOpen(q.id); }}
                 myRepId={myRepId}
               />
@@ -2520,13 +2797,15 @@ function SortableHeader({
 // ─── ListRow ──────────────────────────────────────────────────────────────
 
 function ListRow({
-  q, selected, focused, onClick, myRepId,
+  q, selected, focused, onClick, myRepId, isChecked, onToggleCheck,
 }: {
   q: Quote;
   selected: boolean;
   focused: boolean;
   onClick: () => void;
   myRepId: string | null;
+  isChecked: boolean;
+  onToggleCheck: () => void;
 }): JSX.Element {
   const snoozed = inferIsSnoozed(q);
   const sla = computeQuoteSla(q.requestDate, q.outcomeStatus);
@@ -2549,6 +2828,15 @@ function ListRow({
       }`}
       data-testid={`row-quote-${q.id}`}
     >
+      <td className="px-3 text-center" onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          aria-label="Select quote"
+          data-testid={`checkbox-bulk-select-${q.id}`}
+          checked={isChecked}
+          onChange={onToggleCheck}
+        />
+      </td>
       <td className="px-3 text-center">
         <div className={`w-1.5 h-1.5 rounded-full mx-auto ${
           selected ? "bg-amber-500" :
