@@ -4,6 +4,7 @@ import { storage, db } from "../storage";
 import { requireAuth, getCurrentUser, getVisibleCompanyIds, canAccessCompany } from "../auth";
 import { pStr, qStr } from "../lib/req";
 import { isAdmin } from "../lib/roles";
+import { getCanonicalCompanyOwnerId } from "../lib/companyOwner";
 import { fanOutCelebration } from "../lib/fanOutCelebration";
 import {
   insertCompanySchema,
@@ -45,7 +46,27 @@ export function registerCompanyRoutes(app: Express): void {
       if (!includeArchived) {
         allCompanies = allCompanies.filter(c => !c.archivedAt);
       }
-      res.json(allCompanies);
+      // Customers-tab ownership unification: attach `ownerUserId` (the
+      // canonical owner per `getCanonicalCompanyOwnerId`) and `ownerName`
+      // (resolved against the org's full users list — the no-arg
+      // `getUsers(orgId)` overload includes soft-deleted users so
+      // historical owners still resolve, mirroring the pattern used by
+      // `/api/team-members`). The client used to re-derive both itself
+      // and the name lookup was scoped to the viewer's reporting tree,
+      // which mislabeled cross-team owners as "Unassigned". Computing
+      // server-side once collapses display + filter + visibility into
+      // one rule. Pure read; nothing persisted.
+      const orgUsers = await storage.getUsers(currentUser.organizationId);
+      const userNameById = new Map(orgUsers.map(u => [u.id, u.name]));
+      const enriched = allCompanies.map(c => {
+        const ownerUserId = getCanonicalCompanyOwnerId(c);
+        return {
+          ...c,
+          ownerUserId,
+          ownerName: ownerUserId ? (userNameById.get(ownerUserId) ?? null) : null,
+        };
+      });
+      res.json(enriched);
     } catch (error) {
       console.error("Error fetching companies:", error);
       res.status(500).json({ error: "Failed to fetch companies" });
@@ -344,6 +365,20 @@ export function registerCompanyRoutes(app: Express): void {
       }
       const existing = await storage.getCompanyInOrg(pStr(req.params.id), currentUser.organizationId);
       if (!existing) return res.status(404).json({ error: "Company not found" });
+      // Customers-tab ownership unification — warn-only phase. The
+      // canonical-owner coalesce is `ownerRepId ?? assignedTo
+      // ?? salesPersonId`, so writing only `assignedTo` here is silently
+      // a no-op for visibility / display whenever `ownerRepId` is set.
+      // Reps assume reassignment moved the account; visibility doesn't
+      // budge. Logging now so we can see how often this fires before
+      // flipping to a 409 + "use PATCH /owner" response in a follow-up.
+      if (existing.ownerRepId && existing.ownerRepId !== assignedTo) {
+        console.warn(
+          `[reassign] ignored — ownerRepId set ` +
+          `(companyId=${existing.id} ownerRepId=${existing.ownerRepId} ` +
+          `attemptedAssignedTo=${assignedTo} byUser=${currentUser.id})`,
+        );
+      }
       const company = await storage.updateCompany(pStr(req.params.id), currentUser.organizationId, {
         assignedTo: assignedTo as string,
       });

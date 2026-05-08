@@ -6,6 +6,7 @@ import connectPgSimple from "connect-pg-simple";
 import bcrypt from "bcrypt";
 import { storage } from "./storage";
 import type { User, Company, SharedRep } from "@shared/schema";
+import { getCanonicalCompanyOwnerId } from "./lib/companyOwner";
 import { notifyAdminsOfUnprovisionedSignIn } from "./unprovisionedSignInNotifications";
 
 const PgStore = connectPgSimple(session);
@@ -442,16 +443,12 @@ export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] 
   };
 
   // Canonical Customers-tab ownership rule (read-side coalesce, no writes):
-  // ownerRepId ?? assignedTo ?? salesPersonId. Mirrors the same coalesce
-  // applied in client/src/pages/customers.tsx (owner-label display + rep
-  // filter predicates). Collapses the prior three-way split-brain where the
-  // `sales` / `sales_director` branches read salesPersonId exclusively (a
-  // nearly-empty column in prod), the director / NAM branch read assignedTo,
-  // and the client display read ownerRepId — locking sales-role reps out of
-  // accounts they actually own. Behavior is monotone non-decreasing per
+  // ownerRepId ?? assignedTo ?? salesPersonId. Single source of truth lives
+  // in `server/lib/companyOwner.ts` and is also consumed by the
+  // GET /api/companies payload (which attaches `ownerUserId` so the client
+  // never re-derives the rule). Behavior is monotone non-decreasing per
   // user: anyone who saw an account before still sees it.
-  const ownerOf = (c: Company): string | null =>
-    c.ownerRepId ?? c.assignedTo ?? (c as any).salesPersonId ?? null;
+  const ownerOf = (c: Company): string | null => getCanonicalCompanyOwnerId(c);
 
   if (user.role === "director" || user.role === "national_account_manager") {
     const teamIds = await storage.getTeamMemberIds(user.id, user.organizationId);

@@ -31,6 +31,7 @@ import {
   Mail,
   MessageSquare,
   MapPin,
+  Info,
 } from "lucide-react";
 import { PinButton } from "@/components/pin-button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -62,15 +63,18 @@ type AccountSummaryRow = {
 
 type TouchpointSummary = Record<string, { week: number; month: number; lastType: string | null; lastDate: string | null; daysSince: number | null }>;
 
-function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummaryRow | null {
-  if (!rows.length) return null;
+function matchFinancialsRows(name: string, rows: AccountSummaryRow[]): AccountSummaryRow[] {
+  if (!rows.length) return [];
   const lower = name.toLowerCase();
-
-  const matches = rows.filter(r => {
+  return rows.filter(r => {
     const rName = r.customerName.toLowerCase();
     return rName === lower ||
       (name.length >= 5 && (rName.includes(lower) || lower.includes(rName)));
   });
+}
+
+function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummaryRow | null {
+  const matches = matchFinancialsRows(name, rows);
 
   if (!matches.length) return null;
   if (matches.length === 1) return matches[0];
@@ -100,6 +104,46 @@ function matchFinancials(name: string, rows: AccountSummaryRow[]): AccountSummar
     }
   }
   return agg;
+}
+
+// Task #1144 — sibling helper that exposes how many distinct freight-fact
+// customer rows the fuzzy matcher rolled up for this company. The card uses
+// this to surface a "may be incomplete" pill when count > 1. Mirrors the
+// alias→name fallback order in getCompanyFinancials but does NOT change the
+// aggregation math itself (the row returned by getCompanyFinancials is
+// unchanged).
+function getCompanyFinancialsMatchMeta(
+  company: Company,
+  accountSummary: AccountSummaryRow[],
+): { matchedRowCount: number; distinctNames: string[] } {
+  const aliases = (company as any).financialAlias
+    ? (company as any).financialAlias.split(',').map((a: string) => a.trim()).filter(Boolean)
+    : [];
+
+  const seenRows = new Set<AccountSummaryRow>();
+  const seenNames = new Set<string>();
+  const distinctNames: string[] = [];
+  let matchedRowCount = 0;
+  const collect = (rows: AccountSummaryRow[]) => {
+    for (const r of rows) {
+      if (seenRows.has(r)) continue;
+      seenRows.add(r);
+      matchedRowCount += 1;
+      const key = r.customerName.toLowerCase();
+      if (!seenNames.has(key)) {
+        seenNames.add(key);
+        distinctNames.push(r.customerName);
+      }
+    }
+  };
+
+  if (aliases.length) {
+    for (const alias of aliases) collect(matchFinancialsRows(alias, accountSummary));
+    if (matchedRowCount > 0) return { matchedRowCount, distinctNames };
+  }
+
+  collect(matchFinancialsRows(company.name, accountSummary));
+  return { matchedRowCount, distinctNames };
 }
 
 function getCompanyFinancials(company: Company, accountSummary: AccountSummaryRow[]): AccountSummaryRow | null {
@@ -418,21 +462,29 @@ export default function Customers() {
         if (!company.name.toLowerCase().includes(q) && !company.industry?.toLowerCase().includes(q)) return false;
       }
       const sharedRepIds = ((company.sharedReps || []) as SharedRep[]).map(r => r.userId);
-      // Canonical Customers-tab ownership rule (read-side coalesce, no writes):
-      // ownerRepId ?? assignedTo ?? salesPersonId. Mirrors the same coalesce
-      // applied in the owner-label display below and in server/auth.ts
-      // getVisibleCompanyIds. Collapses the prior three-way split-brain
-      // between display, this filter, and the server visibility gate.
+      // Customers-tab ownership unification: the server attaches the
+      // canonical `ownerUserId` to every row via
+      // `getCanonicalCompanyOwnerId` (server/lib/companyOwner.ts), so the
+      // client never re-derives the rule. We retain the local coalesce
+      // as a fallback for older cached payloads that predate the server
+      // enrichment. The previous admin/director "default hide" branch
+      // (drop rows whose owner wasn't in the viewer's `/api/team-members`
+      // set) was suppressing real records the server had already
+      // returned — removed.
       //
-      // NOTE: when repFilter === "all" we do NOT post-filter by viewer-scoped
-      // team membership. The server's getVisibleCompanyIds is the single
-      // source of truth for "what is this user allowed to see"; any further
-      // client-side drop here would silently hide accounts the server
-      // intentionally returned (e.g. shared-rep / collaborator accounts whose
-      // canonical owner sits outside the viewer's reporting tree, or
-      // admin-owned rows for an admin viewer). "All" must mean "everything
-      // the server returned".
-      const canonicalOwnerId = company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null;
+      // NOTE: when repFilter === "all" we do NOT post-filter by viewer-
+      // scoped team membership. The server's getVisibleCompanyIds is the
+      // single source of truth for "what is this user allowed to see";
+      // any further client-side drop here would silently hide accounts
+      // the server intentionally returned (e.g. shared-rep / collaborator
+      // accounts whose canonical owner sits outside the viewer's
+      // reporting tree, or admin-owned rows for an admin viewer). "All"
+      // must mean "everything the server returned".
+      const canonicalOwnerId = (company as any).ownerUserId
+        ?? company.ownerRepId
+        ?? company.assignedTo
+        ?? (company as any).salesPersonId
+        ?? null;
       if (repFilter !== "all" && canonicalOwnerId !== repFilter && !sharedRepIds.includes(repFilter)) return false;
       if (industryFilter !== "all" && company.industry !== industryFilter) return false;
       if (touchFilter !== "all") {
@@ -722,6 +774,7 @@ export default function Customers() {
             const openTasks = openTasksByCompany.get(company.id) || 0;
             const pendingSuggestions = suggestionCountMap.get(company.id) ?? 0;
             const fin = getCompanyFinancials(company, accountSummary);
+            const finMatchMeta = getCompanyFinancialsMatchMeta(company, accountSummary);
             const tps = tpSummary[company.id] || { week: 0, month: 0, lastType: null, lastDate: null, daysSince: null };
             return (
               <Link key={company.id} href={`/companies/${company.id}`}>
@@ -761,12 +814,33 @@ export default function Customers() {
                             );
                           })()}
                           {(() => {
-                            const ownerId = company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null;
+                            // Prefer server-attached `ownerUserId` /
+                            // `ownerName` (resolved against the org's
+                            // full users list, including soft-deleted
+                            // historical owners). Fall back to the
+                            // client-side coalesce + roster lookup for
+                            // older cached payloads. Pass the resolved
+                            // name as `activeOwnerName` so OwnerLabel
+                            // can skip its `useUserAttribution` fetch
+                            // when the server already gave us a name —
+                            // it still kicks in to render lifecycle
+                            // hints when the owner is soft-deleted /
+                            // deactivated and the active roster lookup
+                            // returned nothing.
+                            const ownerId = (company as any).ownerUserId
+                              ?? company.ownerRepId
+                              ?? company.assignedTo
+                              ?? (company as any).salesPersonId
+                              ?? null;
+                            const serverOwnerName = (company as any).ownerName as string | null | undefined;
+                            const activeOwnerName = ownerId
+                              ? (accountOwnerMap.get(ownerId) ?? serverOwnerName ?? null)
+                              : null;
                             return (
                               <OwnerLabel
                                 companyId={company.id}
                                 ownerId={ownerId}
-                                activeOwnerName={ownerId ? accountOwnerMap.get(ownerId) ?? null : null}
+                                activeOwnerName={activeOwnerName}
                               />
                             );
                           })()}
@@ -942,6 +1016,26 @@ export default function Customers() {
                                       <span className="text-muted-foreground">margin%</span>
                                     </div>
                                   )}
+                                  {finMatchMeta.matchedRowCount > 1 && (() => {
+                                    const shown = finMatchMeta.distinctNames.slice(0, 5);
+                                    const extra = finMatchMeta.distinctNames.length - shown.length;
+                                    const tip =
+                                      `Aggregated from ${finMatchMeta.matchedRowCount} matched freight rows ` +
+                                      `across ${finMatchMeta.distinctNames.length} customer name${finMatchMeta.distinctNames.length === 1 ? "" : "s"}:\n` +
+                                      shown.map(n => `• ${n}`).join("\n") +
+                                      (extra > 0 ? `\n+${extra} more` : "");
+                                    return (
+                                      <span
+                                        className="inline-flex items-center gap-1 rounded-full border border-amber-200 dark:border-amber-800/40 bg-amber-50/60 dark:bg-amber-950/20 px-2 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-300"
+                                        title={tip}
+                                        data-testid={`pill-financial-match-incomplete-${company.id}`}
+                                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                                      >
+                                        <Info className="h-3 w-3" />
+                                        may be incomplete
+                                      </span>
+                                    );
+                                  })()}
                                 </>
                               );
                             })()}
