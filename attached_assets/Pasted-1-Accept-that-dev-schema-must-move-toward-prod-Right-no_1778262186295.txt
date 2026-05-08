@@ -1,0 +1,62 @@
+1. Accept that dev schema must move toward prod
+Right now:
+
+Prod has the correct tasks.opportunity_id FK to crm_opportunities(id).
+
+Dev is missing that FK (and possibly even crm_opportunities).
+
+Replit’s publish pipeline compares dev DB → prod DB and is trying to make prod look like dev, which would drop that FK.
+
+To stop the pipeline from wanting to drop it, dev has to be brought up to prod’s schema shape for this part of the model (and probably some other tables). There is no purely repo-only fix.
+
+2. Do a read-only confirmation first (30‑second safety check)
+Before any writes, ask Replit to run the constraint query they proposed, just to have it on record:
+
+Compare the foreign-key constraints on tasks in dev vs prod and show me both.
+
+You can paste:
+
+text
+Run this read-only SQL against dev and prod and show me both results:
+
+SELECT conname, pg_get_constraintdef(oid)
+FROM pg_constraint
+WHERE conrelid = 'tasks'::regclass
+  AND contype = 'f';
+
+Do not change anything, just paste dev vs prod output.
+This should come back exactly as they expect (none in dev; canonical FK in prod). It’s a sanity check before we touch dev.
+
+3. Allow schema work on the dev database only
+Tell Replit plainly that you now authorize schema changes on dev to bring it up to prod shape:
+
+text
+I now authorize schema work on the DEVELOPMENT database only in order to unblock publish.
+
+Guardrails:
+
+- You may NOT change production directly.
+- You may run `drizzle-kit push` / `npm run db:push` or equivalent ONLY against the dev database.
+- Goal: bring dev’s schema for `tasks`, `crm_opportunities`, and related FKs up to match prod, so the publish-time dev→prod diff stops trying to DROP the FK.
+- After dev matches prod for this FK (and any obviously related tables), we will attempt publish again.
+Let them propose the exact dev‑side migration or db:push steps; that’s what drizzle-kit is for.
+
+4. After dev is aligned, retry publish with eyes open
+Once dev schema has been updated and they confirm:
+
+tasks and crm_opportunities exist in dev with the same FK as prod,
+
+no destructive changes were made,
+
+then:
+
+Try Publish again.
+
+In the publish diff UI, still refuse anything that smells like a drop column or drop table on critical tables (companies, tasks, crm_opportunities, contacts) unless they can prove it’s a no-op.
+
+If the FK blocker is gone and only additive changes remain (new columns like is_email_derived), allow it and get the Customers fix out.
+
+5. Plan to clean up dev properly later
+This dev‑schema alignment is a “step backward to go forward” move. Once you’re unblocked and prod is working for your reps:
+
+Schedule a separate, non-emergency task to cleanly re‑establish your migration story (Drizzle migrations, snapshots, etc.) so you don’t hit this again.
