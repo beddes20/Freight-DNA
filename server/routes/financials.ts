@@ -361,6 +361,33 @@ export function registerFinancialRoutes(app: Express): void {
     }
   });
 
+  // Task #1140 — read-only freshness pill source for the Top Opportunities
+  // RFP view. Returns the latest financial upload timestamp + uploader name
+  // for the current org. No new SQL: reuses the existing latest-upload helper
+  // and the org users lookup already used elsewhere in this file.
+  app.get("/api/opportunities/source-freshness", requireUser, async (req, res) => {
+    try {
+      const orgId = req.session.organizationId!;
+      const latest = await storage.getLatestFinancialUploadForOrg(orgId);
+      if (!latest) {
+        return res.json({ uploadedAt: null, uploaderName: null });
+      }
+      const orgUsers = await storage.getUsers(orgId);
+      const uploader = orgUsers.find(u => u.id === latest.uploadedBy);
+      const rawUploadedAt: unknown = latest.uploadedAt;
+      const uploadedAt = rawUploadedAt
+        ? (rawUploadedAt instanceof Date ? rawUploadedAt.toISOString() : new Date(rawUploadedAt as string).toISOString())
+        : null;
+      res.json({
+        uploadedAt,
+        uploaderName: uploader?.name ?? null,
+      });
+    } catch (err) {
+      console.error("Error fetching opportunities source freshness:", err);
+      res.status(500).json({ error: "Failed to fetch source freshness" });
+    }
+  });
+
   app.get("/api/opportunities/dismissals", requireUser, async (req, res) => {
     try {
       const user = req.user!;

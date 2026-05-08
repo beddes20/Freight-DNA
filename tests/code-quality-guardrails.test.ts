@@ -7146,3 +7146,156 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "legacy bare-key invalidation would only refresh the Active tab — must use invalidateAllUsersQueries() instead",
   );
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1140 — Top Opportunities trust contract (Task #1140)
+//
+// The Top Opportunities page (default tab = RFP / Mini-Bid Matches) gained
+// two trust-shaped pieces in Task #1140: a freight-data freshness pill on
+// the RFP view, and a manager-only "Removed from list" attribution row.
+// Both are easy to silently regress during future refactors — copy can be
+// softened, the three-state freshness rule (Task #1109a) can be collapsed
+// back to "error → stale" (amber) instead of "error → unavailable" (grey),
+// the dismiss role list can drift, or the source-freshness endpoint can
+// lose its requireUser gate and leak the org's last-upload timestamp.
+//
+// This section pins the contracts that already ship today. New trust
+// surfaces on this page (matcher-quality filters, cross-rep scoping)
+// should add Section 1140.x sub-sections rather than mutate this one.
+//
+// Out of scope (do NOT regress here):
+//   - server/services/customerQuotes.ts (CQ stability contract — Section 1100)
+//   - freight_daily_upload_fact writers (Section 1051)
+//   - email ingestion (PERSIST-UNKNOWN / TOMBSTONE-DROP)
+//   - contact-jobs gate (Section 1094) and user lifecycle filter (Section 1126)
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1140: Top Opportunities trust contract ──────────────────\n");
+
+  const TOP_SRC = readFile("client/src/pages/top-opportunities.tsx");
+  const FIN_SRC = readFile("server/routes/financials.ts");
+
+  // ── Freshness pill — presence and three-state rule (mirrors Task #1109a) ──
+  assert(
+    "Section 1140 — top-opportunities.tsx mounts data-testid=\"pill-freight-data-freshness\"",
+    /data-testid=["']pill-freight-data-freshness["']/.test(TOP_SRC),
+    'The RFP view must render a freshness pill with data-testid="pill-freight-data-freshness". Removing it strips the only signal reps have that the underlying upload is months old.',
+  );
+  assert(
+    "Section 1140 — freshness pill is gated behind viewMode === \"rfp\"",
+    /viewMode\s*===\s*["']rfp["'][\s\S]{0,1200}?data-testid=["']pill-freight-data-freshness["']/.test(TOP_SRC),
+    'The freshness pill must only render on the RFP / Mini-Bid Matches view — Field-Created and Archived tabs are not tied to the financial-uploads timestamp and showing the pill there would mislead reps.',
+  );
+  for (const state of ["loading", "unavailable", "empty", "fresh", "stale"]) {
+    assert(
+      `Section 1140 — freshness pill emits data-freshness-state="${state}"`,
+      new RegExp(`data-freshness-state=["']${state}["']`).test(TOP_SRC) ||
+        new RegExp(`data-freshness-state=\\{[^}]*["']${state}["'][^}]*\\}`).test(TOP_SRC),
+      `The freshness pill must distinguish all five states (loading | unavailable | empty | fresh | stale) via data-freshness-state. Missing "${state}" collapses a real state into another and breaks the Task #1109a three-state rule.`,
+    );
+  }
+  // Forbid the error → stale collapse: the isFreshnessError branch MUST set
+  // data-freshness-state="unavailable", never "stale". This is the exact
+  // anti-pattern Task #1109a closed on the Company Profile.
+  const errorBranch = /if\s*\(\s*isFreshnessError\s*\)[\s\S]{0,600}?data-freshness-state=["']([a-z]+)["']/.exec(TOP_SRC);
+  assert(
+    "Section 1140 — isFreshnessError branch maps to data-freshness-state=\"unavailable\" (never \"stale\")",
+    !!errorBranch && errorBranch[1] === "unavailable",
+    'A fetch error on /api/opportunities/source-freshness MUST render the neutral "unavailable" state, not the amber "stale" state. Collapsing the error back into stale is the exact Task #1109a anti-pattern (misled pilot reps into thinking real upstream age was the issue).',
+  );
+  assert(
+    "Section 1140 — freshness pill reads from useQuery([\"/api/opportunities/source-freshness\"])",
+    /queryKey:\s*\[["']\/api\/opportunities\/source-freshness["']\]/.test(TOP_SRC),
+    "The freshness pill must read from /api/opportunities/source-freshness — that endpoint is the org-scoped wrapper around getLatestFinancialUploadForOrg and is the only source that respects org isolation.",
+  );
+
+  // ── Dismiss copy — org-wide scope must be spelled out (Task #1140) ────────
+  // Two surfaces carry the org-wide-scope copy: the trash-button title
+  // attribute on the per-row hide control, and the AlertDialog body that
+  // confirms the action. Both must mention org-wide scope and manager-only
+  // restore — this is what stops reps from thinking they're hiding for
+  // themselves only (the failure mode Task #1140 was created to fix).
+  const trashTitleMatch = /title=["']([^"']*Hide[^"']*)["']/.exec(TOP_SRC);
+  assert(
+    "Section 1140 — trash-button title spells out org-wide scope and manager-only restore",
+    !!trashTitleMatch &&
+      /\borg\b/i.test(trashTitleMatch[1]) &&
+      /manager/i.test(trashTitleMatch[1]),
+    'The per-row hide button title attribute must contain both "org" and "manager" so the rep understands the scope (whole org) and the recovery path (manager-only). Reverting to "Remove from list" silently regresses Task #1140.',
+  );
+  const dialogBlockMatch = /<AlertDialogTitle>([\s\S]*?)<\/AlertDialogTitle>\s*<AlertDialogDescription>([\s\S]*?)<\/AlertDialogDescription>/.exec(TOP_SRC);
+  assert(
+    "Section 1140 — AlertDialog title contains \"whole org\" phrase",
+    !!dialogBlockMatch && /whole org/i.test(dialogBlockMatch[1] ?? ""),
+    'The dismiss confirmation AlertDialogTitle must contain "whole org" so reps cannot misread the action as a personal hide. Task #1140 was triggered by exactly this confusion.',
+  );
+  assert(
+    "Section 1140 — AlertDialog body mentions every-rep scope and manager-only restore",
+    !!dialogBlockMatch &&
+      /every rep/i.test(dialogBlockMatch[2] ?? "") &&
+      /manager/i.test(dialogBlockMatch[2] ?? ""),
+    'The dismiss confirmation AlertDialogDescription must spell out both the cross-rep scope ("every rep") and the manager-only restore path. Softening either half re-opens the trust gap.',
+  );
+
+  // ── Dismiss attribution row — never collapses to anonymous (Task #1140) ───
+  assert(
+    "Section 1140 — Removed-from-list rows render data-testid=\"text-dismissed-attribution-<id>\"",
+    /data-testid=\{`text-dismissed-attribution-\$\{[^}]+\}`\}/.test(TOP_SRC),
+    'Each row in the manager-only "Removed from list" section must carry data-testid="text-dismissed-attribution-<companyId>" so the attribution string is observable to e2e tests and incident triage.',
+  );
+  assert(
+    "Section 1140 — dismisser fallback is the literal string \"Unknown user\"",
+    /["']Unknown user["']/.test(TOP_SRC),
+    'When the dismisser id does not resolve in the cleaned /api/users roster (Task #1126 soft-deletes), the attribution must fall back to the literal "Unknown user" — never an empty string and never the bare id (would look self-dismissed). This must STAY explicit until formatUserAttribution adoption lands.',
+  );
+
+  // ── Server-side: source-freshness endpoint is org-scoped and read-only ────
+  // Slice the source-freshness route handler and assert against its body
+  // only — same pattern as Section 1500c / 1502.
+  const freshnessRouteMatch = /app\.get\(\s*["']\/api\/opportunities\/source-freshness["']\s*,\s*requireUser\s*,\s*async[\s\S]*?^\s*\}\s*\)\s*;/m.exec(FIN_SRC);
+  assert(
+    "Section 1140 — GET /api/opportunities/source-freshness is registered with requireUser",
+    !!freshnessRouteMatch,
+    'GET /api/opportunities/source-freshness must be registered as `app.get("/api/opportunities/source-freshness", requireUser, async (req, res) => …)`. Losing requireUser would leak the org\'s last upload timestamp and uploader name across orgs.',
+  );
+  if (freshnessRouteMatch) {
+    const body = freshnessRouteMatch[0];
+    assert(
+      "Section 1140 — source-freshness handler derives orgId from req.session.organizationId",
+      /req\.session\.organizationId/.test(body),
+      'The source-freshness handler must scope its lookup to req.session.organizationId — no other org-scoping path is acceptable here.',
+    );
+    assert(
+      "Section 1140 — source-freshness handler reads via getLatestFinancialUploadForOrg (no new SQL)",
+      /getLatestFinancialUploadForOrg/.test(body),
+      'The handler must continue to use storage.getLatestFinancialUploadForOrg — introducing raw SQL here risks bypassing the org-scoping contract on financial_uploads.',
+    );
+    // Pure read endpoint — no writes inside the handler body.
+    assert(
+      "Section 1140 — source-freshness handler performs no writes (no INSERT/UPDATE/DELETE/db.insert/db.update/db.delete)",
+      !/\b(INSERT|UPDATE|DELETE)\b/i.test(body) &&
+        !/\bdb\.(insert|update|delete)\b/.test(body),
+      'GET /api/opportunities/source-freshness must remain a pure SELECT. Any write here would silently violate the read-only contract reps depend on.',
+    );
+  }
+
+  // ── Manager-only dismiss endpoints — role list must not drift ─────────────
+  // The same role list `["admin", "director", "national_account_manager",
+  // "sales_director"]` appears in three handlers. Widening it (to include
+  // "sales", a new lifecycle role like "is_quarantined", etc.) would let
+  // reps hide rows from each other; narrowing it would lock managers out.
+  // Either is a silent regression we want loud.
+  const ROLE_GATE_RE = /\["admin",\s*"director",\s*"national_account_manager",\s*"sales_director"\]\.includes\(\s*user\.role\s*\)/g;
+  const gateCount = (FIN_SRC.match(ROLE_GATE_RE) ?? []).length;
+  assert(
+    "Section 1140 — manager-only dismiss role list appears in exactly 3 handlers (GET dismissals + POST/DELETE dismiss/:companyId)",
+    gateCount === 3,
+    `Expected the literal role list ["admin","director","national_account_manager","sales_director"] to gate exactly 3 handlers in server/routes/financials.ts (GET /api/opportunities/dismissals, POST /api/opportunities/dismiss/:companyId, DELETE /api/opportunities/dismiss/:companyId). Found ${gateCount}. Drift here either widens dismiss power to non-managers or locks managers out — both are silent trust regressions.`,
+  );
+  // Client mirrors the same role list for the canManage gate.
+  assert(
+    "Section 1140 — top-opportunities.tsx canManage uses the same 4-role list",
+    /\["admin",\s*"director",\s*"national_account_manager",\s*"sales_director"\]\.includes\(\s*user\?\.role\s*\|\|\s*""\s*\)/.test(TOP_SRC),
+    'The client-side canManage check must mirror the server role list verbatim. Drift here makes the trash UI appear for users whose dismiss attempts will 403 (or vice-versa).',
+  );
+})();

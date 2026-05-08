@@ -82,7 +82,29 @@ type TaskPrefill = {
   notes: string;
 };
 
-type Dismissal = { company_id: string; company_name: string; dismissed_at: string };
+type Dismissal = { company_id: string; company_name: string; dismissed_at: string; dismissed_by: string | null };
+
+type SourceFreshness = { uploadedAt: string | null; uploaderName: string | null };
+
+type SimpleUser = { id: string; name: string };
+
+function formatFreshnessDate(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  } catch {
+    return iso;
+  }
+}
+
+function formatDismissedAt(iso: string): string {
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return iso;
+  }
+}
+
+const FRESHNESS_STALE_MS = 14 * 24 * 60 * 60 * 1000;
 
 type FieldCreatedOpportunity = {
   id: number;
@@ -160,6 +182,31 @@ export default function TopOpportunities() {
   const { data: dismissals = [] } = useQuery<Dismissal[]>({
     queryKey: ["/api/opportunities/dismissals"],
     enabled: canManage,
+  });
+
+  // Task #1140 — uploader-name lookup for the manager-only dismissals row.
+  // Reuses the bare ["/api/users"] queryKey already used elsewhere in the
+  // client (see User Management lifecycle gotcha — bare key is correct here).
+  const { data: allUsers = [] } = useQuery<SimpleUser[]>({
+    queryKey: ["/api/users"],
+    enabled: canManage,
+  });
+  const userNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    allUsers.forEach(u => { if (u?.id) map.set(u.id, u.name); });
+    return map;
+  }, [allUsers]);
+
+  // Task #1140 — freight-data freshness pill (RFP view only).
+  // `enabled` mirrors the JSX gate so the request never fires on the
+  // Field-Created / Archived tabs (those views don't render the pill).
+  const {
+    data: sourceFreshness,
+    isLoading: isFreshnessLoading,
+    isError: isFreshnessError,
+  } = useQuery<SourceFreshness>({
+    queryKey: ["/api/opportunities/source-freshness"],
+    enabled: viewMode === "rfp",
   });
 
   const { data: fieldOpportunities = [], isLoading: isFieldLoading } = useQuery<FieldCreatedOpportunity[]>({
@@ -314,9 +361,70 @@ export default function TopOpportunities() {
   return (
     <div className="p-4 sm:p-6 space-y-6">
       <div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Zap className="h-6 w-6 text-primary" />
           <h1 className="text-2xl font-bold tracking-tight">Top Opportunities</h1>
+          {viewMode === "rfp" && (() => {
+            // Task #1140 — three-state freshness pill (mirrors Task #1109a):
+            // loading skeleton, neutral "unavailable" on fetch error, neutral
+            // "empty" when there's no upload yet, neutral "fresh" otherwise,
+            // amber "stale" past 14 days. Only rendered on the RFP view since
+            // the other views don't depend on the financial upload.
+            if (isFreshnessLoading) {
+              return (
+                <Skeleton
+                  className="h-6 w-44 rounded-full"
+                  data-testid="pill-freight-data-freshness"
+                  data-freshness-state="loading"
+                />
+              );
+            }
+            if (isFreshnessError) {
+              return (
+                <Badge
+                  variant="outline"
+                  className="text-xs font-normal text-muted-foreground bg-muted/40"
+                  data-testid="pill-freight-data-freshness"
+                  data-freshness-state="unavailable"
+                >
+                  Freshness unavailable
+                </Badge>
+              );
+            }
+            if (!sourceFreshness?.uploadedAt) {
+              return (
+                <Badge
+                  variant="outline"
+                  className="text-xs font-normal text-muted-foreground bg-muted/40"
+                  data-testid="pill-freight-data-freshness"
+                  data-freshness-state="empty"
+                >
+                  No freight upload yet
+                </Badge>
+              );
+            }
+            const ts = new Date(sourceFreshness.uploadedAt).getTime();
+            const isStaleUpload = Number.isFinite(ts) && (Date.now() - ts > FRESHNESS_STALE_MS);
+            const dateLabel = formatFreshnessDate(sourceFreshness.uploadedAt);
+            const uploader = sourceFreshness.uploaderName?.trim() || "Unknown";
+            return (
+              <Badge
+                variant="outline"
+                className={`text-xs font-normal ${
+                  isStaleUpload
+                    ? "text-amber-700 dark:text-amber-400 border-amber-500/40 bg-amber-500/10"
+                    : "text-muted-foreground bg-muted/40"
+                }`}
+                data-testid="pill-freight-data-freshness"
+                data-freshness-state={isStaleUpload ? "stale" : "fresh"}
+                title={isStaleUpload
+                  ? `Freight data is more than 14 days old — uploaded ${dateLabel} by ${uploader}`
+                  : `Freight data uploaded ${dateLabel} by ${uploader}`}
+              >
+                Freight data as of {dateLabel} — {uploader}
+              </Badge>
+            );
+          })()}
         </div>
         <p className="text-muted-foreground text-sm mt-1">
           {viewMode === "rfp"
@@ -456,7 +564,7 @@ export default function TopOpportunities() {
                             className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
                             onClick={(e) => { e.stopPropagation(); setConfirmDismiss({ companyId: group.companyId, companyName: group.companyName }); }}
                             data-testid={`btn-dismiss-opportunity-${group.companyId}`}
-                            title="Remove from list"
+                            title="Hide this account from the Top Opportunities list for everyone in the org. Only managers can restore it."
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
@@ -565,9 +673,19 @@ export default function TopOpportunities() {
                 Removed from list ({dismissals.length})
               </div>
               <div className="space-y-1">
-                {dismissals.map(d => (
+                {dismissals.map(d => {
+                  const dismisserName = d.dismissed_by ? (userNameById.get(d.dismissed_by) ?? "Unknown user") : "Unknown user";
+                  const whenLabel = d.dismissed_at ? formatDismissedAt(d.dismissed_at) : null;
+                  return (
                   <div key={d.company_id} className="flex items-center justify-between gap-2 text-sm py-1 border-b last:border-0" data-testid={`row-dismissed-${d.company_id}`}>
-                    <span className="text-muted-foreground">{d.company_name ? formatCustomerName(d.company_name) : d.company_id}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-muted-foreground truncate">
+                        {d.company_name ? formatCustomerName(d.company_name) : d.company_id}
+                      </div>
+                      <div className="text-xs text-muted-foreground/70 mt-0.5" data-testid={`text-dismissed-attribution-${d.company_id}`}>
+                        Hidden by {dismisserName}{whenLabel ? ` on ${whenLabel}` : ""}
+                      </div>
+                    </div>
                     <Button
                       size="sm"
                       variant="ghost"
@@ -580,7 +698,8 @@ export default function TopOpportunities() {
                       Restore
                     </Button>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1108,9 +1227,9 @@ export default function TopOpportunities() {
       <AlertDialog open={!!confirmDismiss} onOpenChange={v => { if (!v) setConfirmDismiss(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove from Top Opportunities?</AlertDialogTitle>
+            <AlertDialogTitle>Hide from Top Opportunities for the whole org?</AlertDialogTitle>
             <AlertDialogDescription>
-              <strong>{confirmDismiss?.companyName ? formatCustomerName(confirmDismiss.companyName) : ""}</strong> will be hidden from this list. You can restore it at the bottom of the page.
+              <strong>{confirmDismiss?.companyName ? formatCustomerName(confirmDismiss.companyName) : ""}</strong> will be hidden from the RFP / Mini-Bid Matches list <strong>for every rep in the org</strong>, not just you. Only managers can restore it from the &ldquo;Removed from list&rdquo; section at the bottom of this page.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
