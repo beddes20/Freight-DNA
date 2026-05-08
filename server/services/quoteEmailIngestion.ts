@@ -1923,8 +1923,11 @@ export function getEmailBackfillStatus(orgId: string): EmailBackfillStatus | nul
  * `ingestQuoteFromEmail` deduplicates on (org, source=email, sourceReference),
  * so re-walking already-ingested messages is cheap and safe.
  *
- * Runs as a background task (fire-and-forget) so it never blocks request
- * latency. Progress is recorded in `_emailBackfillStatus` for observability.
+ * Awaits the inner backfill internally so failures can be re-thrown to the
+ * caller — request handlers invoke this without `await` and attach `.catch`,
+ * so it stays effectively fire-and-forget from the response's perspective
+ * while still surfacing errors via a tagged warn log. Progress is recorded
+ * in `_emailBackfillStatus` for observability.
  */
 export interface FreeMailBackfillSummary {
   scanned: number;
@@ -2037,9 +2040,63 @@ export async function backfillFreeMailCustomerNames(
   return summary;
 }
 
+// Task #1146 — per-org throttle on the request-path auto-backfill.
+// `_emailBackfillAttempted` is a once-per-process success marker (cleared
+// only on failure). The throttle below sits *in front of* it so a failing
+// org does not get re-armed on every snapshot/list poll: after a failure
+// the success marker is cleared, but the next request only retries once
+// the throttle window has elapsed. Window default 30s; tunable via the
+// `QUOTE_EMAIL_BACKFILL_THROTTLE_MS` env var (no new secret required).
+const _emailBackfillLastAttemptAt = new Map<string, number>();
+
+const DEFAULT_EMAIL_BACKFILL_THROTTLE_MS = 30_000;
+
+function getEmailBackfillThrottleMs(): number {
+  const raw = process.env.QUOTE_EMAIL_BACKFILL_THROTTLE_MS;
+  if (raw == null || raw === "") return DEFAULT_EMAIL_BACKFILL_THROTTLE_MS;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_EMAIL_BACKFILL_THROTTLE_MS;
+  return n;
+}
+
+/**
+ * Throttle helper for {@link ensureEmailBackfill}. First call for an org
+ * records `now` and returns false (proceed). Subsequent calls inside the
+ * window return true (short-circuit). After the window has elapsed the
+ * timestamp is refreshed and the call proceeds again.
+ *
+ * Exported for unit testing only — production code goes through
+ * `ensureEmailBackfill`. Not consulted by the explicit
+ * `backfillQuotesFromEmails` admin route, so the manual /
+ * scheduled-style backfill cadence is unaffected.
+ */
+export function shouldThrottleEmailBackfill(
+  orgId: string,
+  now: number = Date.now(),
+  windowMs: number = getEmailBackfillThrottleMs(),
+): boolean {
+  const last = _emailBackfillLastAttemptAt.get(orgId);
+  if (last !== undefined && now - last < windowMs) return true;
+  _emailBackfillLastAttemptAt.set(orgId, now);
+  return false;
+}
+
+/** Test-only — clears the per-process backfill state. */
+export function _resetEmailBackfillStateForTests(): void {
+  _emailBackfillLastAttemptAt.clear();
+  _emailBackfillAttempted.clear();
+  _emailBackfillStatus.clear();
+}
+
 export async function ensureEmailBackfill(orgId: string): Promise<void> {
   if (!orgId) return;
   if (_emailBackfillAttempted.has(orgId)) return;
+
+  if (shouldThrottleEmailBackfill(orgId)) {
+    console.debug("[customer-quotes] ensureEmailBackfill throttled", { orgId });
+    return;
+  }
+
   _emailBackfillAttempted.add(orgId);
 
   const startedAt = new Date().toISOString();
@@ -2047,28 +2104,30 @@ export async function ensureEmailBackfill(orgId: string): Promise<void> {
 
   // No `sinceDays`/`limit` cap — walk the entire inbound history. Idempotency
   // is guaranteed by the per-message dedup inside `ingestQuoteFromEmail`.
-  void backfillQuotesFromEmails(orgId, {})
-    .then((summary) => {
-      _emailBackfillStatus.set(orgId, {
-        state: "complete",
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        summary,
-      });
-      if (summary.scanned > 0) {
-        console.log("[quoteEmailIngestion] auto-backfill complete", { orgId, ...summary });
-      }
-    })
-    .catch((err) => {
-      _emailBackfillStatus.set(orgId, {
-        state: "failed",
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        error: err instanceof Error ? err.message : String(err),
-      });
-      // Clear the per-process attempt guard on failure so the next API call
-      // for this org will retry the backfill rather than be silently skipped.
-      _emailBackfillAttempted.delete(orgId);
-      console.error("[quoteEmailIngestion] auto-backfill failed (will retry on next request)", orgId, err);
+  try {
+    const summary = await backfillQuotesFromEmails(orgId, {});
+    _emailBackfillStatus.set(orgId, {
+      state: "complete",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      summary,
     });
+    if (summary.scanned > 0) {
+      console.log("[quoteEmailIngestion] auto-backfill complete", { orgId, ...summary });
+    }
+  } catch (err) {
+    _emailBackfillStatus.set(orgId, {
+      state: "failed",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      error: err instanceof Error ? err.message : String(err),
+    });
+    // Clear the per-process success marker on failure so the next request
+    // (after the throttle window) retries instead of being silently skipped.
+    _emailBackfillAttempted.delete(orgId);
+    // Re-throw so the request-path callers' `.catch` can surface a tagged
+    // `[customer-quotes] ensureEmailBackfill` warn line in workflow logs
+    // (Task #1146). Internal status map already records the failure above.
+    throw err;
+  }
 }

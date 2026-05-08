@@ -765,7 +765,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       // Task #597 — `ensureQuoteSeed` removed from request paths so demo
       // rows can never re-seed an org via the dashboard. Demo seeding is
       // now strictly opt-in via the dev-only seed script.
-      void ensureEmailBackfill(user.organizationId);
+      ensureEmailBackfill(user.organizationId).catch((err) => {
+        console.warn("[customer-quotes] ensureEmailBackfill failed", { orgId: user.organizationId, error: getErrorMessage(err) });
+      });
       logDroppedFilterKeys("snapshot", user.organizationId, req.query as Record<string, unknown>);
       const { filters, meta: mineOnlyMeta } = await applyMineOnly(req, parseFilters(req));
       const snap = await getSnapshot(user.organizationId, filters);
@@ -813,7 +815,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
     try {
       const user = req.user!;
       // Task #597 — see snapshot route. No demo seeding from request paths.
-      void ensureEmailBackfill(user.organizationId);
+      ensureEmailBackfill(user.organizationId).catch((err) => {
+        console.warn("[customer-quotes] ensureEmailBackfill failed", { orgId: user.organizationId, error: getErrorMessage(err) });
+      });
       const parsed = listQuerySchema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
       const d = parsed.data;
@@ -1094,7 +1098,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
       // Task #597 — ensureQuoteSeed removed from request paths.
-      void ensureEmailBackfill(user.organizationId);
+      ensureEmailBackfill(user.organizationId).catch((err) => {
+        console.warn("[customer-quotes] ensureEmailBackfill failed", { orgId: user.organizationId, error: getErrorMessage(err) });
+      });
       const intel = await getPricingIntelligence(user.organizationId, parsed.data);
       res.json(intel);
     } catch (err) {
@@ -1345,7 +1351,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.status(400).json({ error: "Invalid query", issues: parsed.error.issues });
       // Task #597 — ensureQuoteSeed removed from request paths.
-      void ensureEmailBackfill(user.organizationId);
+      ensureEmailBackfill(user.organizationId).catch((err) => {
+        console.warn("[customer-quotes] ensureEmailBackfill failed", { orgId: user.organizationId, error: getErrorMessage(err) });
+      });
       const result = await searchSpotQuote(user.organizationId, parsed.data);
       res.json(result);
     } catch (err) {
@@ -1434,7 +1442,9 @@ export function registerCustomerQuoteRoutes(app: Express): void {
       const parsed = schema.safeParse(req.query);
       if (!parsed.success) return res.json([]);
       // Task #597 — ensureQuoteSeed removed from request paths.
-      void ensureEmailBackfill(user.organizationId);
+      ensureEmailBackfill(user.organizationId).catch((err) => {
+        console.warn("[customer-quotes] ensureEmailBackfill failed", { orgId: user.organizationId, error: getErrorMessage(err) });
+      });
       const items = await laneAutocomplete(user.organizationId, parsed.data.q, parsed.data.kind);
       res.json(items);
     } catch (err) {

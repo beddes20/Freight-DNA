@@ -433,6 +433,7 @@ type DrilldownFilterOverride = {
   search?: string;
   domainFilter?: string | null;
   freeEmailOnly?: boolean;
+  showUnknownSenders?: boolean;
 };
 
 type KpiDrilldown = {
@@ -540,6 +541,14 @@ function QuoteRequestsInner(): JSX.Element {
   const [age, setAge] = useState<AgeFilter>(initialOverride.age ?? "today");
   const [mineOnly, setMineOnly] = useState(!!initialOverride.mineOnly);
   const [freeEmailOnly, setFreeEmailOnly] = useState(false);
+  // Task: default-hide UNKNOWN_CUSTOMER_NAME rows from the Quote Requests
+  // queue. The server's `applyFilters` chokepoint (CQ-2) keeps these rows
+  // alive for audit / Account-Owner-fallback flows; this is a *post-filter*
+  // applied here so the rep's default working view shows only resolvable
+  // senders. Cold-load default = HIDE (false). When a `?drilldown=<id>` URL
+  // is present we default to SHOW to maintain KPI ↔ list parity (the
+  // server-side snapshot KPIs that drilldowns count from include unknowns).
+  const [showUnknownSenders, setShowUnknownSenders] = useState(!!initialDrilldownId);
   const [domainFilter, setDomainFilter] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [searchInput, setSearchInput] = useState("");
@@ -587,7 +596,7 @@ function QuoteRequestsInner(): JSX.Element {
     // below to guarantee the rendered list equals the KPI's record set.
     priorFiltersRef.current = {
       status, age, mineOnly, pastSlaOnly, includeSnoozed,
-      search, domainFilter, freeEmailOnly,
+      search, domainFilter, freeEmailOnly, showUnknownSenders,
     };
     // Apply the descriptor's overrides.
     if (d.apply.status !== undefined) setStatus(d.apply.status);
@@ -609,12 +618,17 @@ function QuoteRequestsInner(): JSX.Element {
     if (d.apply.freeEmailOnly === undefined) setFreeEmailOnly(false);
     else setFreeEmailOnly(d.apply.freeEmailOnly);
     if (d.apply.pastSlaOnly === undefined) setPastSlaOnly(false);
+    // KPI ↔ list parity: the snapshot KPIs that drilldowns count from
+    // include UNKNOWN_CUSTOMER_NAME rows, so a drilldown must temporarily
+    // re-include them or the rendered count would silently undershoot the
+    // tile's count. clearDrilldown restores the prior value.
+    setShowUnknownSenders(true);
     setDrilldown(id);
     setActiveViewKey(null);
     appliedSignatureRef.current = null;
     setOffset(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, age, mineOnly, pastSlaOnly, includeSnoozed, search, domainFilter, freeEmailOnly]);
+  }, [status, age, mineOnly, pastSlaOnly, includeSnoozed, search, domainFilter, freeEmailOnly, showUnknownSenders]);
 
   const clearDrilldown = useCallback(() => {
     const prior = priorFiltersRef.current;
@@ -630,6 +644,7 @@ function QuoteRequestsInner(): JSX.Element {
       setSearchInput(s);
       setDomainFilter(prior.domainFilter ?? null);
       setFreeEmailOnly(!!prior.freeEmailOnly);
+      setShowUnknownSenders(!!prior.showUnknownSenders);
     } else {
       // Cold-load case (?drilldown=<id> on a hard refresh): no prior to
       // restore. Reverse the FULL descriptor so Clear honestly returns the
@@ -644,6 +659,9 @@ function QuoteRequestsInner(): JSX.Element {
       setSearchInput("");
       setDomainFilter(null);
       setFreeEmailOnly(false);
+      // Drilldowns force-include unknowns for KPI parity; on Clear we go
+      // back to the page default (HIDE).
+      setShowUnknownSenders(false);
     }
     priorFiltersRef.current = null;
     setDrilldown(null);
@@ -680,12 +698,16 @@ function QuoteRequestsInner(): JSX.Element {
       (a.pastSlaOnly === undefined ? pastSlaOnly === false : a.pastSlaOnly === pastSlaOnly) &&
       (a.search === undefined ? search === "" : a.search === search) &&
       (a.domainFilter === undefined ? domainFilter === null : a.domainFilter === domainFilter) &&
-      (a.freeEmailOnly === undefined ? freeEmailOnly === false : a.freeEmailOnly === freeEmailOnly);
+      (a.freeEmailOnly === undefined ? freeEmailOnly === false : a.freeEmailOnly === freeEmailOnly) &&
+      // Drilldowns force-include unknowns (see applyDrilldown). If the rep
+      // flips that off mid-drilldown the rendered count would diverge from
+      // the KPI tile, so treat it as drift and clear the chip.
+      (a.showUnknownSenders === undefined ? showUnknownSenders === true : a.showUnknownSenders === showUnknownSenders);
     if (!matches) {
       priorFiltersRef.current = null;
       setDrilldown(null);
     }
-  }, [drilldown, status, age, mineOnly, pastSlaOnly, includeSnoozed, search, domainFilter, freeEmailOnly]);
+  }, [drilldown, status, age, mineOnly, pastSlaOnly, includeSnoozed, search, domainFilter, freeEmailOnly, showUnknownSenders]);
 
   // Task #969 — "Why this rep?" attribution drawer state. Opened by a
   // window CustomEvent dispatched from the rep-cell `why?` link in
@@ -720,11 +742,11 @@ function QuoteRequestsInner(): JSX.Element {
   }, [searchInput]);
 
   // Reset offset when filters change.
-  useEffect(() => { setOffset(0); }, [status, age, mineOnly, freeEmailOnly, domainFilter, search, sortKey, sortDir]);
+  useEffect(() => { setOffset(0); }, [status, age, mineOnly, freeEmailOnly, showUnknownSenders, domainFilter, search, sortKey, sortDir]);
 
   const currentFilters: QuoteViewFilters = useMemo(() => ({
-    status, age, mineOnly, freeEmailOnly, includeSnoozed, search, domainFilter, pastSlaOnly,
-  }), [status, age, mineOnly, freeEmailOnly, includeSnoozed, search, domainFilter, pastSlaOnly]);
+    status, age, mineOnly, freeEmailOnly, showUnknownSenders, includeSnoozed, search, domainFilter, pastSlaOnly,
+  }), [status, age, mineOnly, freeEmailOnly, showUnknownSenders, includeSnoozed, search, domainFilter, pastSlaOnly]);
 
   // Clear the "active saved view" indicator whenever the user toggles a
   // filter chip after applying a view. We snapshot the filter signature
@@ -746,6 +768,10 @@ function QuoteRequestsInner(): JSX.Element {
     setAge((filters.age as AgeFilter) ?? "today");
     setMineOnly(!!filters.mineOnly);
     setFreeEmailOnly(!!filters.freeEmailOnly);
+    // showUnknownSenders is omitted from saved views (default-undefined)
+    // means the saved view inherits the default-HIDE behaviour. Old saved
+    // views that pre-date this knob therefore keep the trustworthy default.
+    setShowUnknownSenders(!!filters.showUnknownSenders);
     setIncludeSnoozed(!!filters.includeSnoozed);
     setDomainFilter(filters.domainFilter ?? null);
     setSearchInput(filters.search ?? "");
@@ -758,6 +784,7 @@ function QuoteRequestsInner(): JSX.Element {
       age: (filters.age as AgeFilter) ?? "today",
       mineOnly: !!filters.mineOnly,
       freeEmailOnly: !!filters.freeEmailOnly,
+      showUnknownSenders: !!filters.showUnknownSenders,
       includeSnoozed: !!filters.includeSnoozed,
       search: filters.search ?? "",
       domainFilter: filters.domainFilter ?? null,
@@ -961,6 +988,13 @@ function QuoteRequestsInner(): JSX.Element {
       // public mail domain. Without per-row sender data we approximate
       // by checking the customer name length / "Unknown" bucket.
       rows = rows.filter(r => r.customerName === "Unknown — needs review");
+    } else if (!showUnknownSenders) {
+      // Default-trust filter: hide UNKNOWN_CUSTOMER_NAME ("Unknown —
+      // needs review") rows from the rep's working view. Mutually
+      // exclusive with `freeEmailOnly` — that chip explicitly narrows
+      // *to* the unknown bucket, so we skip the hide there. Flipped on
+      // via the "Show unknown senders" chip in the toolbar.
+      rows = rows.filter(r => r.customerName !== "Unknown — needs review");
     }
     if (domainFilter) {
       const dom = domainFilter.toLowerCase();
@@ -970,7 +1004,7 @@ function QuoteRequestsInner(): JSX.Element {
       rows = rows.filter(r => r.slaState === "breached");
     }
     return rows;
-  }, [listQuery.data, includeSnoozed, freeEmailOnly, domainFilter, pastSlaOnly]);
+  }, [listQuery.data, includeSnoozed, freeEmailOnly, showUnknownSenders, domainFilter, pastSlaOnly]);
 
   // ─── Domain options for the dropdown ─────────────────────────────────
   const domainOptions = useMemo(() => {
@@ -1106,9 +1140,30 @@ function QuoteRequestsInner(): JSX.Element {
                 const visible = visibleRows.length;
                 if (total <= visible) return null;
                 const buckets: HiddenCountsSummary["buckets"] = [];
-                if (mineOnly) buckets.push({ id: "mine-only", label: "Hidden by Mine only", count: Math.max(0, total - visible) });
-                else if (search) buckets.push({ id: "search", label: `Hidden by search "${search}"`, count: Math.max(0, total - visible) });
-                else buckets.push({ id: "filters", label: "Hidden by active filters", count: Math.max(0, total - visible) });
+                // Default-trust hide: surface the unknown-sender bucket
+                // explicitly so reps know the chip is what's narrowing the
+                // view (computed from the loaded page so it never exceeds
+                // the visible delta).
+                if (!showUnknownSenders && !freeEmailOnly) {
+                  const unknownInPage = (listQuery.data?.rows ?? []).filter(
+                    r => r.customerName === "Unknown — needs review",
+                  ).length;
+                  if (unknownInPage > 0) {
+                    buckets.push({
+                      id: "unknown-sender",
+                      label: "Hidden — unknown sender",
+                      count: unknownInPage,
+                    });
+                  }
+                }
+                const accounted = buckets.reduce((s, b) => s + b.count, 0);
+                const remaining = Math.max(0, total - visible - accounted);
+                if (remaining > 0) {
+                  if (mineOnly) buckets.push({ id: "mine-only", label: "Hidden by Mine only", count: remaining });
+                  else if (search) buckets.push({ id: "search", label: `Hidden by search "${search}"`, count: remaining });
+                  else buckets.push({ id: "filters", label: "Hidden by active filters", count: remaining });
+                }
+                if (buckets.length === 0) return null;
                 const summary: HiddenCountsSummary = { totalInScope: total, visible, buckets };
                 return <HiddenCountsDisclosure summary={summary} surface="quotes" testId="disclosure-hidden-quotes" />;
               })()}
@@ -1303,6 +1358,19 @@ function QuoteRequestsInner(): JSX.Element {
             <label className="flex items-center gap-1.5 cursor-pointer" data-testid="toggle-free-email">
               <Switch checked={freeEmailOnly} onCheckedChange={setFreeEmailOnly} className="h-4 w-7" />
               Free-email senders
+            </label>
+            <label
+              className="flex items-center gap-1.5 cursor-pointer"
+              data-testid="toggle-show-unknown-senders"
+              title='Re-include rows whose customer is "Unknown — needs review" (sender could not be resolved to a known account).'
+            >
+              <Switch
+                checked={showUnknownSenders}
+                onCheckedChange={setShowUnknownSenders}
+                className="h-4 w-7"
+                disabled={freeEmailOnly}
+              />
+              Show unknown senders
             </label>
             <label className="flex items-center gap-1.5 cursor-pointer" data-testid="toggle-include-snoozed">
               <Switch checked={includeSnoozed} onCheckedChange={setIncludeSnoozed} className="h-4 w-7" />

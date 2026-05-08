@@ -35,6 +35,11 @@ export interface QuoteViewFilters {
   age?: string;
   mineOnly?: boolean;
   freeEmailOnly?: boolean;
+  // Task: default-hide UNKNOWN_CUSTOMER_NAME ("Unknown — needs review") rows
+  // from the Quote Requests table. Default in the page is `false` (i.e.
+  // unknowns hidden); flipping the chip ON re-includes them. Persisted via
+  // the savedViewFiltersSchema passthrough on the server (no schema change).
+  showUnknownSenders?: boolean;
   includeSnoozed?: boolean;
   search?: string;
   domainFilter?: string | null;

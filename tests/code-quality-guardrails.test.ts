@@ -4600,6 +4600,35 @@ console.log("\n── Section 1029: LWQ D — Row redesign (reason chip + lifecy
     "[CQ-3] dedicated PATCH /api/companies/:id/owner endpoint exists (single write path)",
     /app\.patch\("\/api\/companies\/:id\/owner"/.test(companiesRoutes),
   );
+
+  // ── Default-trust hide of UNKNOWN_CUSTOMER_NAME (post-filter) ─────────
+  // The Quote Requests tab default-hides rows whose customer is the
+  // shared "Unknown — needs review" bucket via a CLIENT-SIDE post-filter.
+  // The chokepoint (applyFilters / loadContext / enrich /
+  // attachResponseTimes / __none__) MUST stay untouched — this filter
+  // lives in client/src/pages/quote-requests.tsx and is exposed via the
+  // "Show unknown senders" chip.
+  const qrPage = readFile("client/src/pages/quote-requests.tsx");
+  assert(
+    "[CQ-default-hide] quote-requests.tsx exposes the `toggle-show-unknown-senders` chip",
+    /data-testid="toggle-show-unknown-senders"/.test(qrPage),
+  );
+  assert(
+    "[CQ-default-hide] quote-requests.tsx default-HIDES unknowns at cold load (initial state derived from drilldown only)",
+    /useState<boolean>?\(!!initialDrilldownId\)|useState\(!!initialDrilldownId\)/.test(qrPage),
+  );
+  assert(
+    "[CQ-default-hide] visibleRows post-filter drops `Unknown — needs review` when showUnknownSenders is off",
+    /!showUnknownSenders[\s\S]{0,400}customerName !== "Unknown — needs review"/.test(qrPage),
+  );
+  // Belt & braces: the post-filter must NOT have leaked into the server
+  // chokepoint. applyFilters body is already pinned by the CQ-2/CQ-5
+  // checks above; this assert names the contract so a future "let's just
+  // push it server-side" diff fails loudly here.
+  assert(
+    "[CQ-default-hide] applyFilters body does NOT reference UNKNOWN_CUSTOMER_NAME or showUnknownSenders (post-filter is client-side)",
+    !!applyFiltersMatch && !/UNKNOWN_CUSTOMER_NAME|showUnknownSenders/.test(applyFiltersMatch[0]),
+  );
 }
 
 // ── Section 1051: Unified ReplitDailyUpload contract ────────────────────────
