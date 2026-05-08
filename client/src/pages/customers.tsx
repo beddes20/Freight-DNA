@@ -199,26 +199,22 @@ export default function Customers() {
     return p.get(key) || fallback;
   };
 
-  const initBoolParam = (key: string) => {
-    const p = new URLSearchParams(window.location.search);
-    return p.get(key) === "true";
-  };
-
   const [searchQuery, setSearchQuery] = useState(() => initParam("q", ""));
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [showArchived, setShowArchived] = useState(() => initBoolParam("archived"));
+  const [showArchived, setShowArchived] = useState(false);
   // Task #1095 — when on, refetch with `includeEmailDerived=true` so admin
   // cleanup work can see the inbound-email auto-created stub rows that the
   // default Customers list hides.
-  const [showEmailDerived, setShowEmailDerived] = useState(() => initBoolParam("emailDerived"));
+  const [showEmailDerived, setShowEmailDerived] = useState(false);
+  const [showAdminOwned, setShowAdminOwned] = useState(false);
   const [showFilters, setShowFilters] = useState(() => {
     const p = new URLSearchParams(window.location.search);
-    return ["rep", "industry", "touch", "mode"].some(k => p.has(k) && p.get(k) !== "all");
+    return ["rep", "industry", "touch"].some(k => p.has(k) && p.get(k) !== "all");
   });
   const [repFilter, setRepFilter] = useState(() => initParam("rep"));
   const [industryFilter, setIndustryFilter] = useState(() => initParam("industry"));
   const [touchFilter, setTouchFilter] = useState(() => initParam("touch"));
-  const [modeFilter, setModeFilter] = useState<string>(() => initParam("mode"));
+  const [modeFilter, setModeFilter] = useState<string>("all");
   const [sortBy, setSortBy] = useState(() => initParam("sort", "name"));
 
   useEffect(() => {
@@ -227,13 +223,10 @@ export default function Customers() {
     if (repFilter !== "all") p.set("rep", repFilter);
     if (industryFilter !== "all") p.set("industry", industryFilter);
     if (touchFilter !== "all") p.set("touch", touchFilter);
-    if (modeFilter !== "all") p.set("mode", modeFilter);
     if (sortBy !== "name") p.set("sort", sortBy);
-    if (showArchived) p.set("archived", "true");
-    if (showEmailDerived) p.set("emailDerived", "true");
     const qs = p.toString();
     window.history.replaceState(null, "", qs ? `?${qs}` : window.location.pathname);
-  }, [searchQuery, repFilter, industryFilter, touchFilter, modeFilter, sortBy, showArchived, showEmailDerived]);
+  }, [searchQuery, repFilter, industryFilter, touchFilter, sortBy]);
 
   const [quickTouch, setQuickTouch] = useState<{ company: Company; contacts: Contact[] } | null>(null);
   const [quickTouchContactId, setQuickTouchContactId] = useState("");
@@ -251,7 +244,7 @@ export default function Customers() {
   const [saveFilterName, setSaveFilterName] = useState("");
   const [showSaveFilter, setShowSaveFilter] = useState(false);
 
-  type SavedFilter = { name: string; search: string; rep: string; industry: string; touch: string; mode: string; sort: string; archived?: boolean; emailDerived?: boolean };
+  type SavedFilter = { name: string; search: string; rep: string; industry: string; touch: string; mode: string; sort: string };
 
   const { data: savedFiltersData } = useQuery<{ filters: SavedFilter[] }>({
     queryKey: ["/api/users/saved-filters"],
@@ -274,7 +267,7 @@ export default function Customers() {
       toast({ title: "Maximum 10 saved views", description: "Remove an existing view first.", variant: "destructive" });
       return;
     }
-    const newFilter: SavedFilter = { name: saveFilterName.trim(), search: searchQuery, rep: repFilter, industry: industryFilter, touch: touchFilter, mode: modeFilter, sort: sortBy, archived: showArchived, emailDerived: showEmailDerived };
+    const newFilter: SavedFilter = { name: saveFilterName.trim(), search: searchQuery, rep: repFilter, industry: industryFilter, touch: touchFilter, mode: modeFilter, sort: sortBy };
     saveFilterMutation.mutate([...savedFilters.filter(f => f.name !== newFilter.name), newFilter]);
   };
 
@@ -285,9 +278,7 @@ export default function Customers() {
     setTouchFilter(f.touch || "all");
     setModeFilter(f.mode || "all");
     setSortBy(f.sort || "name");
-    setShowArchived(f.archived ?? false);
-    setShowEmailDerived(f.emailDerived ?? false);
-    if (f.rep !== "all" || f.industry !== "all" || f.touch !== "all" || (f.mode && f.mode !== "all")) setShowFilters(true);
+    if (f.rep !== "all" || f.industry !== "all" || f.touch !== "all") setShowFilters(true);
   };
 
   const handleDeleteFilter = (name: string) => {
@@ -379,13 +370,19 @@ export default function Customers() {
     queryKey: ["/api/users/sales"],
   });
   const salesPersonMap = new Map(salesUsers.map(u => [u.id, u.name]));
-  // Display-only: union team + sales users so cross-team owners resolve.
+  // Task #1141 ownership/visibility correctness fix — resolve owner names from
+  // a UNION of /api/team-members + /api/users/sales + currentUser, so that any
+  // canonical owner the server considers valid (including admins or out-of-team
+  // owners) renders as a name rather than falling back to "Unassigned". The
+  // previous teamMembers-only map mis-labeled admin-owned and out-of-team-owned
+  // accounts. Pure read-side, no writes.
   const accountOwnerMap = useMemo(() => {
     const m = new Map<string, string>();
-    teamMembers.forEach(u => m.set(u.id, u.name));
-    salesUsers.forEach(u => { if (!m.has(u.id)) m.set(u.id, u.name); });
+    for (const u of teamMembers) m.set(u.id, u.name);
+    for (const u of salesUsers) if (!m.has(u.id)) m.set(u.id, u.name);
+    if (currentUser && !m.has(currentUser.id)) m.set(currentUser.id, currentUser.name);
     return m;
-  }, [teamMembers, salesUsers]);
+  }, [teamMembers, salesUsers, currentUser]);
 
   type MsSummaryRow = { companyId: string; currentPct: number | null };
   const { data: msSummary = [] } = useQuery<MsSummaryRow[]>({
@@ -446,11 +443,22 @@ export default function Customers() {
   // the dropdown only lists reps who can currently own new work. Deactivated reps remain in
   // `teamMembers`/`accountOwnerMap` so historical owner labels still resolve from the cleaned
   // `/api/team-members` response without forcing an extra `/api/users/:id` round-trip.
+  const isAdminOrDirector = currentUser?.role === "admin" || currentUser?.role === "director";
+  // Task #1141 — leadership roles see the "Show Admin-Owned" toggle that
+  // un-hides accounts whose canonical owner is an admin (i.e. not in namAmIds).
+  const isLeadership = isAdminOrDirector || currentUser?.role === "sales_director";
+  // Task #1141 ownership/visibility correctness fix — when leadership flips
+  // "Show Admin-Owned" ON, include admin users in the rep filter dropdown so
+  // they can narrow to a specific admin owner. Default behavior (toggle OFF)
+  // strips admins exactly as before.
   const amUsers = useMemo(() => {
     return teamMembers
-      .filter(u => u.role !== "admin" && u.isActive !== false)
+      .filter(u => (u.role !== "admin" || showAdminOwned) && u.isActive !== false)
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [teamMembers]);
+  }, [teamMembers, showAdminOwned]);
+
+  // Set of NAM/AM user IDs so we can filter company lists
+  const namAmIds = useMemo(() => new Set(amUsers.map(u => u.id)), [amUsers]);
 
   const activeFiltersCount = [repFilter !== "all", industryFilter !== "all", touchFilter !== "all", modeFilter !== "all"].filter(Boolean).length;
 
@@ -467,10 +475,7 @@ export default function Customers() {
       // `getCanonicalCompanyOwnerId` (server/lib/companyOwner.ts), so the
       // client never re-derives the rule. We retain the local coalesce
       // as a fallback for older cached payloads that predate the server
-      // enrichment. The previous admin/director "default hide" branch
-      // (drop rows whose owner wasn't in the viewer's `/api/team-members`
-      // set) was suppressing real records the server had already
-      // returned — removed.
+      // enrichment.
       //
       // NOTE: when repFilter === "all" we do NOT post-filter by viewer-
       // scoped team membership. The server's getVisibleCompanyIds is the
@@ -485,6 +490,11 @@ export default function Customers() {
         ?? company.assignedTo
         ?? (company as any).salesPersonId
         ?? null;
+      // Task #1141 — leadership users (admin/director/sales_director) can opt-in to
+      // see admin-owned accounts via the "Show Admin-Owned" header toggle; default
+      // keeps the historical leadership cull on the All-reps view. Layered on top
+      // of the server's getVisibleCompanyIds gate as a UX narrowing only.
+      if (isLeadership && repFilter === "all" && !showAdminOwned && canonicalOwnerId && !namAmIds.has(canonicalOwnerId) && !sharedRepIds.some(id => namAmIds.has(id))) return false;
       if (repFilter !== "all" && canonicalOwnerId !== repFilter && !sharedRepIds.includes(repFilter)) return false;
       if (industryFilter !== "all" && company.industry !== industryFilter) return false;
       if (touchFilter !== "all") {
@@ -521,6 +531,18 @@ export default function Customers() {
   }
 
   const displayList = applyFilters(showArchived ? archivedCompanies : companies);
+  // Task #1141 — count of accounts the admin-owned cull is currently removing,
+  // so we can surface a "X hidden — toggle Show Admin-Owned to view" hint.
+  const adminOwnedHiddenCount = useMemo(() => {
+    if (showArchived || !isLeadership || repFilter !== "all" || showAdminOwned) return 0;
+    return (companies ?? []).filter(company => {
+      const sharedRepIds = ((company.sharedReps || []) as SharedRep[]).map(r => r.userId);
+      const canonicalOwnerId = company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null;
+      return canonicalOwnerId && !namAmIds.has(canonicalOwnerId) && !sharedRepIds.some(id => namAmIds.has(id));
+    }).length;
+  }, [showArchived, isLeadership, repFilter, showAdminOwned, companies, namAmIds]);
+  const totalCount = (showArchived ? archivedCompanies : companies)?.length ?? 0;
+  const hasActiveNarrowing = !!searchQuery || activeFiltersCount > 0 || showArchived || (!showArchived && showEmailDerived) || (!showArchived && showAdminOwned) || adminOwnedHiddenCount > 0;
   const isLoading = showArchived ? archivedLoading : companiesLoading;
   const isError = showArchived ? archivedError : companiesError;
   const refetchData = showArchived ? refetchArchived : refetchCompanies;
@@ -557,6 +579,17 @@ export default function Customers() {
                 title="Include companies that were auto-created from inbound emails (Task #1095)"
               >
                 {showEmailDerived ? "Hide Email-Derived" : "Show Email-Derived"}
+              </Button>
+            )}
+            {!showArchived && isLeadership && (
+              <Button
+                variant={showAdminOwned ? "default" : "outline"}
+                onClick={() => setShowAdminOwned(v => !v)}
+                className={showAdminOwned ? "" : "bg-white/10 border-white/20 text-white hover:bg-white/20"}
+                data-testid="toggle-show-admin-owned"
+                title="Include accounts whose canonical owner is an admin (normally hidden in the All-reps view) — Task #1141"
+              >
+                {showAdminOwned ? "Hide Admin-Owned" : "Show Admin-Owned"}
               </Button>
             )}
             <Button
@@ -682,13 +715,17 @@ export default function Customers() {
           </div>
         )}
         {showArchived && !isLoading && (
-          <span className="text-sm text-muted-foreground ml-auto">
-            {displayList.length} account{displayList.length !== 1 ? "s" : ""}
+          <span className="text-sm text-muted-foreground ml-auto" data-testid="text-account-count">
+            {hasActiveNarrowing
+              ? `${displayList.length} of ${totalCount} account${totalCount !== 1 ? "s" : ""}`
+              : `${displayList.length} account${displayList.length !== 1 ? "s" : ""}`}
           </span>
         )}
         {!showArchived && !isLoading && (
-          <span className="text-sm text-muted-foreground">
-            {displayList.length} account{displayList.length !== 1 ? "s" : ""}
+          <span className="text-sm text-muted-foreground" data-testid="text-account-count">
+            {hasActiveNarrowing
+              ? `${displayList.length} of ${totalCount} account${totalCount !== 1 ? "s" : ""}`
+              : `${displayList.length} account${displayList.length !== 1 ? "s" : ""}`}
           </span>
         )}
       </div>
@@ -706,6 +743,14 @@ export default function Customers() {
                 {amUsers.map(u => (
                   <SelectItem key={u.id} value={u.id}>{u.name}</SelectItem>
                 ))}
+                {isLeadership && adminOwnedHiddenCount > 0 && (
+                  <div
+                    className="px-2 py-1.5 text-[11px] text-muted-foreground border-t mt-1"
+                    data-testid="hint-admin-owned-hidden"
+                  >
+                    {adminOwnedHiddenCount} hidden — toggle Show Admin-Owned to view
+                  </div>
+                )}
               </SelectContent>
             </Select>
           </div>
