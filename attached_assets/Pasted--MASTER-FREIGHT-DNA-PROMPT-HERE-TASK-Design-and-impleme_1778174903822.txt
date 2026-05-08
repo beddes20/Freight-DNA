@@ -1,0 +1,58 @@
+[MASTER FREIGHT-DNA PROMPT HERE]
+
+TASK: Design and implement Phase 1 Step 3 — lifecycle write paths only (deactivate, reactivate, soft-delete, restore, classify), with audit logging and zero read-side filter changes.
+
+Context:
+- Phase 1 Step 1 is complete: lifecycle columns + user_lifecycle_events schema + helper module exist.
+- Phase 1 Step 2 is complete: observational backfill tool exists for user_source and last_activity_at.
+- We are still NOT changing auth behavior, GET /api/users defaults, dashboards, goals, quotes, NBA, Webex, Stripe, or assignee visibility in this task.
+- This task is about safe write-paths only so admins can explicitly change lifecycle state with auditability and reversibility.
+
+Goal:
+Add the admin-only lifecycle APIs and storage methods, but do not yet wire them into default roster filters or downstream product behavior.
+
+I need:
+1. Storage methods:
+- classifyUser
+- deactivateUser
+- reactivateUser
+- softDeleteUser
+- restoreUser
+All must write user_lifecycle_events rows with prev_state and next_state snapshots.
+
+2. Admin-only, org-scoped routes:
+- POST /api/admin/users/:id/classify
+- POST /api/admin/users/:id/deactivate
+- POST /api/admin/users/:id/reactivate
+- POST /api/admin/users/:id/soft-delete
+- POST /api/admin/users/:id/restore
+- GET /api/admin/users/:id/lifecycle-events
+- GET /api/admin/users/:id/impact
+
+3. Rules:
+- Deactivation is the default for real employees leaving.
+- Soft-delete is reserved for junk/erroneous rows only.
+- Restore from deleted returns the user to inactive, not active.
+- Service accounts cannot be made interactive by accident.
+- Every write must be reversible except soft-delete semantics, which still preserve the row and can be restored.
+
+Constraints:
+- No changes to auth/login behavior yet.
+- No changes to GET /api/users defaults yet.
+- No changes to DELETE /api/users/:id yet unless you need to add a separate internal soft-delete implementation path without changing the route contract.
+- No UI actions yet unless absolutely necessary for compile/test wiring.
+- Plan first, then code.
+- Show exact files / tables / routes before implementation.
+
+Output format:
+1. Diagnosis
+2. What is trustworthy vs not trustworthy
+3. Files / tables / jobs / routes involved
+4. Recommended plan in small steps
+5. Risks / dependencies
+6. Safe first action
+7. What should not be republished yet
+
+Stop rule:
+- If this task would force read-side behavior changes, stop and split them into a later task.
+- Do not modify downstream consumers in this step.

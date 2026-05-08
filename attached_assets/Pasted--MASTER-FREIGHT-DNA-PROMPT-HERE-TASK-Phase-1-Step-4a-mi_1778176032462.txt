@@ -1,0 +1,60 @@
+[MASTER FREIGHT-DNA PROMPT HERE]
+
+TASK: Phase 1 Step 4a — migrate read-side behavior for the default User Management roster only.
+
+Context:
+- Phase 1 Step 3 is complete:
+  - lifecycle storage methods exist
+  - admin lifecycle routes exist
+  - user_lifecycle_events audit logging exists
+- Read-side consumers still do NOT use lifecycle flags yet.
+- We want the smallest visible trust win first, without changing auth, dashboards, goals, quotes, NBA, Webex, Stripe, or contact jobs yet.
+
+Goal:
+Update the default /api/users roster behavior and the admin user list behavior so the main roster stops mixing active humans with service, deleted, and quarantined identities by default — while keeping explicit include filters for admin review.
+
+I need:
+1. Design and implement the default GET /api/users filter contract:
+- default: active, non-deleted, non-service, non-quarantined
+- includeInactive=true
+- includeDeleted=true (admin only)
+- includeServiceAccounts=true (admin only)
+- includeQuarantined=true (admin only)
+- includeDemo=true (admin only or demo-org-safe only, whichever matches existing org model)
+
+2. Keep this scoped ONLY to the user roster path:
+- server/routes.ts user list route
+- server/storage.ts getUsers/searchUsers path if needed
+- client/src/pages/admin-users.tsx only if required to surface the new tabs/filters
+- server/lib/userLifecycle.ts helper usage for this path only
+
+3. Do NOT yet change:
+- login/auth behavior
+- assignee dropdowns
+- leaderboards / goals / dashboard
+- customer quotes
+- NBA
+- Webex / M365
+- Stripe seat counts
+- contact jobs
+- DELETE /api/users/:id legacy route
+
+4. I need:
+- exact files / methods to touch
+- the safest query/filter contract
+- how admin-only include flags should be validated
+- how to avoid silently hiding users from non-admin consumers who may still rely on old behavior
+- whether this should be split into API change first, UI change second
+
+Output format:
+1. Diagnosis
+2. What is trustworthy vs not trustworthy
+3. Files / tables / routes involved
+4. Recommended plan in small steps
+5. Risks / dependencies
+6. Safe first action
+7. What should not be republished yet
+
+Stop rule:
+- Plan first and show the exact filter contract before coding.
+- If changing GET /api/users will break non-admin consumers unexpectedly, stop and split the API contract migration from the UI migration.

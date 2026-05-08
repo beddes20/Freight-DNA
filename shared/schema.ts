@@ -328,10 +328,48 @@ export const users = pgTable("users", {
   // back to the classic dashboard via a per-user toggle; this flag drives
   // the "/" → "/today" redirect at the top of <Router/>.
   defaultToTodayQueue: boolean("default_to_today_queue").notNull().default(true),
+  // ── Task #1126 Phase 1 — durable user lifecycle state ──
+  // No production code reads or writes these columns yet. Helpers that
+  // encode their semantics live at server/lib/userLifecycle.ts. Soft-
+  // delete mirrors the contacts pattern (Task #1093). Defaults match
+  // today's behavior: every existing row remains active, non-service,
+  // non-demo, non-fixture, non-quarantined, and not tombstoned.
+  // See migrations/0017_users_lifecycle_columns.sql.
+  isActive: boolean("is_active").notNull().default(true),
+  isServiceAccount: boolean("is_service_account").notNull().default(false),
+  isDemo: boolean("is_demo").notNull().default(false),
+  isFixture: boolean("is_fixture").notNull().default(false),
+  isQuarantined: boolean("is_quarantined").notNull().default(false),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  deletedBy: varchar("deleted_by"),
+  deleteReason: text("delete_reason"),
+  deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
+  deactivatedBy: varchar("deactivated_by"),
+  deactivationReason: text("deactivation_reason"),
+  userSource: text("user_source"),
+  lastActivityAt: timestamp("last_activity_at", { withTimezone: true }),
 });
 
+// `insertUserSchema` omits every Phase 1 lifecycle column so existing
+// callers (storage.createUser, bulk-import, valueiq prefs) compile
+// unchanged. New admin lifecycle routes (Phase 1 step 7) will use
+// dedicated, narrowly-typed update calls — they MUST NOT extend this
+// schema to flip lifecycle flags.
 export const insertUserSchema = createInsertSchema(users).omit({
   id: true,
+  isActive: true,
+  isServiceAccount: true,
+  isDemo: true,
+  isFixture: true,
+  isQuarantined: true,
+  deletedAt: true,
+  deletedBy: true,
+  deleteReason: true,
+  deactivatedAt: true,
+  deactivatedBy: true,
+  deactivationReason: true,
+  userSource: true,
+  lastActivityAt: true,
 }).extend({
   role: z.enum(userRoles).default("account_manager"),
   password: z.string().optional(),
@@ -339,6 +377,33 @@ export const insertUserSchema = createInsertSchema(users).omit({
 
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+// Task #1126 Phase 1 — append-only audit log for lifecycle changes.
+// See migrations/0018_user_lifecycle_events.sql. Not yet written by
+// production code; the admin lifecycle routes (Phase 1 step 7) will
+// be the first writer.
+export const userLifecycleEvents = pgTable("user_lifecycle_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references((): AnyPgColumn => users.id),
+  orgId: varchar("org_id").notNull().references(() => organizations.id),
+  actorUserId: varchar("actor_user_id").references((): AnyPgColumn => users.id),
+  event: text("event").notNull(),
+  reason: text("reason"),
+  prevState: jsonb("prev_state").notNull().default({}),
+  nextState: jsonb("next_state").notNull().default({}),
+  source: text("source"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  userIdx: index("user_lifecycle_events_user_idx").on(t.userId, desc(t.createdAt)),
+  orgIdx: index("user_lifecycle_events_org_idx").on(t.orgId, desc(t.createdAt)),
+}));
+
+export const insertUserLifecycleEventSchema = createInsertSchema(userLifecycleEvents).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertUserLifecycleEvent = z.infer<typeof insertUserLifecycleEventSchema>;
+export type UserLifecycleEvent = typeof userLifecycleEvents.$inferSelect;
 
 export const financialUploads = pgTable("financial_uploads", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),

@@ -321,6 +321,9 @@ import {
   copilotRecommendations,
   type CopilotRecommendation,
   type InsertCopilotRecommendation,
+  userLifecycleEvents,
+  type UserLifecycleEvent,
+  type InsertUserLifecycleEvent,
 } from "@shared/schema";
 import { getStuckRunningThresholdMs } from "./lib/cronHeartbeat";
 
@@ -446,6 +449,58 @@ export interface CarrierSourcingChannel {
   responseRate: number;
 }
 
+// Task #1126 Phase 1 Step 3 — typed error raised by lifecycle write
+// methods. Routes map .code to HTTP status (NOT_FOUND→404,
+// IMPACT_BLOCK→409, GUARD/CONFLICT→400). Carrying a code (rather than
+// pattern-matching on .message) means future call-sites can branch
+// safely without parsing strings.
+export type UserLifecycleErrorCode =
+  | "NOT_FOUND"
+  | "IMPACT_BLOCK"
+  | "GUARD"
+  | "CONFLICT";
+export class UserLifecycleError extends Error {
+  constructor(public code: UserLifecycleErrorCode, message: string, public meta?: Record<string, unknown>) {
+    super(message);
+    this.name = "UserLifecycleError";
+  }
+}
+
+// Task #1126 Phase 1 Step 3 — read-only blast-radius preview for a user.
+// Returned by getUserLifecycleImpact and consumed by both
+// GET /api/admin/users/:id/impact and the soft-delete pre-flight check.
+// Counts are intentionally per-axis (no synthesis) so the admin UI can
+// show "23 companies (assigned), 5 (owner_rep), 2 open opps" rather
+// than a single combined number that would hide the actual ownership
+// shape.
+export interface UserLifecycleImpact {
+  ownedCompaniesAssignedTo: number;
+  ownedCompaniesOwnerRep: number;
+  ownedCompaniesSalesPerson: number;
+  openOpportunities: number;
+  openTasks: number;
+  recentTouchpoints: number; // last 30 days
+  lastActivityAt: string | null;
+  // Convenience: true if any "live ownership" axis is non-zero. The
+  // soft-delete route refuses unless force=true when this is true.
+  softDeleteWouldBlock: boolean;
+}
+
+// Task #1126 Phase 1 Step 4a-API — default `GET /api/users` filter contract.
+// Each `include*` flag defaults to false (i.e. the matching state is
+// excluded). The route layer is responsible for admin-gating the four
+// sensitive flags before forwarding them here; storage applies whatever
+// it receives. `is_fixture` rows stay excluded under EVERY flag — there
+// is no `includeFixture` knob, by design (keeps our fixture-poisoning
+// guard intact even if an admin opts into the noisy buckets).
+export interface UserListFilter {
+  includeInactive?: boolean;
+  includeDeleted?: boolean;
+  includeServiceAccounts?: boolean;
+  includeQuarantined?: boolean;
+  includeDemo?: boolean;
+}
+
 export interface IStorage {
   getDefaultOrganization(): Promise<Organization | undefined>;
   getOrganizations(): Promise<Organization[]>;
@@ -463,12 +518,50 @@ export interface IStorage {
   createPasswordResetToken(userId: string, token: string, expiresAt: string): Promise<void>;
   getPasswordResetToken(token: string): Promise<{ userId: string; expiresAt: string } | undefined>;
   deletePasswordResetTokensByUser(userId: string): Promise<void>;
-  getUsers(organizationId: string): Promise<User[]>;
+  /**
+   * Task #1126 Phase 1 Step 4a-API — default roster filter contract.
+   *
+   * Calling without a filter preserves the legacy "every user in the
+   * org" behavior so existing internal callers (financial-uploads
+   * scoping, etc.) keep their current view. Route handlers MUST pass
+   * a `UserListFilter` so the user-facing roster honors the lifecycle
+   * defaults documented in `docs/user-roster-classification.md`.
+   */
+  getUsers(organizationId: string, filter?: UserListFilter): Promise<User[]>;
   createUser(user: InsertUser): Promise<User>;
   /** Route-level update — scoped to org to prevent cross-tenant writes. */
   updateUser(id: string, organizationId: string, data: Partial<InsertUser>): Promise<User | undefined>;
   /** Route-level delete — scoped to org to prevent cross-tenant deletes. */
   deleteUser(id: string, organizationId: string): Promise<boolean>;
+
+  // ── Task #1126 Phase 1 Step 3 — admin-only lifecycle write paths ──
+  // These are the ONLY production code paths that should write the
+  // lifecycle columns (is_active, is_*, deleted_at, deactivated_at, …)
+  // OR insert into user_lifecycle_events. Each write method is
+  // transactional: it row-locks the target user, snapshots the
+  // lifecycle fields into prev_state, applies the update, and inserts
+  // a single user_lifecycle_events row inside the same transaction.
+  //
+  // Reads are NOT yet routed through these (Step 4+). Auth, GET
+  // /api/users defaults, dashboards, dropdowns, Stripe seats, etc.
+  // continue to behave exactly as before.
+  //
+  // All methods are org-scoped on the SERVER (not just the route): if
+  // the target user is in a different organization, they raise
+  // UserLifecycleError("NOT_FOUND") so a future caller cannot bypass
+  // the gate by going around the route layer.
+  classifyUser(
+    id: string,
+    organizationId: string,
+    actorUserId: string,
+    input: { isServiceAccount?: boolean; isDemo?: boolean; isFixture?: boolean; isQuarantined?: boolean; isActive?: boolean; reason?: string },
+  ): Promise<User>;
+  deactivateUser(id: string, organizationId: string, actorUserId: string, reason: string): Promise<{ user: User; changed: boolean }>;
+  reactivateUser(id: string, organizationId: string, actorUserId: string, reason?: string): Promise<{ user: User; changed: boolean }>;
+  softDeleteUser(id: string, organizationId: string, actorUserId: string, reason: string, opts?: { force?: boolean }): Promise<User>;
+  restoreUser(id: string, organizationId: string, actorUserId: string, reason?: string): Promise<{ user: User; changed: boolean }>;
+  listUserLifecycleEvents(id: string, organizationId: string, limit?: number): Promise<Array<UserLifecycleEvent & { actorName: string | null }>>;
+  getUserLifecycleImpact(id: string, organizationId: string): Promise<UserLifecycleImpact>;
   /** Org-scoped team traversal — organizationId is mandatory. */
   getTeamMemberIds(userId: string, organizationId: string): Promise<string[]>;
   /** Walk the managerId chain upward, returning all ancestor manager IDs. */
@@ -1928,8 +2021,37 @@ export class DatabaseStorage implements IStorage {
     await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
   }
 
-  async getUsers(organizationId: string): Promise<User[]> {
-    return db.select().from(users).where(eq(users.organizationId, organizationId));
+  async getUsers(organizationId: string, filter?: UserListFilter): Promise<User[]> {
+    // No filter object → preserve legacy "every user in the org" behavior
+    // for the two internal callers (getFinancialUploadsForOrg /
+    // getLatestFinancialUploadForOrg). Route handlers MUST pass a filter.
+    if (!filter) {
+      return db.select().from(users).where(eq(users.organizationId, organizationId));
+    }
+
+    // Default-exclude every lifecycle bucket; flip a clause off when the
+    // matching include flag is set. `is_fixture` is intentionally not
+    // exposed as a flag — it stays excluded under EVERY combination.
+    const clauses: SQL[] = [eq(users.organizationId, organizationId)];
+    if (!filter.includeDeleted) clauses.push(isNull(users.deletedAt));
+    if (!filter.includeInactive) {
+      // COALESCE(is_active, true) = true so rows whose column was never
+      // backfilled (legacy seeds) are treated as active by default,
+      // matching the design doc.
+      clauses.push(sql`COALESCE(${users.isActive}, true) = true`);
+    }
+    if (!filter.includeServiceAccounts) {
+      clauses.push(sql`COALESCE(${users.isServiceAccount}, false) = false`);
+    }
+    if (!filter.includeQuarantined) {
+      clauses.push(sql`COALESCE(${users.isQuarantined}, false) = false`);
+    }
+    if (!filter.includeDemo) {
+      clauses.push(sql`COALESCE(${users.isDemo}, false) = false`);
+    }
+    // is_fixture: always excluded. No flag.
+    clauses.push(sql`COALESCE(${users.isFixture}, false) = false`);
+    return db.select().from(users).where(and(...clauses));
   }
 
   async createUser(insertUser: InsertUser): Promise<User> {
@@ -1951,6 +2073,359 @@ export class DatabaseStorage implements IStorage {
   async deleteUser(id: string, organizationId: string): Promise<boolean> {
     const result = await db.delete(users).where(and(eq(users.id, id), eq(users.organizationId, organizationId))).returning();
     return result.length > 0;
+  }
+
+  // ── Task #1126 Phase 1 Step 3 — lifecycle write paths ─────────────────
+  // Implementation policy (mirrors server/lib/userLifecycle.ts docstring):
+  //   - deactivate = real employee leaving (is_active=false; deleted_at stays null)
+  //   - soft-delete = junk / erroneous row (deleted_at set, is_active forced false)
+  //   - restore from deleted → returns to INACTIVE, not active (caller must
+  //     reactivate explicitly if the row is a live employee)
+  //   - service accounts cannot accidentally become interactive: reactivate
+  //     refuses while is_service_account=true, and classify guards against
+  //     silently flipping a live seat into a service account
+  // Every write happens inside db.transaction with SELECT … FOR UPDATE so
+  // concurrent admin actions serialize and an audit row always lands with
+  // the actual prev_state observed under the lock.
+
+  private _lifecycleSnapshot(u: User) {
+    return {
+      isActive: u.isActive,
+      isServiceAccount: u.isServiceAccount,
+      isDemo: u.isDemo,
+      isFixture: u.isFixture,
+      isQuarantined: u.isQuarantined,
+      deletedAt: u.deletedAt,
+      deletedBy: u.deletedBy,
+      deleteReason: u.deleteReason,
+      deactivatedAt: u.deactivatedAt,
+      deactivatedBy: u.deactivatedBy,
+      deactivationReason: u.deactivationReason,
+    };
+  }
+
+  async classifyUser(
+    id: string,
+    organizationId: string,
+    actorUserId: string,
+    input: { isServiceAccount?: boolean; isDemo?: boolean; isFixture?: boolean; isQuarantined?: boolean; isActive?: boolean; reason?: string },
+  ): Promise<User> {
+    const provided = (["isServiceAccount", "isDemo", "isFixture", "isQuarantined", "isActive"] as const)
+      .filter((k) => typeof input[k] === "boolean");
+    if (provided.length === 0) {
+      throw new UserLifecycleError("GUARD", "classify requires at least one flag");
+    }
+    return db.transaction(async (tx) => {
+      const [target] = await tx.select().from(users)
+        .where(and(eq(users.id, id), eq(users.organizationId, organizationId)))
+        .for("update");
+      if (!target) throw new UserLifecycleError("NOT_FOUND", "User not found in organization");
+      const prev = this._lifecycleSnapshot(target);
+
+      // Guard: cannot promote a live, non-demo, non-fixture user to a
+      // service account without ALSO setting isActive=false in the same
+      // call. Service accounts must never silently consume a seat.
+      const wantsServiceAccount = input.isServiceAccount === true;
+      const wouldBeLiveServiceAccount =
+        wantsServiceAccount &&
+        target.deletedAt == null &&
+        (input.isActive ?? target.isActive) === true &&
+        (input.isDemo ?? target.isDemo) === false &&
+        (input.isFixture ?? target.isFixture) === false;
+      if (wouldBeLiveServiceAccount) {
+        throw new UserLifecycleError(
+          "GUARD",
+          "Setting isServiceAccount=true on a live user requires also setting isActive=false in the same request",
+        );
+      }
+
+      const updates: Partial<typeof users.$inferInsert> = {};
+      if (typeof input.isServiceAccount === "boolean") updates.isServiceAccount = input.isServiceAccount;
+      if (typeof input.isDemo === "boolean") updates.isDemo = input.isDemo;
+      if (typeof input.isFixture === "boolean") updates.isFixture = input.isFixture;
+      if (typeof input.isQuarantined === "boolean") updates.isQuarantined = input.isQuarantined;
+      if (typeof input.isActive === "boolean") updates.isActive = input.isActive;
+
+      const [updated] = await tx.update(users).set(updates)
+        .where(and(eq(users.id, id), eq(users.organizationId, organizationId)))
+        .returning();
+      const next = this._lifecycleSnapshot(updated);
+
+      // Skip audit row if no field actually changed (idempotent re-apply).
+      const changed = (Object.keys(updates) as Array<keyof typeof updates>).some((k) => (prev as any)[k] !== (next as any)[k]);
+      if (changed) {
+        await tx.insert(userLifecycleEvents).values({
+          userId: id,
+          orgId: organizationId,
+          actorUserId,
+          event: "classify",
+          reason: input.reason ?? null,
+          prevState: prev,
+          nextState: next,
+          source: "admin_route",
+        });
+      }
+      return updated;
+    });
+  }
+
+  async deactivateUser(id: string, organizationId: string, actorUserId: string, reason: string): Promise<{ user: User; changed: boolean }> {
+    if (!reason || !reason.trim()) throw new UserLifecycleError("GUARD", "reason is required for deactivate");
+    return db.transaction(async (tx) => {
+      const [target] = await tx.select().from(users)
+        .where(and(eq(users.id, id), eq(users.organizationId, organizationId)))
+        .for("update");
+      if (!target) throw new UserLifecycleError("NOT_FOUND", "User not found in organization");
+      if (target.isActive === false) {
+        // Already inactive — idempotent no-op, no audit row.
+        return { user: target, changed: false };
+      }
+      const prev = this._lifecycleSnapshot(target);
+      const [updated] = await tx.update(users).set({
+        isActive: false,
+        deactivatedAt: new Date(),
+        deactivatedBy: actorUserId,
+        deactivationReason: reason,
+      }).where(and(eq(users.id, id), eq(users.organizationId, organizationId))).returning();
+      await tx.insert(userLifecycleEvents).values({
+        userId: id,
+        orgId: organizationId,
+        actorUserId,
+        event: "deactivate",
+        reason,
+        prevState: prev,
+        nextState: this._lifecycleSnapshot(updated),
+        source: "admin_route",
+      });
+      return { user: updated, changed: true };
+    });
+  }
+
+  async reactivateUser(id: string, organizationId: string, actorUserId: string, reason?: string): Promise<{ user: User; changed: boolean }> {
+    return db.transaction(async (tx) => {
+      const [target] = await tx.select().from(users)
+        .where(and(eq(users.id, id), eq(users.organizationId, organizationId)))
+        .for("update");
+      if (!target) throw new UserLifecycleError("NOT_FOUND", "User not found in organization");
+      if (target.deletedAt != null) {
+        throw new UserLifecycleError("CONFLICT", "Cannot reactivate a soft-deleted user — restore first");
+      }
+      if (target.isServiceAccount) {
+        throw new UserLifecycleError("GUARD", "Cannot reactivate a service account — clear isServiceAccount via classify first");
+      }
+      if (target.isActive === true) {
+        return { user: target, changed: false };
+      }
+      const prev = this._lifecycleSnapshot(target);
+      const [updated] = await tx.update(users).set({
+        isActive: true,
+        deactivatedAt: null,
+        deactivatedBy: null,
+        deactivationReason: null,
+      }).where(and(eq(users.id, id), eq(users.organizationId, organizationId))).returning();
+      await tx.insert(userLifecycleEvents).values({
+        userId: id,
+        orgId: organizationId,
+        actorUserId,
+        event: "reactivate",
+        reason: reason ?? null,
+        prevState: prev,
+        nextState: this._lifecycleSnapshot(updated),
+        source: "admin_route",
+      });
+      return { user: updated, changed: true };
+    });
+  }
+
+  async softDeleteUser(id: string, organizationId: string, actorUserId: string, reason: string, opts?: { force?: boolean }): Promise<User> {
+    if (!reason || !reason.trim()) throw new UserLifecycleError("GUARD", "reason is required for soft-delete");
+    if (id === actorUserId) throw new UserLifecycleError("GUARD", "Cannot soft-delete yourself");
+
+    // Pre-flight impact check happens OUTSIDE the tx (read-only counts).
+    // The tx then re-locks the row to write — we accept a tiny race where
+    // ownership could land between the check and the write, because the
+    // row stays soft-deleted (recoverable) and the audit row preserves
+    // the force flag for forensics.
+    if (!opts?.force) {
+      const impact = await this.getUserLifecycleImpact(id, organizationId);
+      if (impact.softDeleteWouldBlock) {
+        throw new UserLifecycleError("IMPACT_BLOCK", "User has active ownership; pass force=true to override", { impact });
+      }
+    }
+
+    return db.transaction(async (tx) => {
+      const [target] = await tx.select().from(users)
+        .where(and(eq(users.id, id), eq(users.organizationId, organizationId)))
+        .for("update");
+      if (!target) throw new UserLifecycleError("NOT_FOUND", "User not found in organization");
+      const prev = this._lifecycleSnapshot(target);
+      const now = new Date();
+      const [updated] = await tx.update(users).set({
+        deletedAt: target.deletedAt ?? now,
+        deletedBy: target.deletedBy ?? actorUserId,
+        deleteReason: target.deleteReason ?? reason,
+        // Soft-delete also forces the row inactive — a tombstoned row
+        // is never simultaneously "live".
+        isActive: false,
+      }).where(and(eq(users.id, id), eq(users.organizationId, organizationId))).returning();
+
+      const next = this._lifecycleSnapshot(updated);
+      // Idempotent re-apply: if the row was already soft-deleted AND
+      // already inactive, skip the audit row (no observable state
+      // change). Otherwise audit it.
+      const stateChanged = (["deletedAt", "isActive"] as const).some((k) => (prev as any)[k] !== (next as any)[k]);
+      if (stateChanged) {
+        await tx.insert(userLifecycleEvents).values({
+          userId: id,
+          orgId: organizationId,
+          actorUserId,
+          event: "soft_delete",
+          reason,
+          prevState: prev,
+          nextState: { ...next, force: opts?.force === true },
+          source: "admin_route",
+        });
+      }
+      return updated;
+    });
+  }
+
+  async restoreUser(id: string, organizationId: string, actorUserId: string, reason?: string): Promise<{ user: User; changed: boolean }> {
+    return db.transaction(async (tx) => {
+      const [target] = await tx.select().from(users)
+        .where(and(eq(users.id, id), eq(users.organizationId, organizationId)))
+        .for("update");
+      if (!target) throw new UserLifecycleError("NOT_FOUND", "User not found in organization");
+      if (target.deletedAt == null) {
+        return { user: target, changed: false };
+      }
+      const prev = this._lifecycleSnapshot(target);
+      // Restore clears the tombstone but DOES NOT set is_active=true.
+      // The user lands in the "inactive" state; an admin must call
+      // reactivate explicitly to make them a live employee again.
+      const [updated] = await tx.update(users).set({
+        deletedAt: null,
+        deletedBy: null,
+        deleteReason: null,
+      }).where(and(eq(users.id, id), eq(users.organizationId, organizationId))).returning();
+      await tx.insert(userLifecycleEvents).values({
+        userId: id,
+        orgId: organizationId,
+        actorUserId,
+        event: "restore",
+        reason: reason ?? null,
+        prevState: prev,
+        nextState: this._lifecycleSnapshot(updated),
+        source: "admin_route",
+      });
+      return { user: updated, changed: true };
+    });
+  }
+
+  async listUserLifecycleEvents(id: string, organizationId: string, limit = 100): Promise<Array<UserLifecycleEvent & { actorName: string | null }>> {
+    // Org-scope guard: confirm target lives in this org before exposing
+    // its audit log. Returns [] (not 404) if the caller passes a foreign
+    // id — the route layer maps that to 404.
+    const [target] = await db.select({ id: users.id }).from(users)
+      .where(and(eq(users.id, id), eq(users.organizationId, organizationId)));
+    if (!target) throw new UserLifecycleError("NOT_FOUND", "User not found in organization");
+
+    const rows = await db.select({
+      id: userLifecycleEvents.id,
+      userId: userLifecycleEvents.userId,
+      orgId: userLifecycleEvents.orgId,
+      actorUserId: userLifecycleEvents.actorUserId,
+      event: userLifecycleEvents.event,
+      reason: userLifecycleEvents.reason,
+      prevState: userLifecycleEvents.prevState,
+      nextState: userLifecycleEvents.nextState,
+      source: userLifecycleEvents.source,
+      createdAt: userLifecycleEvents.createdAt,
+      actorName: users.name,
+    })
+      .from(userLifecycleEvents)
+      .leftJoin(users, eq(users.id, userLifecycleEvents.actorUserId))
+      .where(and(eq(userLifecycleEvents.userId, id), eq(userLifecycleEvents.orgId, organizationId)))
+      .orderBy(desc(userLifecycleEvents.createdAt))
+      .limit(Math.max(1, Math.min(500, limit)));
+    return rows;
+  }
+
+  async getUserLifecycleImpact(id: string, organizationId: string): Promise<UserLifecycleImpact> {
+    // Confirm target is in caller's org before counting (prevents
+    // cross-org count probing).
+    const [target] = await db.select().from(users)
+      .where(and(eq(users.id, id), eq(users.organizationId, organizationId)));
+    if (!target) throw new UserLifecycleError("NOT_FOUND", "User not found in organization");
+
+    const { crmOpportunities, contextNotes } = await import("@shared/schema");
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+
+    const [
+      [assignedToRow],
+      [ownerRepRow],
+      [salesPersonRow],
+      [openOppsRow],
+      [openTasksRow],
+      [recentTpRow],
+      [lastNoteRow],
+      [lastTpRow],
+      [lastTaskRow],
+    ] = await Promise.all([
+      db.select({ n: sql<number>`count(*)::int` }).from(companies)
+        .where(and(eq(companies.organizationId, organizationId), eq(companies.assignedTo, id))),
+      db.select({ n: sql<number>`count(*)::int` }).from(companies)
+        .where(and(eq(companies.organizationId, organizationId), eq(companies.ownerRepId, id))),
+      db.select({ n: sql<number>`count(*)::int` }).from(companies)
+        .where(and(eq(companies.organizationId, organizationId), eq(companies.salesPersonId, id))),
+      db.select({ n: sql<number>`count(*)::int` }).from(crmOpportunities)
+        .where(and(
+          eq(crmOpportunities.organizationId, organizationId),
+          eq(crmOpportunities.createdById, id),
+          isNull(crmOpportunities.outcome),
+        )),
+      db.select({ n: sql<number>`count(*)::int` }).from(tasks)
+        .where(and(eq(tasks.assignedTo, id), sql`${tasks.status} NOT IN ('done','closed','cancelled','completed')`)),
+      db.select({ n: sql<number>`count(*)::int` }).from(touchpoints)
+        .where(and(eq(touchpoints.loggedById, id), gte(touchpoints.date, thirtyDaysAgo))),
+      // last_activity_at backfill: max(context_notes.createdAt) by author
+      db.select({ ts: sql<Date | null>`max(${contextNotes.createdAt})` }).from(contextNotes)
+        .where(eq(contextNotes.authorId, id)),
+      db.select({ ts: sql<string | null>`max(${touchpoints.createdAt})` }).from(touchpoints)
+        .where(eq(touchpoints.loggedById, id)),
+      db.select({ ts: sql<string | null>`max(${tasks.createdAt})` }).from(tasks)
+        .where(eq(tasks.assignedTo, id)),
+    ]);
+
+    const candidates: Array<string | null> = [
+      target.lastActivityAt instanceof Date ? target.lastActivityAt.toISOString() : (target.lastActivityAt ?? null),
+      lastNoteRow?.ts ? (lastNoteRow.ts instanceof Date ? lastNoteRow.ts.toISOString() : String(lastNoteRow.ts)) : null,
+      lastTpRow?.ts ?? null,
+      lastTaskRow?.ts ?? null,
+    ];
+    const lastActivityAt = candidates
+      .filter((s): s is string => !!s)
+      .sort()
+      .pop() ?? null;
+
+    const ownedCompaniesAssignedTo = assignedToRow?.n ?? 0;
+    const ownedCompaniesOwnerRep = ownerRepRow?.n ?? 0;
+    const ownedCompaniesSalesPerson = salesPersonRow?.n ?? 0;
+    const openOpportunities = openOppsRow?.n ?? 0;
+    const openTasks = openTasksRow?.n ?? 0;
+    const recentTouchpoints = recentTpRow?.n ?? 0;
+
+    return {
+      ownedCompaniesAssignedTo,
+      ownedCompaniesOwnerRep,
+      ownedCompaniesSalesPerson,
+      openOpportunities,
+      openTasks,
+      recentTouchpoints,
+      lastActivityAt,
+      softDeleteWouldBlock:
+        ownedCompaniesAssignedTo + ownedCompaniesOwnerRep + ownedCompaniesSalesPerson + openOpportunities + openTasks > 0,
+    };
   }
 
   async getTeamMemberIds(userId: string, organizationId: string): Promise<string[]> {
@@ -2745,6 +3220,22 @@ export class DatabaseStorage implements IStorage {
       clerkUserId: users.clerkUserId,
       valueiqLandingDisabled: users.valueiqLandingDisabled,
       defaultToTodayQueue: users.defaultToTodayQueue,
+      // Task #1126 Phase 1 — lifecycle columns added to keep this
+      // explicit projection assignable to Omit<User, 'password'>.
+      // No filter is applied here yet; that's a Phase 1 step-4 change.
+      isActive: users.isActive,
+      isServiceAccount: users.isServiceAccount,
+      isDemo: users.isDemo,
+      isFixture: users.isFixture,
+      isQuarantined: users.isQuarantined,
+      deletedAt: users.deletedAt,
+      deletedBy: users.deletedBy,
+      deleteReason: users.deleteReason,
+      deactivatedAt: users.deactivatedAt,
+      deactivatedBy: users.deactivatedBy,
+      deactivationReason: users.deactivationReason,
+      userSource: users.userSource,
+      lastActivityAt: users.lastActivityAt,
     }).from(users).where(
       and(
         eq(users.organizationId, organizationId),

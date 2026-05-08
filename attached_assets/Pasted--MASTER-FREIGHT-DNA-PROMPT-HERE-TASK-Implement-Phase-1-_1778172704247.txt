@@ -1,0 +1,105 @@
+[MASTER FREIGHT-DNA PROMPT HERE]
+
+TASK: Implement Phase 1 — user lifecycle schema + helpers ONLY (no behavior changes yet).
+
+Goal (one sentence):
+Add the new lifecycle columns and helper predicates for users, plus the lifecycle events table, without changing any existing behavior or filters.
+
+Context:
+- Freight-DNA is a freight brokerage operating system, not a generic SaaS app.
+- Protect rep trust first. Prefer reversible changes, soft-delete over hard delete, and audit logging over silent state changes.
+- Phase 0 Roster Health is hardened and read-only (signals + reviewPriority + explicit “heuristic audit” banner).
+- We now have a Phase 1 lifecycle design for users, with:
+  - additive columns on users (is_active, is_service_account, is_demo, is_fixture, is_quarantined, deleted_at, deleted_by, delete_reason, deactivated_at, deactivated_by, deactivation_reason, user_source, last_activity_at)
+  - a new user_lifecycle_events table
+  - a helper module server/lib/userLifecycle.ts
+  - a later plan to change DELETE /api/users/:id into soft-delete
+  - a later plan for admin lifecycle routes and read-side filters
+
+Important policy refinement (must be honored):
+- Real employee leaving → Deactivate (is_active=false), not soft-delete.
+- Suspicious or undecided record → Quarantine (is_quarantined=true).
+- Shared inbox / automation identity → Service account (is_service_account=true).
+- Demo / seed / fixture identity → Demo/fixture (is_demo / is_fixture=true).
+- Clear junk / erroneous duplicate → Soft-delete (deleted_at set) after admin confirmation.
+- Soft-delete is reserved for junk/erroneous cases, not normal offboarding.
+
+Scope (WHAT TO IMPLEMENT NOW):
+1) Schema additions (DDL only, no backfill, no behavior changes)
+- Add the following columns to users (names and types exactly as designed):
+  - is_active boolean NOT NULL DEFAULT true
+  - is_service_account boolean NOT NULL DEFAULT false
+  - is_demo boolean NOT NULL DEFAULT false
+  - is_fixture boolean NOT NULL DEFAULT false
+  - is_quarantined boolean NOT NULL DEFAULT false
+  - deleted_at timestamptz NULL
+  - deleted_by varchar NULL REFERENCES users(id)
+  - delete_reason text NULL
+  - deactivated_at timestamptz NULL
+  - deactivated_by varchar NULL REFERENCES users(id)
+  - deactivation_reason text NULL
+  - user_source text NULL
+  - last_activity_at timestamptz NULL
+- Create the user_lifecycle_events table:
+
+  user_lifecycle_events (
+    id            uuid pk,
+    user_id       varchar fk users.id,
+    org_id        varchar fk organizations.id,
+    actor_user_id varchar fk users.id,
+    event         text,
+    reason        text,
+    prev_state    jsonb,
+    next_state    jsonb,
+    source        text,
+    created_at    timestamptz default now()
+  )
+
+- Add the partial indexes, but ONLY for future use (no code should depend on them yet):
+  - users_active_idx ON users (organization_id) WHERE deleted_at IS NULL AND is_active = true
+  - users_deleted_idx ON users (deleted_at) WHERE deleted_at IS NOT NULL
+  - users_service_idx ON users (organization_id) WHERE is_service_account = true
+  - users_quarantined_idx ON users (organization_id) WHERE is_quarantined = true
+
+2) Helper module (pure functions, not wired anywhere yet)
+- Create server/lib/userLifecycle.ts with pure helpers that read a user row and return booleans:
+  - canInteractivelyLogIn(user)
+  - isVisibleAssignee(user)
+  - isCountedForSeat(user)
+  - isVisibleInDefaultRoster(user)
+  - formatUserAttribution(user)  // returns a label like "Jane Doe (inactive)" / "(service)" / "(deleted)"
+- These helpers must encode the policy refinement above, but DO NOT change any call sites yet.
+- Add unit tests for each helper in a new test file, but do not import the helpers in production code.
+
+3) Shared schema types
+- Update shared/schema.ts (or equivalent) to include the new user fields and align the Zod/TS types for User with the new columns.
+- Ensure the new fields are optional in TS where appropriate so existing code compiles without needing immediate changes.
+
+Constraints (WHAT NOT TO DO IN THIS TASK):
+- Do NOT change behavior of:
+  - server/auth.ts (login, RBAC, visibility)
+  - GET /api/users or any other route
+  - DELETE /api/users/:id (must remain hard delete for now)
+  - user CRUD, impersonation, or bulk import
+  - leaderboards, goals, dashboard, customer quotes, NBA, Webex/M365, Stripe, or contact jobs
+- Do NOT backfill any of the new flags yet (no user_source or last_activity_at backfill in this task).
+- Do NOT add the admin lifecycle routes or wire any UI actions yet.
+- Do NOT change Roster Health behavior beyond any minimal type updates required.
+
+Output format (return exactly this):
+1. Summary (2–3 sentences) of what you implemented in this task.
+2. Files created (with paths) and a one-line description for each.
+3. Files modified (with paths) and a short description of the changes.
+4. The final DDL for:
+   - users table additions
+   - user_lifecycle_events table
+   - the new partial indexes
+5. The TypeScript signature of each helper in server/lib/userLifecycle.ts plus one example invocation.
+6. A short note on how you verified that behavior is unchanged (e.g., typecheck + existing tests that cover user login and basic roster reads).
+7. A list of explicit TODOs for the next Phase 1 steps (backfill script, soft-delete refactor, admin lifecycle routes, read-side filter migration).
+
+Stop rule:
+- Plan the changes and show the file-level plan first.
+- Do NOT run any destructive migrations.
+- Do NOT wire the helpers into any existing routes or services yet.
+- If you find a place where behavior would need to change to compile, stop and report instead of patching it.

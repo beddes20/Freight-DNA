@@ -1,0 +1,119 @@
+[MASTER FREIGHT-DNA PROMPT HERE]
+
+TASK: Implement the approved Roster Health hardening plan for /admin/users.
+
+Context:
+- Freight-DNA is a freight brokerage operating system, not a generic SaaS app.
+- Protect rep trust first. Read-only investigation before cleanup. Hide/quarantine/label before delete.
+- A non-destructive, admin-only “Roster Health” panel already exists on /admin/users.
+- It classifies users into six heuristic buckets:
+  - likely_junk
+  - likely_demo_fixture
+  - likely_service_shared_inbox
+  - real_active
+  - real_inactive
+  - uncertain
+- It is backed by:
+  - server/lib/userRosterClassification.ts
+  - server/routes/adminRosterHealth.ts
+  - server/routes.ts
+  - client/src/pages/admin-users.tsx
+  - docs/user-roster-classification.md
+- All current behavior is SELECT-only: no schema changes, no user writes, no changes to GET /api/users, impersonation, bulk import, or DELETE /api/users/:id.
+- You proposed a hardening plan (signals, reviewPriority, banner, sort order, and documentation) and I am now approving that plan as-is.
+
+Goal:
+- Make the Roster Health panel a clearly heuristic, trustworthy audit overlay.
+- Do NOT change any user records, schemas, default roster behavior, or delete semantics.
+- Implement only the approved hardening steps described below.
+
+Scope (what you SHOULD change now):
+1) Classifier (server/lib/userRosterClassification.ts)
+- Extend the per-user output to include:
+  - signals: string[]   // every matched rule
+  - reviewPriority: number   // 0..100, higher = more clearly cleanup-worthy
+- Keep the existing reason string for back-compat, but compute signals as a catalogue like:
+  - username:test-pattern
+  - username:plus-test
+  - username:mailinator
+  - local-part:noreply
+  - local-part:shared-inbox
+  - seed:wq.test
+  - org:demo-slug
+  - org:demo-name
+  - zero-activity
+  - last-login:never
+  - last-login:>180d
+  - created:<7d-no-activity
+  - no-manager
+  - no-fin-rep-id
+- Implement reviewPriority as described:
+  - +30 per cleanup-positive signal
+  - −40 if any non-zero activity
+  - −20 if a recent login
+- Do NOT change how buckets are assigned; this task is additive only.
+
+2) Bucket sorting (server/lib/userRosterClassification.ts → getRosterHealth)
+- For cleanup buckets (likely_junk, likely_demo_fixture, likely_service_shared_inbox, uncertain):
+  - Sort examples by: reviewPriority DESC, totalActivity ASC, createdAt DESC.
+- For real_active / real_inactive:
+  - Keep the current “most active first” sorting by total activity.
+
+3) Routes and CSV (server/routes/adminRosterHealth.ts)
+- Include signals[] in the JSON response for each example row.
+- Add a new “signals” column to the CSV export (semicolon-joined, quoted).
+- Leave all auth and scoping behavior exactly as-is:
+  - requireAuth + isAdmin() + viewer.organizationId scoping.
+- Add a short guard comment noting that these routes are admin-only and org-scoped, and must remain so.
+
+4) UI changes (client/src/pages/admin-users.tsx, RosterHealthPanel)
+- Add a prominent banner inside the panel header:
+  - “Heuristic audit only — not saved user state. Buckets here must not drive delete, deactivate, or hide actions.”
+- Replace the single “Reason” cell with a “Signals” cell:
+  - Render each tag in signals[] as a small, neutral/outline badge.
+- Add a small per-bucket subtitle that explains the sort order, e.g.:
+  - For cleanup buckets: “Sorted: most clearly cleanup-worthy first.”
+  - For real buckets: “Sorted: most active first.”
+- If not already present, add:
+  - data-testid="panel-roster-health" on the panel container.
+  - data-testid={signal-${tag}-${userId}} or equivalent on each signal badge, so tests can assert presence of specific signals.
+
+5) Documentation (docs/user-roster-classification.md)
+- Update the rules table to mirror the new signals catalogue and naming.
+- Add a “Known blind spots” section explicitly calling out:
+  - No per-rep freight activity from users.financialRepId yet.
+  - Demo-org detection is based on slug/name regex.
+  - Soft-deleted users do not exist yet on users, so deletion state is unknown.
+- Add a “Phase 0 contract” section that states:
+  - Roster Health is read-only.
+  - Buckets MUST NOT gate roster visibility, RBAC, or destructive actions.
+  - No delete/deactivate/hide logic may be driven directly from these heuristics.
+- Add a “Phase 1 schema proposal” section summarizing the proposed additive columns on users:
+  - is_active, deleted_at, deleted_by, delete_reason
+  - is_demo, is_fixture, is_service_account, is_quarantined
+  - user_source, last_activity_at
+  - And the intended mapping from buckets → flags (as you described).
+
+Constraints (what you MUST NOT change in this task):
+- No schema changes. Do not alter the users table or any other table.
+- No write paths. Classifier and routes must stay SELECT-only.
+- No changes to:
+  - GET /api/users
+  - user create/update/delete behavior
+  - DELETE /api/users/:id (remains hard delete for now)
+  - impersonation flows
+  - bulk import behavior
+- Do not hide users from the main User Management roster based on these heuristics.
+- Do not alter RBAC, team scoping, or any financial attribution logic.
+
+Output format:
+1. Brief summary of actual edits per file.
+2. Before/after for the classifier type and an example JSON row including signals and reviewPriority.
+3. Before/after for a single bucket’s sort order (pseudo-code is fine).
+4. Screenshot or JSX snippet of the updated panel header and Signals column.
+5. Extract of the new/updated sections in docs/user-roster-classification.md.
+6. List of any TODOs or follow-ups you recommend for Phase 1 (no implementation, just notes).
+
+Stop rule:
+- Implement only the scoped changes above.
+- If you discover anything that would require schema changes or write-path changes, stop and report instead of coding it.

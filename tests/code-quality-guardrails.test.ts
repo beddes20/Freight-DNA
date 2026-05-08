@@ -6740,3 +6740,409 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     );
   }
 })();
+
+// ─────────────────────────────────────────────────────────────────────────
+// Section 1126.3: User lifecycle write paths (Task #1126 Phase 1 Step 3)
+// The admin-only lifecycle endpoints (deactivate / reactivate / soft-delete
+// / restore / classify) are the ONLY production code paths that may write
+// the lifecycle columns or insert into user_lifecycle_events. New writers
+// MUST go through `storage.<method>` (transactional, row-locked, audited)
+// — direct `db.update(users).set({ isActive… })` or raw inserts into
+// userLifecycleEvents are forbidden in production code. Tests are the only
+// allow-listed callers.
+// ─────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1126.3: User lifecycle write paths ─────────────────\n");
+
+  const ROUTE_FILE = "server/routes/adminUserLifecycle.ts";
+  assert(
+    `${ROUTE_FILE} — exists`,
+    fs.existsSync(path.join(ROOT, ROUTE_FILE)),
+    "adminUserLifecycle.ts must exist (created in Phase 1 Step 3)",
+  );
+
+  if (fs.existsSync(path.join(ROOT, ROUTE_FILE))) {
+    const routeSrc = readFile(ROUTE_FILE);
+    // Every route must sit behind requireAuth + isAdmin. Pin the imports
+    // and at least one isAdmin/requireAuth call per declared route.
+    assert(
+      `${ROUTE_FILE} — imports requireAuth + isAdmin`,
+      /from\s+["']\.\.\/auth["']/.test(routeSrc) && routeSrc.includes("requireAuth") &&
+        /from\s+["']\.\.\/lib\/roles["']/.test(routeSrc) && routeSrc.includes("isAdmin"),
+      "lifecycle routes must import requireAuth from ../auth and isAdmin from ../lib/roles",
+    );
+    const routeDecls = (routeSrc.match(/app\.(post|get)\(\s*["']\/api\/admin\/users\/:id\//g) || []).length;
+    assert(
+      `${ROUTE_FILE} — declares the 7 expected admin lifecycle routes`,
+      routeDecls === 7,
+      `expected 7 admin user-lifecycle routes (5 POST + 2 GET); found ${routeDecls}. Adding/removing one means updating Section 1126.3.`,
+    );
+    const requireAuthCalls = (routeSrc.match(/requireAuth/g) || []).length;
+    assert(
+      `${ROUTE_FILE} — requireAuth gate is present on every route`,
+      // 1 import + 7 route registrations
+      requireAuthCalls >= 8,
+      `expected requireAuth on every route registration; found ${requireAuthCalls} occurrences (need >= 8: 1 import + 7 routes).`,
+    );
+    const isAdminCalls = (routeSrc.match(/isAdmin\(/g) || []).length;
+    assert(
+      `${ROUTE_FILE} — isAdmin(viewer) gate is present on every route`,
+      isAdminCalls >= 7,
+      `expected isAdmin() to be called inside every route handler; found ${isAdminCalls} call sites (need >= 7).`,
+    );
+    // Required write-method invocations on storage. Pinning the names
+    // prevents a refactor from silently dropping a route's storage call.
+    for (const method of [
+      "storage.classifyUser",
+      "storage.deactivateUser",
+      "storage.reactivateUser",
+      "storage.softDeleteUser",
+      "storage.restoreUser",
+      "storage.listUserLifecycleEvents",
+      "storage.getUserLifecycleImpact",
+    ]) {
+      assert(
+        `${ROUTE_FILE} — calls ${method}`,
+        routeSrc.includes(method),
+        `${method} must be invoked from the matching admin route`,
+      );
+    }
+    // The route file must not reach into the users table directly — all
+    // writes flow through the storage layer.
+    assert(
+      `${ROUTE_FILE} — does not contain raw db.update(users)/db.insert(users)/db.delete(users)`,
+      !/db\.(update|insert|delete)\(\s*users\b/.test(routeSrc),
+      "lifecycle routes must call storage methods, not write to the users table directly",
+    );
+  }
+
+  // routes.ts must register the new routes.
+  const routesIndex = readFile("server/routes.ts");
+  assert(
+    "server/routes.ts — registers registerAdminUserLifecycleRoutes",
+    routesIndex.includes("registerAdminUserLifecycleRoutes(app)") &&
+      /from\s+["']\.\/routes\/adminUserLifecycle["']/.test(routesIndex),
+    "server/routes.ts must import + call registerAdminUserLifecycleRoutes(app)",
+  );
+
+  // routes.ts is allowed to keep its existing `db.delete(...)` callsites
+  // (e.g. the legacy DELETE /api/users/:id), but it must NOT introduce a
+  // new `db.delete(users)` callsite as part of this task — soft-delete is
+  // the only sanctioned lifecycle removal path.
+  const newUsersDeletes = (routesIndex.match(/db\.delete\(\s*users\b/g) || []).length;
+  assert(
+    "server/routes.ts — does not call db.delete(users) (legacy delete lives in storage.deleteUser only)",
+    newUsersDeletes === 0,
+    "routes.ts may not write db.delete(users); legacy hard-delete still flows through storage.deleteUser, soft-delete flows through storage.softDeleteUser",
+  );
+
+  // userLifecycleEvents must only be inserted from storage.ts. Any other
+  // file inserting into the audit table would bypass the row-lock + prev/next
+  // snapshot contract.
+  const ALLOWED_INSERT_FILES = new Set<string>([
+    "server/storage.ts",
+  ]);
+  function walk(dir: string, out: string[]) {
+    for (const ent of fs.readdirSync(path.join(ROOT, dir), { withFileTypes: true })) {
+      if (ent.name === "node_modules" || ent.name === ".git" || ent.name.startsWith(".")) continue;
+      const rel = path.posix.join(dir, ent.name);
+      if (ent.isDirectory()) walk(rel, out);
+      else if (ent.isFile() && (rel.endsWith(".ts") || rel.endsWith(".tsx"))) out.push(rel);
+    }
+  }
+  const tsFiles: string[] = [];
+  walk("server", tsFiles);
+  walk("shared", tsFiles);
+  for (const f of tsFiles) {
+    const src = readFile(f);
+    if (/\.insert\(\s*userLifecycleEvents\b/.test(src) && !ALLOWED_INSERT_FILES.has(f)) {
+      assert(
+        `${f} — does not insert into userLifecycleEvents directly`,
+        false,
+        `${f} writes user_lifecycle_events directly. The audit table must only be written by storage methods inside a transaction with the matching users-row update.`,
+      );
+    }
+  }
+
+  // The helper module is intentionally adopted in production only by
+  // sites that have been audited as part of a Phase 1 Step-4 sub-step.
+  // Step 4a-API does not need to import the helper directly (the route
+  // layer applies the same predicates inline via the storage filter
+  // contract), so this allow-list is empty today. Add a file here ONLY
+  // when wiring it is the explicit topic of a Step-4 sub-step.
+  const ALLOWED_HELPER_IMPORTERS = new Set<string>([]);
+  const helperImportRegex = /from\s+["']\.\.?\/lib\/userLifecycle["']|from\s+["']\.\.?\/\.\.\/lib\/userLifecycle["']/;
+  const stragglers: string[] = [];
+  for (const f of tsFiles) {
+    if (f === "server/lib/userLifecycle.ts") continue;
+    // Tests are allowed to import the helper directly — only production
+    // code is gated by the Step-4 sub-steps.
+    if (f.includes("/__tests__/") || f.endsWith(".test.ts") || f.endsWith(".test.tsx")) continue;
+    if (helperImportRegex.test(readFile(f)) && !ALLOWED_HELPER_IMPORTERS.has(f)) {
+      stragglers.push(f);
+    }
+  }
+  assert(
+    "server/lib/userLifecycle.ts — production importers all on the Step-4 allow-list",
+    stragglers.length === 0,
+    `userLifecycle helper is imported by ${stragglers.length} unallowed production file(s): ${stragglers.join(", ")}. Adding a new importer is a Phase 1 Step-4 sub-step — extend ALLOWED_HELPER_IMPORTERS in this section after the read-side change is reviewed.`,
+  );
+})();
+
+// ─────────────────────────────────────────────────────────────────────────
+// Section 1126.4: GET /api/users default lifecycle filter contract
+// (Task #1126 Phase 1 Step 4a-API)
+// The default `GET /api/users` roster must hide deleted, deactivated,
+// service, quarantined, demo, and fixture rows. Five include flags
+// opt back in; four are admin-only and must be silently dropped (NOT
+// 403'd) for non-admin callers so shared client code can speculatively
+// pass them. `is_fixture` has NO opt-in by design.
+// ─────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1126.4: GET /api/users default lifecycle filter ─────────\n");
+
+  const storageSrc = readFile("server/storage.ts");
+  // Storage exports the filter type so route handlers and tests share it.
+  assert(
+    "storage.ts — exports UserListFilter interface",
+    /export\s+interface\s+UserListFilter\s*\{/.test(storageSrc),
+    "UserListFilter must be exported from server/storage.ts so the route layer + future helpers share one shape",
+  );
+  // The five include flags. Pinning the names means a rename has to
+  // walk through this section and the route handler together.
+  for (const flag of [
+    "includeInactive",
+    "includeDeleted",
+    "includeServiceAccounts",
+    "includeQuarantined",
+    "includeDemo",
+  ]) {
+    assert(
+      `UserListFilter — declares ${flag}`,
+      new RegExp(`${flag}\\?:\\s*boolean`).test(storageSrc),
+      `UserListFilter must declare optional boolean ${flag}`,
+    );
+  }
+  // is_fixture has NO knob, by contract.
+  assert(
+    "UserListFilter — does NOT declare an includeFixture knob (fixture rows always excluded)",
+    !/includeFixture\?:/.test(storageSrc),
+    "is_fixture rows must remain excluded under every flag combination — do not add includeFixture",
+  );
+
+  // The getUsers impl must enforce the contract: filter param is optional,
+  // each opt-in maps to a clause, fixture is always excluded.
+  assert(
+    "storage.ts — getUsers signature accepts optional UserListFilter",
+    /async\s+getUsers\(\s*organizationId:\s*string,\s*filter\?:\s*UserListFilter\s*\)/.test(storageSrc),
+    "getUsers must take an optional UserListFilter as its second argument (legacy callers omit it)",
+  );
+  // The five inclusion clauses must be present in the impl body.
+  const getUsersImpl = (() => {
+    const start = storageSrc.indexOf("async getUsers(organizationId: string, filter?: UserListFilter)");
+    if (start < 0) return "";
+    // Take a generous slice — guaranteed to include the function body.
+    return storageSrc.slice(start, start + 3000);
+  })();
+  for (const [flag, clauseProbe] of [
+    ["includeDeleted", "isNull(users.deletedAt)"],
+    ["includeInactive", "users.isActive"],
+    ["includeServiceAccounts", "users.isServiceAccount"],
+    ["includeQuarantined", "users.isQuarantined"],
+    ["includeDemo", "users.isDemo"],
+  ] as Array<[string, string]>) {
+    assert(
+      `getUsers impl — branches on filter.${flag} and excludes the matching column when not set`,
+      getUsersImpl.includes(`filter.${flag}`) && getUsersImpl.includes(clauseProbe),
+      `getUsers must check filter.${flag} and apply the matching ${clauseProbe} exclusion`,
+    );
+  }
+  assert(
+    "getUsers impl — always excludes is_fixture rows (no opt-in)",
+    /users\.isFixture/.test(getUsersImpl) && /COALESCE\(\$\{users\.isFixture\},\s*false\)\s*=\s*false/.test(getUsersImpl),
+    "getUsers must unconditionally append `COALESCE(is_fixture, false) = false` to the WHERE",
+  );
+
+  // Route handler contract.
+  const routesSrc = readFile("server/routes.ts");
+  // Locate the GET /api/users handler block deterministically.
+  const routeMatch = routesSrc.match(/app\.get\(\s*["']\/api\/users["'][\s\S]*?\n  \}\);/);
+  assert(
+    "routes.ts — GET /api/users handler block resolved",
+    !!routeMatch,
+    "could not locate the GET /api/users handler block — Section 1126.4 cannot validate the contract",
+  );
+  if (routeMatch) {
+    const handler = routeMatch[0];
+    // All five flags must be parsed from req.query.
+    for (const flag of [
+      "includeInactive",
+      "includeDeleted",
+      "includeServiceAccounts",
+      "includeQuarantined",
+      "includeDemo",
+    ]) {
+      assert(
+        `GET /api/users — parses req.query.${flag}`,
+        new RegExp(`req\\.query\\.${flag}\\s*===\\s*["']true["']`).test(handler),
+        `handler must parse ${flag} from req.query as the literal string "true"`,
+      );
+    }
+    // Admin gate on the four sensitive flags. We require each sensitive
+    // flag to be AND-gated against the admin predicate before being
+    // forwarded to storage.
+    assert(
+      "GET /api/users — admin-gates includeDeleted/Service/Quarantined/Demo before forwarding to storage",
+      /callerIsAdmin\s*&&\s*requested\.includeDeleted/.test(handler) &&
+        /callerIsAdmin\s*&&\s*requested\.includeServiceAccounts/.test(handler) &&
+        /callerIsAdmin\s*&&\s*requested\.includeQuarantined/.test(handler) &&
+        /callerIsAdmin\s*&&\s*requested\.includeDemo/.test(handler),
+      "all four sensitive include flags must be AND-ed against an admin predicate (callerIsAdmin) before being passed to storage.getUsers",
+    );
+    // includeInactive is the only flag NOT gated — explicitly assert
+    // that it is forwarded unconditionally.
+    assert(
+      "GET /api/users — includeInactive is NOT admin-gated (any caller may opt in)",
+      /includeInactive:\s*requested\.includeInactive\s*,/.test(handler),
+      "includeInactive must be forwarded as-is — gating it would silently hide deactivated employees from non-admin managers reviewing offboarding handoffs",
+    );
+    // Non-admin must NOT 403 for sensitive flags. We pin the debug-log
+    // signature and require that no `if (...) ... 403` branch within
+    // 200 chars references one of the four sensitive flags. Looking at
+    // a small forward window after a sensitive-flag mention catches the
+    // realistic pattern (`if (requested.includeDeleted && !callerIsAdmin) return res.status(403)…`)
+    // without false-positiving on the unrelated role-gate 403 above.
+    assert(
+      "GET /api/users — non-admin sensitive flags are silently ignored, not 403'd",
+      /\[users-roster\]\s+non-admin/.test(handler),
+      "handler must emit a `[users-roster] non-admin` debug log when an admin-gated flag is silently dropped",
+    );
+    for (const flag of ["includeDeleted", "includeServiceAccounts", "includeQuarantined", "includeDemo"]) {
+      const rx = new RegExp(`requested\\.${flag}[^]{0,200}res\\.status\\(403`);
+      assert(
+        `GET /api/users — does not 403 on requested.${flag}`,
+        !rx.test(handler),
+        `non-admin callers passing ?${flag}=true must be silently dropped, not rejected with 403`,
+      );
+    }
+    // Storage call now passes the filter.
+    assert(
+      "GET /api/users — forwards filter to storage.getUsers",
+      /storage\.getUsers\(\s*req\.session\.organizationId!\s*,\s*filter\s*\)/.test(handler),
+      "the route must call storage.getUsers(orgId, filter) — passing only orgId would re-introduce the legacy 'every user' behavior",
+    );
+  }
+
+  // Internal callers MUST keep using the no-arg overload so their
+  // financial-uploads scoping does not silently lose service / inactive
+  // accounts. If that becomes desired later, it is a separate sub-step.
+  const internalSlice = (() => {
+    // Anchor on the impl signature (not the comment / interface) so the
+    // slice actually contains both internal `this.getUsers(...)` callers.
+    const i = storageSrc.indexOf("async getFinancialUploadsForOrg(organizationId: string)");
+    return i < 0 ? "" : storageSrc.slice(i, i + 4000);
+  })();
+  assert(
+    "storage.ts — getFinancialUploads* still calls getUsers(orgId) with no filter",
+    /this\.getUsers\(organizationId\)/.test(internalSlice) &&
+      !/this\.getUsers\(organizationId,\s*\{/.test(internalSlice),
+    "internal financial-uploads scoping must keep the legacy no-arg getUsers behavior so historical uploads from now-deactivated reps stay visible",
+  );
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1126.4-UI: admin-users.tsx lifecycle tabs (Phase 1 Step 4a-UI)
+// Pins the tab → include-flag mapping, the admin-only gate, the per-tab
+// queryKey URLs, and confirms `includeDemo` stays out of scope for this step.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1126.4-UI: admin-users.tsx lifecycle tabs ─────────\n");
+  const adminUsersPath = "client/src/pages/admin-users.tsx";
+  let src = "";
+  try {
+    src = fs.readFileSync(adminUsersPath, "utf8");
+  } catch {
+    assert("admin-users.tsx — file exists", false, "expected client/src/pages/admin-users.tsx to exist");
+    return;
+  }
+  assert("admin-users.tsx — file exists", true);
+
+  // LifecycleTab type pin
+  assert(
+    "admin-users.tsx — declares LifecycleTab union",
+    /type\s+LifecycleTab\s*=\s*"active"\s*\|\s*"inactive"\s*\|\s*"service"\s*\|\s*"quarantined"\s*\|\s*"deleted"/.test(src),
+    "LifecycleTab must be the exact 5-member union — adding a 6th tab requires an explicit guardrail update",
+  );
+
+  // URL builder pin: each tab maps to the documented include flag.
+  const builderRx = /function\s+buildUsersUrlForLifecycle[^]+?\n\}/;
+  const builderMatch = src.match(builderRx);
+  assert(
+    "admin-users.tsx — buildUsersUrlForLifecycle resolved",
+    !!builderMatch,
+    "could not locate buildUsersUrlForLifecycle — guardrail cannot validate the tab→flag mapping",
+  );
+  if (builderMatch) {
+    const b = builderMatch[0];
+    assert("buildUsersUrlForLifecycle — active → /api/users (no flags)", /case\s+"active":\s*\n\s*return\s+"\/api\/users";/.test(b));
+    assert("buildUsersUrlForLifecycle — inactive → includeInactive=true", /case\s+"inactive":\s*\n\s*return\s+"\/api\/users\?includeInactive=true";/.test(b));
+    assert("buildUsersUrlForLifecycle — service → includeServiceAccounts=true", /case\s+"service":\s*\n\s*return\s+"\/api\/users\?includeServiceAccounts=true";/.test(b));
+    assert("buildUsersUrlForLifecycle — quarantined → includeQuarantined=true", /case\s+"quarantined":\s*\n\s*return\s+"\/api\/users\?includeQuarantined=true";/.test(b));
+    assert("buildUsersUrlForLifecycle — deleted → includeDeleted=true", /case\s+"deleted":\s*\n\s*return\s+"\/api\/users\?includeDeleted=true";/.test(b));
+    // includeDemo is OUT OF SCOPE for 4a-UI.
+    assert(
+      "buildUsersUrlForLifecycle — does NOT wire includeDemo (out of scope for 4a-UI)",
+      !/includeDemo/.test(b),
+      "Step 4a-UI explicitly excludes includeDemo; wiring it requires a separate task + guardrail update",
+    );
+  }
+
+  // Admin-only gate: usersUrl branches on isAdmin.
+  assert(
+    "admin-users.tsx — usersUrl is admin-gated",
+    /const\s+usersUrl\s*=\s*isAdmin\s*\?\s*buildUsersUrlForLifecycle\(lifecycleTab\)\s*:\s*"\/api\/users"/.test(src),
+    "non-admins must always see the cleaned default roster — never let the lifecycle tab leak into their URL",
+  );
+
+  // useQuery wires usersUrl as the cache key.
+  assert(
+    "admin-users.tsx — useQuery uses usersUrl as queryKey",
+    /useQuery<SafeUser\[\]>\(\{\s*queryKey:\s*\[usersUrl\]\s*\}\)/.test(src),
+    "the user-roster query must key off usersUrl so each tab gets its own cache slice",
+  );
+
+  // Lifecycle strip is admin-only.
+  assert(
+    "admin-users.tsx — lifecycle strip is gated behind isAdmin",
+    /\{isAdmin\s*&&\s*\(\s*\n[^]*?data-testid="lifecycle-tabs"/.test(src),
+    "the lifecycle tab strip must only render for admins",
+  );
+
+  // Per-tab testids exist. The strip emits `data-testid={`lifecycle-tab-${key}`}`,
+  // so we pin both the dynamic JSX form and the LIFECYCLE_TABS keys that feed it.
+  assert(
+    "admin-users.tsx — emits dynamic data-testid={`lifecycle-tab-${key}`}",
+    /data-testid=\{`lifecycle-tab-\$\{key\}`\}/.test(src),
+    "the lifecycle strip must use the `lifecycle-tab-<key>` testid pattern so e2e selectors stay stable",
+  );
+  for (const k of ["active", "inactive", "service", "quarantined", "deleted"]) {
+    assert(
+      `admin-users.tsx — LIFECYCLE_TABS includes the "${k}" tab`,
+      new RegExp(`key:\\s*"${k}"`).test(src),
+      `LIFECYCLE_TABS must contain the "${k}" tab so its testid renders`,
+    );
+  }
+
+  // Mutation invalidation widened so writes refresh every cached tab.
+  assert(
+    "admin-users.tsx — defines invalidateAllUsersQueries predicate",
+    /function\s+invalidateAllUsersQueries\s*\(\s*\)\s*\{[^]+?predicate:[^]+?startsWith\("\/api\/users"\)/.test(src),
+    "writes must invalidate every cached lifecycle slice, not just the bare /api/users key",
+  );
+  // None of the three legacy bare-key invalidations should remain.
+  assert(
+    "admin-users.tsx — no remaining bare invalidateQueries({ queryKey: ['/api/users'] })",
+    !/invalidateQueries\(\s*\{\s*queryKey:\s*\["\/api\/users"\]\s*\}\s*\)/.test(src),
+    "legacy bare-key invalidation would only refresh the Active tab — must use invalidateAllUsersQueries() instead",
+  );
+})();

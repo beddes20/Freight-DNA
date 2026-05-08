@@ -1,0 +1,71 @@
+[MASTER FREIGHT-DNA PROMPT HERE]
+
+TASK: Implement Phase 1 Step 4a-UI — lifecycle-aware filters for the User Management tab (admin-users UI only).
+
+Context:
+- Freight-DNA is a freight brokerage operating system, not a generic SaaS app.
+- Protect rep trust first. Prefer clarity over cleverness. Hide / quarantine / label before delete.
+- Completed so far:
+  - Phase 0: Roster Health panel is read-only, heuristic, admin-only, and clearly labeled as such.
+  - Phase 1 Step 1: users table has lifecycle columns + user_lifecycle_events; schema is additive.
+  - Phase 1 Step 2: observational backfill tool exists for user_source and last_activity_at.
+  - Phase 1 Step 3: lifecycle write paths exist (storage methods + /api/admin/users/:id/* routes + audit events).
+  - Phase 1 Step 4a-API: GET /api/users now has a lifecycle-aware default roster filter and admin-only include flags:
+    - Default excludes: deleted, inactive, service, quarantined, demo, fixture.
+    - Flags: includeInactive, includeDeleted, includeServiceAccounts, includeQuarantined, includeDemo (admin-only except includeInactive).
+    - Response shape unchanged.
+
+Goal:
+Make the User Management tab (client/src/pages/admin-users.tsx) the one, explicit place where admins can see and toggle between:
+- Active humans (default)
+- Inactive users
+- Service accounts
+- Quarantined users
+- Deleted users
+…by threading the new include flags into its queryKey, without touching any other UI or route.
+
+What I need you to do:
+
+1) Plan first (no code until you outline).
+- Identify exactly where admin-users.tsx currently fetches /api/users and how it scopes:
+  - current queryKey and fetch call
+  - any existing filters/tabs/segments
+- Confirm that no other UI file will be touched in this task.
+
+2) Design the tab/filter behavior in admin-users.tsx.
+- Define the tabs or filters we should have for admins:
+  - “Active” (default) → no include flags (uses new default roster)
+  - “Inactive” → includeInactive=true
+  - “Service accounts” → includeServiceAccounts=true
+  - “Quarantined” → includeQuarantined=true
+  - “Deleted” → includeDeleted=true
+- Ensure:
+  - Only admins see the extra tabs (non-admins don’t see “Service / Deleted / Quarantined”).
+  - Active tab never passes includeDeleted/includeServiceAccounts/includeQuarantined/includeDemo.
+  - Tabs combine sensibly with existing search / pagination behavior.
+
+3) Implement the queryKey + fetch wiring.
+- In client/src/pages/admin-users.tsx:
+  - Thread a simple “lifecycleFilter” (enum or string) into the queryKey for the /api/users fetch.
+  - Map each tab to the correct include flags in the GET /api/users query string.
+  - Do NOT change any other call sites; only admin-users.tsx should pass include flags.
+- No changes to any other component that uses ["/api/users"].
+
+4) Guardrails and tests (lightweight for this step).
+- If there is an existing test or story for admin-users, extend it minimally to assert that:
+  - Active tab calls /api/users with no lifecycle include flags.
+  - Service tab calls /api/users?includeServiceAccounts=true.
+- If not, add a TODO note in docs/user-roster-classification.md that this should be tested later.
+
+5) Docs / replit.md
+- In docs/user-roster-classification.md:
+  - Add a short note under Phase 1 Step 4a-UI describing the admin tabs and which include flags they use.
+- In replit.md:
+  - Add a Gotcha bullet: “Only the User Management tab uses lifecycle include flags. All other tabs rely on the default roster until later phases.”
+
+Constraints:
+- Do NOT touch:
+  - server/auth.ts
+  - /api/users (API behavior is already set in 4a-API)
+  - /api/users/search, /api/users/sales
+  - 

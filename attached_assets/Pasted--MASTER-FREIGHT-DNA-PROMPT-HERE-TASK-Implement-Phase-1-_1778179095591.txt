@@ -1,0 +1,135 @@
+[MASTER FREIGHT-DNA PROMPT HERE]
+
+TASK: Implement Phase 1 Step 4a-UI — lifecycle-aware filters on the User Management tab (admin-users.tsx only).
+
+Context:
+- Freight-DNA is a freight brokerage operating system, not a generic SaaS app.
+- Protect rep trust first. Prefer clarity over cleverness. Hide / quarantine / label before delete.
+- Backend work completed:
+  - Phase 0: Roster Health is read-only, heuristic, admin-only, clearly labeled as “audit only.”
+  - Phase 1 Step 1: users has lifecycle columns; user_lifecycle_events exists.
+  - Phase 1 Step 2: observational backfill for user_source and last_activity_at.
+  - Phase 1 Step 3: lifecycle write paths + admin routes + audit events.
+  - Phase 1 Step 4a-API: GET /api/users now has a lifecycle-aware default roster:
+    - Default WHERE (plus org filter):
+      - deleted_at IS NULL
+      - COALESCE(is_active, true) = true
+      - COALESCE(is_service_account, false) = false
+      - COALESCE(is_quarantined, false) = false
+      - COALESCE(is_demo, false) = false
+      - COALESCE(is_fixture, false) = false
+    - Query flags:
+      - includeInactive=true        → also return is_active=false rows           (any caller)
+      - includeDeleted=true         → also return deleted_at IS NOT NULL rows    (admin only)
+      - includeServiceAccounts=true → also return is_service_account=true rows   (admin only)
+      - includeQuarantined=true     → also return is_quarantined=true rows       (admin only)
+      - includeDemo=true            → also return is_demo=true rows              (admin only)
+    - Response shape unchanged (Omit<User, "password">[]).
+- 4a-API is live; no UI uses the new flags yet.
+- We want ONLY the User Management tab (client/src/pages/admin-users.tsx) to start using these flags so admins can see Active / Inactive / Service / Quarantined / Deleted users intentionally.
+
+Goal:
+Wire lifecycle-aware tabs/filters into admin-users.tsx, using the new GET /api/users flags, without touching any other component or route.
+
+Plan first — no code until you outline it.
+
+1) Diagnosis (current admin-users.tsx behavior)
+- Find and summarize:
+  - How admin-users.tsx currently calls /api/users:
+    - current queryKey
+    - fetch function
+    - any existing search/pagination/filter logic
+  - How it currently segments the list (if at all) into “all users” vs other slices.
+- Confirm that:
+  - No other component in the codebase currently passes include* flags to /api/users.
+  - Admin-users.tsx is the only file you will modify in this task.
+
+2) Tab/filter design
+Design the lifecycle tabs/filters for admins (names + which flags they set):
+
+For admins:
+- “Active” (default)
+  - No lifecycle include flags.
+  - Uses the default roster filter (active, non-deleted, non-service, non-quarantined, non-demo, non-fixture).
+- “Inactive”
+  - includeInactive=true
+- “Service accounts”
+  - includeServiceAccounts=true
+- “Quarantined”
+  - includeQuarantined=true
+- “Deleted”
+  - includeDeleted=true
+
+Visibility rules:
+- These lifecycle tabs exist only for admins (currentUser.isAdmin() or equivalent).
+- Non-admins:
+  - See whatever existing view they have today (team/manager-scoped list).
+  - Do NOT see the lifecycle tab strip.
+  - Do NOT pass lifecycle include flags.
+
+Write out:
+- The exact enum/string you’ll use for lifecycle tab state (e.g., "active" | "inactive" | "service" | "quarantined" | "deleted").
+- A small mapping table from tab → include flags so we can review before code.
+
+3) QueryKey + fetch wiring (lifecycle-aware)
+Implement the lifecycle filter plumbing ONLY in admin-users.tsx:
+
+- Thread the lifecycle tab state into the React query key for /api/users.
+  - For example: ["users", { lifecycle: "active", search, pagination, ... }]
+- When building the /api/users URL:
+  - Map lifecycle state to the correct query flags:
+    - active → no include* flags
+    - inactive → includeInactive=true
+    - service → includeServiceAccounts=true
+    - quarantined → includeQuarantined=true
+    - deleted → includeDeleted=true
+  - Do NOT send includeDemo or any fixture-related flag in this step.
+- Ensure:
+  - Existing search and pagination behavior continues to work across tabs.
+  - No new consumers of /api/users are introduced; we’re only changing how admin-users.tsx calls it.
+
+4) UI changes (minimal but clear)
+- Add a lifecycle tab strip or segmented control in admin-users.tsx:
+  - Only visible to admins.
+  - Clearly labeled; e.g., “Active”, “Inactive”, “Service accounts”, “Quarantined”, “Deleted”.
+- Highlight:
+  - Which tab is default on load (Active).
+  - How tab changes trigger refetch with the new queryKey.
+- No visual changes for non-admins.
+
+5) Guardrails / tests / docs (lightweight)
+- If there is any existing test harness or story for admin-users, extend it minimally:
+  - Assert that Active tab triggers /api/users without include* flags.
+  - Assert that, for example, Service tab triggers /api/users?includeServiceAccounts=true.
+- If not, add a TODO in docs/user-roster-classification.md for “admin-users lifecycle tabs should be tested for correct include flags.”
+- Update docs and replit.md:
+  - docs/user-roster-classification.md:
+    - Add “Phase 1 Step 4a-UI” with a short description of the lifecycle tabs and which flags each uses.
+  - replit.md:
+    - Add a Gotcha: “Only the User Management tab currently uses lifecycle include flags on /api/users. All other tabs rely on the default roster.”
+
+Constraints (must NOT change in this task):
+- Do NOT touch:
+  - server/auth.ts
+  - server/routes.ts (GET /api/users behavior is already set)
+  - /api/users/search
+  - /api/users/sales
+  - any React component besides client/src/pages/admin-users.tsx
+- Do NOT wire lifecycle flags into any other route or component.
+- Do NOT change response shapes.
+- Do NOT adjust lifecycle write routes or storage methods.
+- No schema changes, no new jobs, no new API endpoints.
+
+Output format:
+1. Diagnosis: how admin-users.tsx currently fetches and displays users.
+2. Tab/filter design: tab names, visibility rules, and mapping from each tab to include flags.
+3. Files and lines you will edit, with a brief description for each.
+4. The final fetch/queryKey code snippet you implemented in admin-users.tsx.
+5. Any tests or TODOs you added.
+6. Confirmation that:
+   - No other components or routes were changed.
+   - Lifecycle write semantics and the GET /api/users filter contract were not touched.
+
+Stop rule:
+- Plan and show the lifecycle tab → flag mapping and the queryKey strategy before editing code.
+- If you discover that other components must change to keep admin-users.tsx compiling, stop and report instead of expanding scope.

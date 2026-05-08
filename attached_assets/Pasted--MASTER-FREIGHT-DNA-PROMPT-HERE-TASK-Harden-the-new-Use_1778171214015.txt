@@ -1,0 +1,63 @@
+[MASTER FREIGHT-DNA PROMPT HERE]
+
+TASK: Harden the new User Roster Health panel and prepare for Phase 1 user lifecycle flags.
+
+Context:
+- Freight-DNA is a freight brokerage operating system, not a generic SaaS app.
+- The /admin/users page now has a non-destructive, admin-only “Roster Health” panel that classifies users into six heuristic buckets:
+  - likely_junk
+  - likely_demo_fixture
+  - likely_service_shared_inbox
+  - real_active
+  - real_inactive
+  - uncertain
+- The panel is read-only, org-scoped, and powered by server/lib/userRosterClassification.ts with a 60s in-process cache.
+- Activity signals currently come from: context_notes, touchpoints, companies.assignedTo, crm_opportunities.createdById, tasks.assignedTo.
+- Freight financial attribution via users.financialRepId is NOT yet wired into this panel (freight_daily_upload_fact is out of scope for now).
+- No schema changes, no user writes, and no changes to GET /api/users or DELETE /api/users/:id have landed yet.
+
+Goal:
+- Make the Roster Health panel a trustworthy, clearly-heuristic audit surface.
+- Do NOT change any user records yet.
+- Set us up for a future Phase 1 where we add durable flags (is_demo, is_service_account, is_active, is_quarantined, deleted_at, etc.).
+
+I need:
+1. A read-only hardening pass on the current implementation:
+   - Add clear “Heuristic audit only — not saved user state” copy in the UI.
+   - For each example row, surface the matched rules / signals that put the user in that bucket (email pattern, seed source, zero activity, last login, etc.).
+   - Sort example rows inside each bucket by review priority (most clearly problematic first).
+   - Ensure both /api/admin/roster-health and /api/admin/roster-health/export remain admin-only and org-scoped.
+
+2. A short design note (in docs/user-roster-classification.md or a new doc) that:
+   - Documents the current heuristics per bucket.
+   - Calls out known blind spots (especially freight/financial activity).
+   - States explicitly that these buckets must NOT be used yet for delete/deactivate/hide logic.
+
+3. A proposed Phase 1 schema and lifecycle model for users (no code changes yet):
+   - Suggested fields/flags (e.g., is_demo, is_fixture, is_service_account, is_quarantined, is_active, deleted_at, delete_reason, user_source).
+   - How the six buckets would eventually map into these durable flags (one-to-many where necessary).
+   - Risks and cross-tab dependencies (org chart, RBAC, team performance, financials, integrations).
+
+Constraints:
+- Default to read-only investigation and UI copy/behavior changes only.
+- Do NOT add or modify any database columns in this task.
+- Do NOT change user CRUD behavior, impersonation, or bulk import.
+- Do NOT hide users from the main roster yet based on these heuristics.
+- Keep the blast radius limited to:
+  - server/lib/userRosterClassification.ts
+  - server/routes/adminRosterHealth.ts
+  - server/routes.ts
+  - client/src/pages/admin-users.tsx
+  - docs/user-roster-classification.md
+
+Output format:
+1. Brief diagnosis of the current Roster Health behavior.
+2. What is trustworthy vs not trustworthy in the current panel.
+3. Files and functions you will touch.
+4. A small, ordered implementation plan for this hardening pass.
+5. The exact edits you propose (summarized), plus any TODOs for Phase 1.
+6. Anything you explicitly chose NOT to change in this task and why.
+
+Stop rule:
+- Plan the work and show the file-level change plan first.
+- Do not modify code until I approve the plan.

@@ -1,0 +1,78 @@
+[MASTER FREIGHT-DNA PROMPT HERE]
+
+TASK: Implement Phase 1 Step 2 — observational user lifecycle backfill only.
+
+Goal:
+Populate user_source and last_activity_at safely, with dry-run-first behavior, zero user lifecycle flag writes, and zero behavior changes anywhere else.
+
+Context:
+- Phase 1 Step 1 is complete:
+  - users now has additive lifecycle columns
+  - user_lifecycle_events exists
+  - server/lib/userLifecycle.ts exists but is not wired into production code
+- No behavior changes have been made yet to auth, /api/users, delete semantics, bulk import, impersonation, leaderboards, quotes, NBA, Stripe, Webex, or contact jobs.
+- We want better user observability before any lifecycle write paths or read filters land.
+
+Scope:
+1. Create an idempotent backfill tool:
+   - tools/backfill-user-lifecycle.ts
+2. The tool may ONLY populate:
+   - user_source
+   - last_activity_at
+3. The tool must:
+   - support dry-run by default
+   - support an explicit apply mode
+   - be org-safe and log counts by org
+   - output before/after counts and example rows
+4. user_source should be best-effort from existing evidence:
+   - clerk
+   - seed
+   - bulk-import
+   - email-derived
+   - manual-admin
+   - unknown
+5. last_activity_at should be derived as the max of available real activity signals:
+   - context_notes
+   - touchpoints
+   - companies ownership/assignment
+   - crm_opportunities created/owned
+   - tasks assigned
+   - any currently available freight-via-ownership signal if already used in Roster Health
+6. Do NOT write or infer:
+   - is_active
+   - is_service_account
+   - is_demo
+   - is_fixture
+   - is_quarantined
+   - deleted_at / deleted_by / delete_reason
+   - deactivated_at / deactivated_by / deactivation_reason
+7. Do NOT wire last_activity_at into any runtime route or UI yet.
+8. Add a short doc note explaining the derivation logic and known blind spots.
+
+Files to touch:
+- tools/backfill-user-lifecycle.ts (new)
+- docs/user-lifecycle-phase-1.md or docs/user-roster-classification.md (small additive note only)
+- shared/schema.ts only if required for script compile/runtime support
+
+Files NOT to touch:
+- server/auth.ts
+- server/routes.ts
+- server/storage.ts
+- client/src/pages/admin-users.tsx
+- any user CRUD or roster routes
+- DELETE /api/users/:id
+- bulk import
+- impersonation
+- dashboards / goals / quotes / NBA / Stripe / Webex / contact jobs
+
+Output format:
+1. File-level plan before coding.
+2. Exact derivation logic for user_source and last_activity_at.
+3. Dry-run sample output shape.
+4. Files created / modified.
+5. Validation performed.
+6. Explicit confirmation that no lifecycle flags or behavior were changed.
+
+Stop rule:
+- If deriving user_source requires guesswork beyond documented evidence, classify as unknown rather than inventing provenance.
+- If any part of the implementation would require changing runtime behavior, stop and report instead of coding it.

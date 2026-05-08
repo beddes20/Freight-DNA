@@ -1,0 +1,174 @@
+[MASTER FREIGHT-DNA PROMPT HERE]
+
+TASK: Implement Phase 1 Step 3 — user lifecycle write paths (storage + admin routes), with NO read-side behavior changes.
+
+Use the plan below as the source of truth. Do not widen scope.
+
+Phase 1 Step 3 — Lifecycle Write Paths: Plan
+
+1. Diagnosis
+Phase 1 has the schema (13 lifecycle columns + user_lifecycle_events table) and pure helpers (server/lib/userLifecycle.ts), but no way to actually move a user between states. Today the only mutator is DELETE /api/users/:id (hard-delete-style) and PATCH /api/users/:id (general profile patch). Neither writes audit events. Roster Health (Phase 0) shows admins what's wrong but gives them no button to act.
+
+What's missing for Step 3:
+- Five write methods on IStorage that flip lifecycle columns + emit a user_lifecycle_events row in the same transaction.
+- Five admin-only POST routes + one read route for the audit log + one read route for blast-radius preview.
+- Server-side rules that encode the policy in the helper module's docstrings (real-employee-leaving → deactivate; junk → soft-delete; restore → returns to inactive; service accounts can't be flipped interactive by accident).
+- No call-site reads change. Auth, GET /api/users, dashboards, goals, quotes, NBA, Webex, Stripe, contact jobs, assignee dropdowns — none of them yet read these flags. That migration is Step 4+ and explicitly out of scope here.
+
+2. What is trustworthy vs not trustworthy
+
+Trustworthy now (won't shift under us):
+- users lifecycle columns + their defaults (Step 1, migration 0017).
+- user_lifecycle_events table (Step 1, migration 0018) — inserts only, append-only contract.
+- server/lib/userLifecycle.ts predicates — pure, unit-tested, not yet read anywhere, so writes can land before reads catch up without behavior drift.
+- server/lib/userRosterClassification.ts — read-only classifier for the impact-preview endpoint.
+- requireAuth + isAdmin (server/lib/roles.ts) + getCurrentUser (server/auth.ts) — same admin gate pattern used by adminRosterHealth.ts and adminEmailDerivedCompanies.ts.
+- Existing searchUsers projection (Step 1 + Step 2 fix) — already includes the new lifecycle columns.
+
+Not trustworthy / untouched on purpose:
+- DELETE /api/users/:id (server/routes.ts:1158) — currently does a hard delete with cascade-style cleanup; leave it alone for this step. Rewriting it to soft-delete is a routing-contract change that downstream UIs depend on.
+- PATCH /api/users/:id (server/routes.ts:1052) — general profile patch; lifecycle fields are already omitted from insertUserSchema so the patch path can't accidentally flip them. Don't widen it.
+- POST /api/users and POST /api/users/bulk-import — these create rows that will land with default flags (isActive=true, others=false). That's intentional; classification happens after-the-fact via the new admin route.
+- Default GET /api/users filter — explicitly NOT changed in this step (the helper docstring at isVisibleInDefaultRoster already calls this out).
+- users.id PK type is varchar and existing routes like /api/users/:id use param-as-string — admin lifecycle routes will follow the same pattern.
+
+3. Files / tables / jobs / routes involved
+
+Tables (no schema changes):
+- users — write to: is_active, is_service_account, is_demo, is_fixture, is_quarantined, deleted_at, deleted_by, delete_reason, deactivated_at, deactivated_by, deactivation_reason. Never write user_source / last_activity_at here (those belong to the backfill tool / Step 4 wiring).
+- user_lifecycle_events — append-only insert per write method.
+
+New file:
+- server/routes/adminUserLifecycle.ts — registers the 7 routes, mirrors the structure of adminRosterHealth.ts. Exports registerAdminUserLifecycleRoutes(app).
+
+Modified files (small additions only):
+- server/storage.ts
+  - Extend IStorage interface with 7 method signatures (5 write + 1 audit list + 1 impact preview).
+  - Implement them on DatabaseStorage near the existing user methods. Each write uses a single drizzle transaction (db.transaction) that does the UPDATE + INSERT into user_lifecycle_events. The impact-preview method is read-only; reuses already-imported tables (companies, tasks, crmOpportunities, contextNotes, touchpoints).
+
+- server/routes.ts
+  - Two-line change: import registerAdminUserLifecycleRoutes and call it next to the existing registerAdminRosterHealthRoutes(app).
+
+- tests/code-quality-guardrails.test.ts
+  - Add a small Section 1126.3 that asserts:
+    - server/routes.ts does NOT introduce any new db.delete(users) callsite (soft-delete-only contract for the new path).
+    - server/routes.ts and the new lifecycle file are the only modules that call the new storage write methods.
+    - The new admin routes all sit behind requireAuth + isAdmin checks.
+
+- replit.md
+  - Append one bullet to the Gotchas section pointing at the new contract (audit-row-per-write, restore→inactive rule, service-account guard).
+
+- docs/user-roster-classification.md
+  - Append a short "Phase 1 step 3" section listing the new routes + the policy rules.
+
+Files explicitly NOT touched:
+- server/auth.ts, server/routes.ts user CRUD handlers (POST/PATCH/DELETE /api/users/:id, bulk-import), client/src/pages/admin-users.tsx (no UI in this step), server/storage.ts getUsers* read paths, dashboards, goals, quotes, NBA, Webex, Stripe, contact-jobs writers, mailbox/email pipeline.
+
+Routes (all admin-only, org-scoped, return 403 when caller isn't isAdmin or target is in another org):
+
+- POST /api/admin/users/:id/classify
+  Body: { isServiceAccount?, isDemo?, isFixture?, isQuarantined?, reason? }
+  Effect: Sets non-destructive classification flags. Refuses to set isServiceAccount=true on a row with isActive=true && deletedAt IS NULL && isDemo=false && isFixture=false unless body also sets isActive:false (the "service account never silently consumes a seat" guard).
+  Audit event: classify
+
+- POST /api/admin/users/:id/deactivate
+  Body: { reason } (required)
+  Effect: isActive=false, deactivatedAt=now(), deactivatedBy=actor, deactivationReason=reason. No-op (idempotent 200) if already inactive — emits no duplicate audit row.
+  Audit event: deactivate
+
+- POST /api/admin/users/:id/reactivate
+  Body: { reason? }
+  Effect: isActive=true, clears deactivatedAt/By/Reason. Refuses if deletedAt IS NOT NULL (must restore first). Refuses if isServiceAccount=true (admin must explicitly clear that flag via classify first).
+  Audit event: reactivate
+
+- POST /api/admin/users/:id/soft-delete
+  Body: { reason } (required)
+  Effect: deletedAt=now(), deletedBy=actor, deleteReason=reason, also isActive=false. Mirrors the contacts soft-delete pattern from Task #1093. Refuses if user has any open downstream ownership (companies.assignedTo / ownerRepId / salesPersonId, opportunities, tasks); the impact endpoint is the pre-flight check. Override via ?force=true query param (still audited, the audit row carries force: true in nextState).
+  Audit event: soft_delete
+
+- POST /api/admin/users/:id/restore
+  Body: { reason? }
+  Effect: Clears deletedAt/By/Reason. Per the rule, leaves isActive=false — restore returns the user to inactive, not active. Caller must follow up with reactivate if they want a live employee.
+  Audit event: restore
+
+- GET /api/admin/users/:id/lifecycle-events
+  Body: —
+  Effect: Org-scoped read of user_lifecycle_events for that user, newest first, with actor name resolution.
+
+- GET /api/admin/users/:id/impact
+  Body: —
+  Effect: Read-only blast radius: counts of owned companies (assignedTo + ownerRepId + salesPersonId), open opportunities, open tasks, last 30 days of touchpoints, and lastActivityAt. Returns the softDeleteWouldBlock: boolean flag the soft-delete route checks.
+
+4. Recommended plan in small steps
+
+Each step compiles independently and leaves the system in a working state.
+
+T001 — Storage layer (no routes wired yet).
+- Add 7 method signatures to IStorage: classifyUser, deactivateUser, reactivateUser, softDeleteUser, restoreUser, listUserLifecycleEvents, getUserLifecycleImpact.
+- Implement each on DatabaseStorage. Every write uses db.transaction: SELECT … FOR UPDATE to snapshot prevState → UPDATE users → INSERT user_lifecycle_events. Org-scope guard built into each method (caller passes actor.organizationId; method 404s if target not in same org).
+- Encode the policy rules from §3 (service-account guard, restore→inactive, soft-delete impact check + force flag).
+- Files: server/storage.ts only.
+
+T002 — Admin routes file + register.
+- Create server/routes/adminUserLifecycle.ts with all 7 routes, each guarded by requireAuth + isAdmin + same-org check.
+- Each POST route validates body with a zod schema (per-route), maps storage exceptions to clean 400/403/404/409 responses (409 for soft-delete impact-block).
+- Each route logs [user-lifecycle] <event> id=… actor=… reason=… — same log pattern other admin routes use.
+- Wire into server/routes.ts next to registerAdminRosterHealthRoutes(app).
+- Files: server/routes/adminUserLifecycle.ts (new), server/routes.ts (2-line import + call).
+
+T003 — Guardrails + docs + replit.md gotcha.
+- Add Section 1126.3 to tests/code-quality-guardrails.test.ts enforcing the contracts called out in §3.
+- Append "Phase 1 step 3 — admin write paths" to docs/user-roster-classification.md with the route table and rules.
+- Append a short Gotcha entry to replit.md so future tasks know: lifecycle writes go through the storage methods (never raw db.update(users) for these columns), and every write must produce an audit row.
+
+T004 — Verification.
+- npm run check (typecheck) must pass.
+- tests/code-quality-guardrails.test.ts must pass with new Section 1126.3.
+- A small ad-hoc smoke run via the existing tools/-style script pattern: dry-run an admin POST against the dev DB and assert one user_lifecycle_events row was inserted, target user flags flipped, and a re-run is idempotent. (Inline in the task; no new test file needed unless we explicitly ask for one.)
+
+5. Risks / dependencies
+
+Risk → Mitigation:
+- Someone wires these routes into the admin UI before reads are migrated, then admins flip isActive=false on a real rep and nothing changes (because dropdowns/dashboards still show them).
+  → Keep the admin UI work explicitly out of this task. Replit gotcha entry says "Step 3 ships server-side; UI lands in Step 5 alongside read-side filter migration."
+
+- Soft-delete cascading away ownership invisibly.
+  → Don't cascade. soft-delete only flips the user row; ownership rebinding is Step 4+ (a deliberate, separate migration). The impact endpoint surfaces the count so admins know what they're leaving orphaned. The ?force=true override puts the burden on the admin and audits it.
+
+- DELETE /api/users/:id continues to hard-delete and bypass the audit log.
+  → Out of scope. Replacing that route's contract is Step 6 (after read-side migration) — flagged in §7.
+
+- Bulk-import creates rows pre-classified incorrectly.
+  → Out of scope; bulk-import already uses default flags. Admins can post-classify via the new route.
+
+- Race between two admins acting on the same row.
+  → SELECT … FOR UPDATE inside the transaction serializes. Idempotent no-ops keep the audit log clean.
+
+- Service account silently regaining interactive login.
+  → reactivateUser refuses when isServiceAccount=true; admin must classify {isServiceAccount: false} first. Encoded in storage method, not just route layer, so future callers can't bypass it.
+
+- Org-scope bypass (admin in org A acting on user in org B).
+  → Storage method takes actor.organizationId and 404s on mismatch — checked at storage layer, not just route layer.
+
+- Audit row missing on partial failure.
+  → UPDATE + INSERT in the same db.transaction; either both land or neither does.
+
+- Phase 1 step 1 migration (0017/0018) hasn't been pushed in some environment.
+  → Storage methods will fail loudly on missing column — acceptable; production deploy already requires drizzle-kit push:pg.
+
+6. Safe first action
+
+T001 — implement the 7 storage methods + their IStorage signatures in server/storage.ts, with no route wiring yet. This compiles cleanly, changes zero runtime behavior (nothing calls them), gives us a chance to verify the transaction shape and audit-row contract via a small ad-hoc invocation, and is the minimal unit a future code review can scrutinize in isolation. If approval is needed before continuing to T002 (routes), the work pauses cleanly here.
+
+7. What should not be republished yet
+
+- Read-side filter migration. No call site should start reading the new flags in this task. GET /api/users, auth's "can this user log in" check, assignee dropdowns, leaderboards, Stripe seat counting, and the contact-jobs gate all stay on their current behavior. That's Step 4+.
+- DELETE /api/users/:id rewrite. Don't change the existing route's contract to soft-delete in this step. The new soft-delete lives on a separate path. Migrating the legacy DELETE → soft-delete is Step 6, after reads have been migrated to honor deletedAt.
+- Admin UI buttons. No client/src/pages/admin-users.tsx changes. UI lands in Step 5 alongside the read-side filter switch so admins immediately see the effect of their actions.
+- Auto-classification jobs. No scheduler that auto-flips users based on lastActivityAt or roster heuristics. Every flag flip in Step 3 is a deliberate admin action with a reason.
+- Cross-org or platform-admin variants. Only same-org admin can act; no super-admin escape hatch.
+
+STOP RULE:
+- Implement T001 first (storage methods). If you hit design/compile issues that suggest the storage contract needs to change, stop and report instead of continuing.
+- Only then implement T002 and T003 as written.
+- Do NOT change any read-side behavior in this task.

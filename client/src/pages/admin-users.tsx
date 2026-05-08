@@ -182,6 +182,260 @@ function CareerProgressionSection() {
 
 type SafeUser = Omit<User, "password">;
 
+type RosterBucket =
+  | "likely_junk"
+  | "likely_demo_fixture"
+  | "likely_service_shared_inbox"
+  | "real_active"
+  | "real_inactive"
+  | "uncertain";
+
+interface RosterClassifiedUser {
+  id: string;
+  name: string;
+  username: string;
+  role: string;
+  organizationId: string;
+  managerId: string | null;
+  financialRepId: string | null;
+  lastLoginAt: string | null;
+  createdAt: string | null;
+  bucket: RosterBucket;
+  reason: string;
+  signals: string[];
+  reviewPriority: number;
+  activity: {
+    notesAuthored: number;
+    touchpoints: number;
+    ownedCompanies: number;
+    ownedOpportunities: number;
+    assignedTasks: number;
+    freightRows: number;
+  };
+  totalActivity: number;
+}
+
+const ROSTER_CLEANUP_BUCKETS: ReadonlySet<RosterBucket> = new Set<RosterBucket>([
+  "likely_junk",
+  "likely_demo_fixture",
+  "likely_service_shared_inbox",
+  "uncertain",
+]);
+
+interface RosterHealthResponse {
+  organizationId: string;
+  generatedAt: string;
+  totalUsers: number;
+  bucketCounts: Record<RosterBucket, number>;
+  bucketLabels: Record<RosterBucket, string>;
+  buckets: RosterBucket[];
+  examplesPerBucketLimit: number;
+  examples: Record<RosterBucket, RosterClassifiedUser[]>;
+  disclaimer: string;
+}
+
+const ROSTER_BUCKET_CHIP: Record<RosterBucket, string> = {
+  likely_junk: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200 border-red-200 dark:border-red-800",
+  likely_demo_fixture: "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200 border-purple-200 dark:border-purple-800",
+  likely_service_shared_inbox: "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200 border-blue-200 dark:border-blue-800",
+  real_active: "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-green-200 dark:border-green-800",
+  real_inactive: "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200 border-amber-200 dark:border-amber-800",
+  uncertain: "bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200 border-slate-200 dark:border-slate-700",
+};
+
+function RosterHealthPanel() {
+  const { data, isLoading, isError } = useQuery<RosterHealthResponse>({
+    queryKey: ["/api/admin/roster-health"],
+  });
+  const [expanded, setExpanded] = useState<RosterBucket | null>(null);
+  const [open, setOpen] = useState(true);
+
+  const handleDownload = (bucket: RosterBucket) => {
+    window.open(`/api/admin/roster-health/export?bucket=${bucket}`, "_blank");
+  };
+
+  return (
+    <div
+      className="border rounded-xl p-5 space-y-4 bg-muted/30"
+      data-testid="panel-roster-health"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          className="flex items-center gap-2 text-left"
+          onClick={() => setOpen(o => !o)}
+          data-testid="button-roster-health-toggle"
+        >
+          <Database className="w-4 h-4 text-amber-600" />
+          <h2 className="font-semibold text-sm">Roster Health (read-only snapshot)</h2>
+          <span className="text-xs text-muted-foreground">
+            {data ? `${data.totalUsers} users` : isLoading ? "loading…" : ""}
+          </span>
+        </button>
+        <span className="text-[11px] text-muted-foreground">
+          {data ? `Generated ${new Date(data.generatedAt).toLocaleString()}` : ""}
+        </span>
+      </div>
+
+      {open && (
+        <>
+          <div
+            className="rounded-md border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
+            data-testid="banner-roster-health-disclaimer"
+          >
+            <strong>Heuristic audit only — not saved user state.</strong>{" "}
+            Buckets here must not drive delete, deactivate, or hide actions.
+            Cached for ~60s.
+          </div>
+
+          {isLoading && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <Loader2 className="w-4 h-4 animate-spin" /> Classifying roster…
+            </div>
+          )}
+
+          {isError && (
+            <div className="text-sm text-red-600 dark:text-red-400 py-2" data-testid="text-roster-health-error">
+              Failed to load roster snapshot.
+            </div>
+          )}
+
+          {data && (
+            <>
+              <div className="flex flex-wrap gap-2" data-testid="roster-health-chips">
+                {data.buckets.map(b => {
+                  const count = data.bucketCounts[b] ?? 0;
+                  const isOpen = expanded === b;
+                  return (
+                    <button
+                      key={b}
+                      type="button"
+                      onClick={() => setExpanded(isOpen ? null : b)}
+                      className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors ${ROSTER_BUCKET_CHIP[b]} ${isOpen ? "ring-2 ring-offset-1 ring-amber-400" : ""}`}
+                      data-testid={`chip-roster-bucket-${b}`}
+                    >
+                      <span>{data.bucketLabels[b]}</span>
+                      <span className="font-semibold">{count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {expanded && (
+                <div className="border rounded-lg bg-background p-3 space-y-3" data-testid={`roster-bucket-detail-${expanded}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-sm font-medium">
+                      {data.bucketLabels[expanded]}
+                      <span className="text-muted-foreground font-normal ml-2">
+                        showing up to {data.examplesPerBucketLimit} of {data.bucketCounts[expanded] ?? 0}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="gap-1.5"
+                      onClick={() => handleDownload(expanded)}
+                      data-testid={`button-roster-export-${expanded}`}
+                    >
+                      <Download className="w-3.5 h-3.5" /> Download CSV
+                    </Button>
+                  </div>
+                  <p
+                    className="text-[11px] text-muted-foreground"
+                    data-testid={`text-roster-sort-subtitle-${expanded}`}
+                  >
+                    {ROSTER_CLEANUP_BUCKETS.has(expanded)
+                      ? "Sorted: most clearly cleanup-worthy first (review priority desc, then least active, then newest)."
+                      : "Sorted: most active first."}
+                  </p>
+
+                  {(data.examples[expanded] ?? []).length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-3 text-center">
+                      No users in this bucket.
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left text-muted-foreground border-b">
+                            <th className="py-1.5 pr-3 font-medium">Name</th>
+                            <th className="py-1.5 pr-3 font-medium">Username</th>
+                            <th className="py-1.5 pr-3 font-medium">Role</th>
+                            <th className="py-1.5 pr-3 font-medium">Manager</th>
+                            <th className="py-1.5 pr-3 font-medium">Org</th>
+                            <th className="py-1.5 pr-3 font-medium">Fin Rep ID</th>
+                            <th className="py-1.5 pr-3 font-medium">Last Login</th>
+                            <th className="py-1.5 pr-3 font-medium">Created</th>
+                            <th className="py-1.5 pr-3 font-medium" title="Notes / Touchpoints / Companies / Opps / Tasks / Freight">
+                              Activity (N/T/C/O/T/F)
+                            </th>
+                            <th className="py-1.5 pr-3 font-medium" title="Review priority 0-100; higher = more clearly cleanup-worthy">
+                              Pri
+                            </th>
+                            <th className="py-1.5 pr-3 font-medium">Signals</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(data.examples[expanded] ?? []).map(u => (
+                            <tr key={u.id} className="border-b last:border-b-0" data-testid={`roster-row-${u.id}`}>
+                              <td className="py-1.5 pr-3">{u.name || "—"}</td>
+                              <td className="py-1.5 pr-3 font-mono">{u.username}</td>
+                              <td className="py-1.5 pr-3">{ROLE_LABELS[u.role] || u.role}</td>
+                              <td className="py-1.5 pr-3 text-muted-foreground">{u.managerId ? u.managerId.slice(0, 8) : "—"}</td>
+                              <td className="py-1.5 pr-3 text-muted-foreground font-mono">{u.organizationId ? u.organizationId.slice(0, 8) : "—"}</td>
+                              <td className="py-1.5 pr-3 text-muted-foreground">{u.financialRepId || "—"}</td>
+                              <td className="py-1.5 pr-3">{formatLastLogin(u.lastLoginAt)}</td>
+                              <td className="py-1.5 pr-3 text-muted-foreground">{u.createdAt ? new Date(u.createdAt).toLocaleDateString() : "—"}</td>
+                              <td className="py-1.5 pr-3 font-mono text-[11px]">
+                                {u.activity.notesAuthored}/{u.activity.touchpoints}/{u.activity.ownedCompanies}/{u.activity.ownedOpportunities}/{u.activity.assignedTasks}/{u.activity.freightRows}
+                              </td>
+                              <td
+                                className="py-1.5 pr-3 font-mono text-[11px] text-muted-foreground"
+                                data-testid={`text-roster-priority-${u.id}`}
+                              >
+                                {u.reviewPriority}
+                              </td>
+                              <td className="py-1.5 pr-3">
+                                <div className="flex flex-wrap gap-1" data-testid={`signals-${u.id}`}>
+                                  {u.signals.length === 0 ? (
+                                    <span className="text-muted-foreground text-[11px]">—</span>
+                                  ) : (
+                                    u.signals.map(tag => (
+                                      <span
+                                        key={tag}
+                                        className="inline-flex items-center rounded border border-muted-foreground/30 bg-muted/50 px-1.5 py-0.5 text-[10px] font-mono leading-none text-foreground/80"
+                                        data-testid={`signal-${tag}-${u.id}`}
+                                      >
+                                        {tag}
+                                      </span>
+                                    ))
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="text-[11px] text-muted-foreground border-t pt-3 leading-relaxed">
+                Any future cleanup based on this snapshot will affect: org
+                chart, RBAC team scoping, financial attribution (via{" "}
+                <code>financialRepId</code>), team performance / leaderboards,
+                Webex / M365 mailbox mapping, Clerk identity, and Stripe seat
+                counts. This panel is informational only.
+              </div>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function formatLastLogin(iso: string | null | undefined): string {
   if (!iso) return "Never";
   const d = new Date(iso);
@@ -414,7 +668,7 @@ function UserDialog({ user, users, onClose, isNAM }: { user?: SafeUser; users: S
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      invalidateAllUsersQueries();
       queryClient.invalidateQueries({ queryKey: ["/api/team-members"] });
       // Role-promotion contract: a role change must invalidate the
       // promoted user's session profile so nav/route gates re-derive
@@ -545,7 +799,7 @@ function BulkImportDialog() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Import failed");
       setResult(data);
-      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      invalidateAllUsersQueries();
     } catch (err: any) {
       toast({ title: "Import failed", description: err.message, variant: "destructive" });
     } finally {
@@ -1240,9 +1494,60 @@ function BillingPanel() {
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
+// ─── Lifecycle tabs (Phase 1 Step 4a-UI) ──────────────────────────────────────
+// Admin-only segmented control over the GET /api/users `include*` flags
+// added in Step 4a-API. Each non-"active" tab maps to exactly ONE include
+// flag so admins can intentionally surface inactive / service / quarantined /
+// deleted users without polluting the default cleaned roster shared by
+// every other consumer of /api/users in the app.
+//
+// `includeDemo` is intentionally NOT wired in this step. `is_fixture` rows
+// have no opt-in by 4a-API contract.
+type LifecycleTab = "active" | "inactive" | "service" | "quarantined" | "deleted";
+
+const LIFECYCLE_TABS: ReadonlyArray<{ key: LifecycleTab; label: string }> = [
+  { key: "active", label: "Active" },
+  { key: "inactive", label: "Inactive" },
+  { key: "service", label: "Service accounts" },
+  { key: "quarantined", label: "Quarantined" },
+  { key: "deleted", label: "Deleted" },
+];
+
+function buildUsersUrlForLifecycle(tab: LifecycleTab): string {
+  switch (tab) {
+    case "active":
+      return "/api/users";
+    case "inactive":
+      return "/api/users?includeInactive=true";
+    case "service":
+      return "/api/users?includeServiceAccounts=true";
+    case "quarantined":
+      return "/api/users?includeQuarantined=true";
+    case "deleted":
+      return "/api/users?includeDeleted=true";
+  }
+}
+
+// Predicate that matches every cached lifecycle slice so a write
+// (create / edit / delete / bulk-import) refreshes whichever tab the
+// admin is currently viewing AND every other tab they may switch to.
+function invalidateAllUsersQueries() {
+  queryClient.invalidateQueries({
+    predicate: (q) => {
+      const k = q.queryKey?.[0];
+      return typeof k === "string" && k.startsWith("/api/users") && !k.startsWith("/api/users/");
+    },
+  });
+}
+
 export default function AdminUsers() {
   const { user: currentUser } = useAuth();
-  const { data: users = [], isLoading } = useQuery<SafeUser[]>({ queryKey: ["/api/users"] });
+  const isAdmin = currentUser?.role === "admin";
+  const [lifecycleTab, setLifecycleTab] = useState<LifecycleTab>("active");
+  // Non-admins always read the cleaned default roster — they never see the
+  // lifecycle strip, so we never let their tab state leak into the URL.
+  const usersUrl = isAdmin ? buildUsersUrlForLifecycle(lifecycleTab) : "/api/users";
+  const { data: users = [], isLoading } = useQuery<SafeUser[]>({ queryKey: [usersUrl] });
   const [editUser, setEditUser] = useState<SafeUser | undefined>();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<SafeUser | null>(null);
@@ -1266,7 +1571,7 @@ export default function AdminUsers() {
       await apiRequest("DELETE", `/api/users/${id}`);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+      invalidateAllUsersQueries();
       queryClient.invalidateQueries({ queryKey: ["/api/team-members"] });
       toast({ title: "User deleted" });
     },
@@ -1396,6 +1701,37 @@ export default function AdminUsers() {
         </div>
       </div>
 
+      {isAdmin && (
+        <div
+          className="flex flex-wrap gap-1 rounded-lg border border-border bg-muted/30 p-1 w-fit"
+          role="tablist"
+          aria-label="User lifecycle"
+          data-testid="lifecycle-tabs"
+        >
+          {LIFECYCLE_TABS.map(({ key, label }) => {
+            const active = lifecycleTab === key;
+            return (
+              <button
+                key={key}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setLifecycleTab(key)}
+                className={
+                  "h-8 rounded-md px-3 text-sm font-medium transition-colors " +
+                  (active
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground")
+                }
+                data-testid={`lifecycle-tab-${key}`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -1481,6 +1817,8 @@ export default function AdminUsers() {
           })}
         </div>
       )}
+
+      {currentUser?.role === "admin" && <RosterHealthPanel />}
 
       {currentUser?.role === "admin" && (
         <>

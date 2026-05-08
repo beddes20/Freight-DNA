@@ -11,6 +11,8 @@ import { registerLoadFactRoutes } from "./routes/loadFact";
 import { registerCarrierIntelligenceScoringRoutes } from "./routes/carrierIntelligenceScoring";
 import { registerHeroSliceAdminRoutes } from "./routes/heroSliceAdmin";
 import { registerAdminEmailDerivedCompaniesRoutes } from "./routes/adminEmailDerivedCompanies";
+import { registerAdminRosterHealthRoutes } from "./routes/adminRosterHealth";
+import { registerAdminUserLifecycleRoutes } from "./routes/adminUserLifecycle";
 import { registerCarrierIntelligencePrefsRoutes } from "./routes/carrierIntelligencePrefs";
 import { registerGoalRoutes } from "./routes/goals";
 import { registerDashboardRoutes } from "./routes/dashboard";
@@ -773,7 +775,41 @@ RULES FOR YOUR RESPONSES:
         return res.status(403).json({ error: "Access required" });
       }
 
-      const allUsers = await storage.getUsers(req.session.organizationId!);
+      // Task #1126 Phase 1 Step 4a-API — default lifecycle filter contract.
+      // Default roster = active, non-deleted, non-service, non-quarantined,
+      // non-demo, non-fixture. Five include flags opt back in. The four
+      // sensitive flags (deleted / service / quarantined / demo) are
+      // admin-only; non-admin callers get them silently ignored (logged
+      // once at debug level) rather than 403 so shared frontend code can
+      // pass speculative flags without breaking. `includeInactive` is
+      // available to any caller. `is_fixture` is never opt-in.
+      const callerIsAdmin = isAdmin(currentUser);
+      const requested = {
+        includeInactive: req.query.includeInactive === "true",
+        includeDeleted: req.query.includeDeleted === "true",
+        includeServiceAccounts: req.query.includeServiceAccounts === "true",
+        includeQuarantined: req.query.includeQuarantined === "true",
+        includeDemo: req.query.includeDemo === "true",
+      };
+      const filter = {
+        includeInactive: requested.includeInactive,
+        includeDeleted: callerIsAdmin && requested.includeDeleted,
+        includeServiceAccounts: callerIsAdmin && requested.includeServiceAccounts,
+        includeQuarantined: callerIsAdmin && requested.includeQuarantined,
+        includeDemo: callerIsAdmin && requested.includeDemo,
+      };
+      if (!callerIsAdmin) {
+        const ignored = (Object.keys(requested) as Array<keyof typeof requested>)
+          .filter((k) => k !== "includeInactive" && requested[k]);
+        if (ignored.length > 0) {
+          // Single-line debug log — non-admin sent admin-gated flags. We
+          // strip them rather than 403 so a shared client can keep
+          // passing them.
+          console.log(`[users-roster] non-admin ${currentUser.id} sent admin-gated include flags=${ignored.join(",")}; ignoring`);
+        }
+      }
+
+      const allUsers = await storage.getUsers(req.session.organizationId!, filter);
       const safeUsers = allUsers.map(({ password, ...u }) => u);
       if (isAdmin(currentUser)) return res.json(safeUsers);
 
@@ -2725,6 +2761,8 @@ Be conservative - if unsure, use "ignore". Every column must be assigned.`,
   registerCarrierIntelligenceScoringRoutes(app);
   registerHeroSliceAdminRoutes(app);
   registerAdminEmailDerivedCompaniesRoutes(app);
+  registerAdminRosterHealthRoutes(app);
+  registerAdminUserLifecycleRoutes(app);
   registerCarrierIntelligencePrefsRoutes(app);
   // ── Company Historical Trends ─────────────────────────────────────────────
   app.get("/api/companies/:id/historical-trends", requireAuth, async (req, res) => {
