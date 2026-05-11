@@ -1,0 +1,80 @@
+I want a read-only Freight-DNA platform health report so I can paste it to Perplexity for independent scoring.
+
+Important rules:
+- READ ONLY.
+- Do not change code.
+- Do not run migrations.
+- Do not publish.
+- Do not rollback.
+- Do not modify prod or dev data.
+- Do not “fix” anything in this task.
+- Your only job is to inspect the current state and produce a concise but evidence-based report.
+
+Scope:
+I need you to assess Freight-DNA across these 4 lanes:
+1. Platform
+2. Core tabs
+3. Data trust
+4. New-tab readiness
+
+For Core tabs, assess at minimum:
+- Customers
+- Customer Quotes
+- Conversations
+- Lane Work Queue
+- Available Freight
+
+For each lane and each core tab, give me:
+- Status: Green / Yellow / Red
+- Confidence: High / Medium / Low
+- Why: 3-5 bullets max
+- Evidence: exact files, routes, components, jobs, tests, logs, DB tables, or recent task references you used
+- Known gaps / risks
+- What would have to be true to move it up one color
+
+Required output format:
+
+# Freight-DNA Platform Health Report
+Date:
+Branch / environment inspected:
+Was this read-only? Yes
+
+## 1) Executive summary
+- Platform: [Green/Yellow/Red]
+- Core tabs overall: [Green/Yellow/Red]
+- Data trust overall: [Green/Yellow/Red]
+- New-tab readiness: [Green/Yellow/Red]
+
+## 2) Platform
+Cover:
+- publish/deploy readiness
+- release safety
+- rollback risk
+- environment stability
+- critical broken dependencies or blockers
+- whether the product is currently usable after publish
+
+## 3) Core tabs
+For each tab:
+### [Tab name]
+- Status:
+- Confidence:
+- Why:
+- Evidence:
+- Known gaps / risks:
+- Move to next color by:
+
+## 4) Data trust
+Cover:
+- ownership rules
+- fake customer / polluted customer risk
+- contacts health
+- email/conversation reliability
+- quote ingestion reliability
+- orphaned or mismatched records
+- auditability / recoverability / soft-delete / guardrails if present
+
+## 5) New-tab readiness
+Cover:
+- whether shared primitives are strong enough for new tabs
+- consist
