@@ -1,0 +1,196 @@
+You are my engineering assistant for a focused “Restore & Hardening Sprint” on Freight‑DNA.
+The goal is to:
+
+safely restore and republish prod so Platform moves from RED → YELLOW, and
+
+clean up the known data trust wounds (QO race, dupes, orphans, email‑derived backfill, Mail.Read), and
+
+add CI enforcement for the Customer Quotes stability contracts.
+
+This work must strictly follow the existing docs and guardrails already in the repo.
+
+Current situation (from our own docs)
+
+Branch/env: main @ 62302141, dev DB live; prod DB is paused and read‑only.
+
+Platform is RED because:
+
+Dev boots with a [schema-drift] WARNING, but production will refuse to start until server/runMigrations.ts is updated.
+
+Drift inventory (in docs/dev-prod-schema-drift-2026-05-08.md) shows 59 prod‑only tables, 2 dev‑only tables (company_financial_aliases, user_lifecycle_events), 7 column‑count mismatches, and 12 FK‑count mismatches.
+
+Start application logs show valueiq-today scheduler error (agent_org_settings missing) and Webex webhook subscribe error (reauth_reason missing).
+
+A full PITR + restore + republish plan exists in docs/prod-restore-and-republish-plan-2026-05-08.md and docs/operator-maintenance-window-checklist-2026-05-08.md, but it has not yet been executed.
+
+Data trust is YELLOW because:
+
+audit_results.md shows ~9,560 duplicate quote_opportunities groups (~19,283 redundant rows) in prod from an unpatched race (7f577c98).
+
+There are 6 orphan quote_opportunities with no customer.
+
+Legacy email‑derived company stubs exist but are not yet backfilled with companies.is_email_derived = true.
+
+Mail.Read is not granted on the Ops mailbox, leaving reply tracking dormant for that mailbox.
+
+Customer Quotes has strong written contracts (CQ‑1..CQ‑7), a stability‑contract doc, and guardrail sections in tests/code-quality-guardrails.test.ts, but the “contracts touched: …” declaration rule is currently process‑only, not enforced by CI.
+
+The restore‑triage freeze is currently in effect: no ad‑hoc edits, no new migrations, no publish, no rollback have been performed since the report.
+
+Hard requirements and scope
+
+Your job is to design and help implement one coherent sprint with three phases, with explicit stop conditions between phases.
+
+You must NOT:
+
+invent new features, new tabs, or new schema beyond what is necessary for this restore + hardening work;
+
+touch unrelated surfaces (AI Hub, NBA, Webex feature work beyond the boot‑time error, Sonar, Phone Usage, Goals, Coaching, Playbook, etc.);
+
+weaken or delete any existing guardrails or stability contracts;
+
+change the semantics of soft‑delete or lifecycle events;
+
+silently drop data.
+
+Every step must be:
+
+grounded in existing docs/files (quote them by path/section), and
+
+reversible where feasible, and
+
+small and serializable (I should be able to stop after any phase and still have a coherent system).
+
+Phase 1 — Restore & republish (Platform RED → YELLOW)
+
+Goal: Execute the existing PITR + restore + republish plan once, and remove the schema‑drift warning and boot errors.
+
+Read and summarize (for me) the current restore plan and drift analysis:
+
+docs/dev-prod-schema-drift-2026-05-08.md
+
+docs/prod-restore-and-republish-plan-2026-05-08.md
+
+docs/operator-maintenance-window-checklist-2026-05-08.md
+
+docs/restore-target-recommendation-2026-05-08.md
+
+.local/dev-db-backups/prod-after-restore-target/audit_results.md
+In your own words, list:
+
+the exact target DB timestamp (2026-05-04T00:00:00Z),
+
+the target commit (9949c373),
+
+the acceptance criteria (no drift warning, no boot errors, no dup‑key logs at T+15/30/60, etc.),
+
+the operator steps that must be done manually vs. what code/scripts can help with.
+
+Propose any small, surgical code or script changes that would:
+
+make it safer/easier to run the restore plan exactly once,
+
+log acceptance checks clearly (e.g., a small script or endpoint that checks for drift and dup‑key errors post‑publish),
+
+but do not actually run the restore or publish automatically. I will run the actual PITR and publish.
+These helpers should live alongside the existing docs, not replace them.
+
+Once I approve the plan and helpers, assume that I have successfully:
+
+restored prod to 2026-05-04T00:00:00Z,
+
+rolled code to 9949c373,
+
+run runMigrations.ts,
+
+published once,
+
+and verified that boot succeeds with no [schema-drift] WARNING and no agent_org_settings / reauth_reason errors.
+After that assumption, update any drift‑related docs or comments (if needed) so they match the new reality.
+
+Phase 2 — Data cleanup & CQ hardening (Data Trust YELLOW → near‑GREEN)
+
+Goal: Stop the QO race, clean up known bad rows, and shore up CQ’s contracts.
+
+Working from the post‑restore baseline:
+
+Implement the 7f577c98 race fix (or its current equivalent) so that:
+
+new dup quote_opportunities rows are no longer created when two inbound emails for the same drop arrive within a few ms;
+
+logging/telemetry for this path is clear enough that future regressions show up quickly.
+Respect the existing CQ stability contracts and guardrails; if a contract must be updated, call that out explicitly.
+
+Design and implement a one‑shot cleanup for the known quote_opportunities issues, guarded by feature flag or environment variable so it cannot be run accidentally:
+
+remove or consolidate the known duplicate groups (~9,560 groups / 19,283 rows) based on audit_results.md;
+
+fix the 6 orphan QOs (no customer) in a way that is auditable (log which rows you touched and how).
+This should be implemented as a clearly‑named script or migration helper with guardrails (e.g., refuses to run unless explicitly pointed at prod and only once).
+
+Implement the backfill for companies.is_email_derived = true on legacy email‑derived stubs, based on the logic already used by the admin heuristic mode in /admin/email-derived-companies and the won‑quote handoff in server/services/customerQuotes.ts.
+
+Make sure this backfill is idempotent and safe to re‑run.
+
+After the backfill, the default Customers list should behave as intended without relying on the heuristic mode for correctness.
+
+Add the small wiring needed so that once Mail.Read is granted for the Ops mailbox, reply tracking becomes active again and the watchdog clears its “dormant” state for that mailbox, without changing any of the existing Graph/Conversations contracts.
+
+Do not broaden scopes or add new mailboxes; just close the “Mail.Read not granted on Ops” gap.
+
+After these changes, update any relevant docs (CQ stability contract doc, data‑trust section, replit.md gotchas) with:
+
+where the race fix lives,
+
+how to re‑run the backfill safely if needed,
+
+and how to verify that dupes and orphans are no longer accumulating.
+
+Phase 3 — CI enforcement for CQ contracts (make discipline machine‑enforced)
+
+Goal: Make the CQ stability contracts and declaration line enforceable by CI so future changes can’t silently bypass them.
+
+Implement CI checks that:
+
+fail the pipeline if any CQ‑critical files (the ones listed in the CQ stability‑contract doc) are modified without updating the “Customer Quotes contracts touched: …” declaration line;
+
+optionally, fail if a CQ contract is edited without adjusting the corresponding guardrail/tests.
+This can be a lint step, a git diff‑based check, or a custom script run in CI. It should be simple and transparent.
+
+Document this in the repo (e.g., in the CQ stability‑contract doc and/or replit.md) so future contributors know:
+
+which files are considered CQ‑critical,
+
+how to correctly update the declaration,
+
+and what happens in CI if they forget.
+
+Deliverables back to me
+
+For this sprint, I want you to produce:
+
+A short “Restore & Hardening Sprint” summary doc under docs/ that explains, in plain language, what you changed in each phase and how to verify it.
+
+Any helper scripts or code changes needed to:
+
+support the PITR + restore + republish plan (without executing it),
+
+implement the QO race fix and one‑shot cleanup,
+
+implement the email‑derived backfill,
+
+wire up the Ops Mail.Read fix,
+
+add CI enforcement for CQ contracts.
+
+A checklist I can use at the end to re‑score:
+
+Platform (RED → YELLOW?),
+
+Data trust (YELLOW → closer to GREEN?),
+
+CQ (YELLOW → GREEN?),
+
+New‑tab readiness (still YELLOW, but safer?).
+
+Throughout, favor small, auditable, and explicit changes over clever refactors. The goal is to make Freight‑DNA safer and more trustworthy, not to redesign the system.
