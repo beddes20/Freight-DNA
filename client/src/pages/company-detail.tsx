@@ -555,6 +555,7 @@ export default function CompanyDetail() {
   };
 
   const isLoading = companyLoading || contactsLoading;
+  const safetyLabelsEnabled = useProfileSafetyFlag();
 
   if (isLoading) {
     return (
@@ -607,8 +608,6 @@ export default function CompanyDetail() {
       </div>
     );
   }
-
-  const safetyLabelsEnabled = useProfileSafetyFlag();
 
   return (
     <div className="flex flex-col gap-4 sm:gap-6 p-4 sm:p-6">
