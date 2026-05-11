@@ -1,0 +1,48 @@
+You are helping me get ready to actually run the restore window for Freight-DNA.
+
+Do NOT start Phase 2.
+Do NOT write cleanup scripts.
+Do NOT touch CQ-frozen files.
+Do NOT modify migrations, runMigrations.ts, shared/schema.ts, drizzle.config.ts, or replit.md.
+
+Assume:
+- docs/restore-and-hardening-sprint-2026-05-11.md exists.
+- docs/restore-window-operator-card-2026-05-11.md exists.
+- scripts/post-publish-acceptance-check.ts exists and its column usage has been sanity-checked.
+
+Your job in THIS TURN is to give me a very tight “day-of” runbook for the maintenance window, based ONLY on those docs and existing scripts.
+
+Deliver exactly one new doc:
+- docs/restore-window-day-of-checklist-2026-05-11.md
+
+The checklist should be written for an operator (me) and must include:
+
+1) Pre-window:
+   - What to confirm from Replit support before starting (PITR to 2026-05-04T00:00:00Z, any limits, etc.).
+   - What local backups / exports I should double-check exist.
+   - What systems/users need to be told “do not use Freight-DNA during this window.”
+
+2) During-window steps (in strict order):
+   - Exact actions to take, including restoring prod to the target timestamp, checking the right commit is deployed, running runMigrations, and doing the one-time publish.
+   - Where to watch logs as each step runs.
+   - Explicit “STOP if you see X” conditions.
+
+3) Immediate post-publish checks:
+   - Exact commands to run scripts/post-publish-acceptance-check.ts (with example --since-restart and --org arguments).
+   - Any other log or drift checks that must be run.
+   - How to record results (e.g., copy/paste into a new doc like docs/restore-window-results-YYYY-MM-DD.md).
+
+4) Go / no-go for Phase 2:
+   - The precise pass criteria that mean “Platform is now YELLOW, it is safe to open Phase 2.”
+   - The precise fail criteria that mean “STOP, do NOT open Phase 2, investigate/rollback instead.”
+
+5) Failure paths:
+   - What to do if any acceptance check fails (who/what to consult in the repo, which docs to re-read, which logs to pull).
+   - Clear guidance that if there is any doubt, Phase 2 stays closed.
+
+Constraints:
+- This turn is planning-only. No new scripts, no changes to existing code.
+- The checklist must be short enough to read quickly in the middle of the window (aim for one page).
+- Use my existing docs and script names verbatim so I can match them in the UI.
+
+When you’re done, summarize the key steps in 10–15 bullet points at the bottom of the file for a super-quick skim.
