@@ -95,7 +95,15 @@ Tell me at each checkpoint when you've finished Steps 2 / 3 / 4 and I'll run the
 
 ## Step 6 — UI sanity flows (operator, ~15 min)
 
-Pick **one** account you know well and run all five flows against it. Then pick **two more** high-value accounts and just run flows 1, 4, 5 on them.
+**Step 6.0 — Company Detail render smoke (regression check for the 2026-05-11 hooks-order fix):**
+
+- [ ] Open the **Customers** tab from the left nav.
+- [ ] Click any customer row to open Company Detail.
+- [ ] **PASS:** the page renders the company header, owner card, and Overview tab without an error boundary fallback. Browser DevTools console is free of `Rendered more hooks than during the previous render`, `Invalid hook call`, and `[ErrorBoundary] Caught error` messages.
+- [ ] **PROBLEM:** error boundary fallback shows, OR the console has any of the three messages above. Tell me — the hook-order fix from commit `4301a945` did not ship in this build, which means we may need to hot-fix and re-publish.
+- [ ] Repeat on a **second** customer (preferably one with no touchpoints / no contacts to exercise the empty-state branches that originally triggered the crash).
+
+Now pick **one** account you know well and run all five flows against it. Then pick **two more** high-value accounts and just run flows 1, 4, 5 on them.
 
 | # | Flow | PASS | PROBLEM |
 |---|---|---|---|
