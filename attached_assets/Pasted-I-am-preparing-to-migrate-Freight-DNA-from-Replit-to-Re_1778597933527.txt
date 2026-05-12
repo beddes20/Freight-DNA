@@ -1,0 +1,173 @@
+I am preparing to migrate Freight-DNA from Replit to Render and later point freight-dna.com to the new Render deployment.
+
+I need a complete read-only migration dependency audit of everything that would need to change when the app’s hosting/domain moves.
+
+Important constraints:
+
+Read-only only
+
+Do not modify code
+
+Do not modify env vars
+
+Do not change any dashboards or external services
+
+Do not publish or deploy anything
+
+Do not touch dev DB or prod DB
+
+Your job is to inspect the repo, env var names, config files, auth setup, integration code, callback URLs, webhook handlers, and deployment assumptions, then give me a migration checklist.
+
+I want you to identify every place that may need updating for a Render cutover, especially anything tied to:
+
+domain names
+
+base URLs
+
+callback URLs
+
+redirect URLs
+
+webhook endpoints
+
+CORS / allowed origins
+
+auth issuer / audience / JWKS settings
+
+session/cookie domain settings
+
+DNS-dependent behavior
+
+env vars that contain URLs or hostnames
+
+third-party integrations
+
+Specifically include:
+
+Clerk
+
+production domain / subdomain settings
+
+allowed redirect URLs
+
+sign-in / sign-up redirect env vars
+
+publishable key / frontend API assumptions
+
+cookie domain / satellite domain / middleware assumptions
+
+JWT issuer / JWKS / token verification assumptions
+
+social auth callback dependencies if present
+
+Microsoft / Azure / Outlook / Graph
+
+redirect URIs
+
+app registration callback URLs
+
+webhook / subscription callback URLs
+
+any stored base URLs or public callback URLs
+
+Webex
+
+OAuth redirect URIs
+
+webhook endpoints
+
+any app URLs stored in config/env
+
+Email and messaging infrastructure
+
+inbound webhook endpoints
+
+outbound links
+
+magic links
+
+unsubscribe/preferences links
+
+any email templates that contain absolute URLs
+
+Frontend / backend app config
+
+APP_URL, BASE_URL, PUBLIC_URL, API_URL, CLIENT_URL, SERVER_URL, WEBHOOK_URL, or similar
+
+hardcoded replit.app, replit.dev, onrender.com, or domain references in code/config
+
+CORS origin lists
+
+CSP / allowed frame / allowed connect-src config
+
+health check endpoints
+
+cron/worker assumptions
+
+Infrastructure / deployment
+
+any Replit-specific assumptions
+
+secrets/env vars that must exist in Render
+
+ports / start commands / build commands
+
+file-system/storage assumptions
+
+background worker or scheduled job assumptions
+
+Output format:
+
+A. Executive summary
+
+short explanation of the major categories of changes required
+
+B. Migration dependency table
+with columns:
+
+Area
+
+What needs to change
+
+Where found
+
+Why it matters
+
+Required before cutover? (Yes/No)
+
+Risk if missed (High/Med/Low)
+
+C. Clerk-specific checklist
+
+every Clerk item that would need attention for a domain/platform migration
+
+D. External integrations checklist
+
+Azure/Outlook
+
+Webex
+
+email/webhooks
+
+any other provider discovered
+
+E. Environment variables to recreate in Render
+
+grouped by category
+
+include inferred purpose
+
+flag any variable that appears URL/domain-sensitive
+
+F. Search results appendix
+
+list all files and code locations where domain/URL/redirect/webhook/auth-related strings were found
+
+Search guidance:
+
+grep for: replit, onrender, redirect, callback, webhook, origin, cors, issuer, jwks, clerk, signIn, signUp, APP_URL, BASE_URL, PUBLIC_URL, API_URL, CLIENT_URL, SERVER_URL, WEBHOOK, GRAPH, MICROSOFT, AZURE, WEBEX
+
+inspect env/config files, auth middleware, frontend auth components, backend auth verification code, OAuth handlers, webhook handlers, mailer/template code, and any deployment config
+
+Goal:
+I want a “don’t miss anything” migration map before I move Freight-DNA from Replit to Render and switch freight-dna.com.
