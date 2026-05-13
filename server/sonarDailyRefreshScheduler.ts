@@ -21,6 +21,7 @@ import {
 } from "./sonarClient";
 import { notifyAdminsOfSystemEvent, checkBreakerLongOpen } from "./sonarAlertNotifier";
 import { JOB_NAMES, withHeartbeat } from "./lib/cronHeartbeat";
+import { sonarEnabled } from "./lib/featureFlags";
 
 function log(msg: string) {
   const t = new Date().toISOString();
@@ -54,6 +55,16 @@ export async function runSonarDailyRefreshNow(): Promise<void> {
 }
 
 export function initSonarDailyRefreshScheduler(): void {
+  // SONAR_ENABLED kill switch — see `server/lib/featureFlags.ts`. When
+  // disabled we register NONE of: the 4:30 AM daily refresh cron, the
+  // ~30s post-boot refresh setTimeout, or the 5-min long-open breaker
+  // monitor. Logged once at boot so operators can confirm the gate took
+  // effect.
+  if (!sonarEnabled()) {
+    log("disabled by env flag SONAR_ENABLED=false");
+    return;
+  }
+
   // 4:30 AM Central — early enough that the daily digest (which runs after
   // 6 AM in most schedulers) sees fresh data.
   cron.schedule("30 4 * * *", runSonarDailyRefreshNow, { timezone: "America/Chicago" });

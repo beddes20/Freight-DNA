@@ -101,3 +101,58 @@ export function contactJobsEnabled(): boolean {
 export function describeContactJobsFlag(): "true" | "false" {
   return contactJobsEnabled() ? "true" : "false";
 }
+
+// ─── SONAR_ENABLED — FreightWaves SONAR scheduler kill switch ───────────────
+//
+// Identical fails-open semantics to CONTACT_JOBS_ENABLED above: the helper
+// returns `false` ONLY when the env value is the literal string "false"
+// (trimmed, case-insensitive). Any other value — unset, "", "0", "no",
+// "FALSE2", a typo — resolves to `true` so an operator typo cannot
+// silently disable SONAR in production.
+//
+// What this gates
+// ───────────────
+//   • `server/sonarDailyRefreshScheduler.ts` → `initSonarDailyRefreshScheduler()`
+//     - daily 4:30 AM CT cron (`runSonarDailyRefreshNow`)
+//     - boot-time refresh setTimeout (~30s after start)
+//     - 5-min cron long-open breaker monitor (Task #740)
+//
+// What is intentionally NOT gated
+// ───────────────────────────────
+//   • `server/routes/sonar.ts` — admin/debug request routes (operator
+//     needs `/api/sonar/health` and the manual refresh probe to remain
+//     reachable while diagnosing the disable).
+//   • `server/sonarClient.ts` — the SDK itself stays callable so any
+//     ad-hoc lookup degrades to the existing circuit-breaker / cached
+//     path rather than throwing.
+//   • `server/nbaPhase1Scheduler.ts` — uses Sonar via `withSonarCaller`
+//     but is its own NBA cron, not a Sonar scheduler. With SONAR_ENABLED
+//     off, those calls hit the circuit breaker and fall back to cached
+//     / null values per the existing breaker behaviour.
+
+const SONAR_FLAG_NAME = "SONAR_ENABLED";
+
+/**
+ * Returns true when SONAR schedulers / refresh jobs / polling are
+ * permitted to start at boot. False ONLY when the env value is the
+ * literal string "false" (trimmed, case-insensitive). Default is true
+ * (fail open).
+ *
+ * Read at startup by `initSonarDailyRefreshScheduler` to decide whether
+ * to register any of the Sonar crons. Not cached — re-reading on each
+ * call keeps tests and future request-time gates predictable.
+ */
+export function sonarEnabled(): boolean {
+  const raw = process.env[SONAR_FLAG_NAME];
+  if (raw == null) return true;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "false") return false;
+  return true;
+}
+
+/**
+ * Operator-friendly description of the current flag state for boot logs.
+ */
+export function describeSonarFlag(): "true" | "false" {
+  return sonarEnabled() ? "true" : "false";
+}
