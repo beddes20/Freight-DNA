@@ -8,6 +8,7 @@ import { storage } from "./storage";
 import type { User, Company, SharedRep } from "@shared/schema";
 import { getCanonicalCompanyOwnerId } from "./lib/companyOwner";
 import { notifyAdminsOfUnprovisionedSignIn } from "./unprovisionedSignInNotifications";
+import { getClerkPublishableKey } from "./lib/clerkConfig";
 
 const PgStore = connectPgSimple(session);
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -91,9 +92,12 @@ export function setupAuth(app: any) {
   // Clerk middleware validates the session token / JWT on every request
   app.use(clerkMiddleware());
 
-  // Public endpoint — exposes the Clerk publishable key to the frontend
+  // Public endpoint — exposes the Clerk publishable key to the frontend.
+  // Goes through `getClerkPublishableKey()` so staging always sees pk_test_…
+  // and production always sees pk_live_… based on APP_ENV (see
+  // server/lib/clerkConfig.ts). Response shape unchanged.
   app.get("/api/config/public", (_req: Request, res: Response) => {
-    res.json({ clerkPublishableKey: process.env.CLERK_PUBLISHABLE_KEY ?? "" });
+    res.json({ clerkPublishableKey: getClerkPublishableKey() });
   });
 
   // ── Development / Testing: session-based auth (NOT used in production) ──

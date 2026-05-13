@@ -1,0 +1,95 @@
+Proceed with the implementation.
+
+Implement the Clerk environment-resolution refactor exactly as proposed, with these requirements:
+
+Goal
+- staging on https://freight-dna.onrender.com must use Clerk test keys
+- production on https://freight-dna.com must use Clerk live keys
+- key selection must be based on explicit APP_ENV / NODE_ENV, never URL sniffing
+- keep current behavior backward-compatible where possible
+
+Changes to make
+
+1) Create server/lib/clerkConfig.ts
+Add:
+- resolveAppEnv(): "development" | "staging" | "production"
+  - APP_ENV trimmed/lowercased takes priority
+  - fallback: NODE_ENV === "production" ? "production" : "development"
+
+- getClerkPublishableKey()
+- getClerkSecretKey()
+
+Resolution precedence:
+a) environment-specific vars:
+   production:
+   - CLERK_PUBLISHABLE_KEY_LIVE
+   - CLERK_SECRET_KEY_LIVE
+
+   staging/development:
+   - CLERK_PUBLISHABLE_KEY_TEST
+   - CLERK_SECRET_KEY_TEST
+
+b) fallback generic vars for backward compatibility:
+   - CLERK_PUBLISHABLE_KEY
+   - CLERK_SECRET_KEY
+
+c) empty string if unresolved, but log a clear warning
+
+- applyClerkEnv()
+  - resolve the correct pk/sk once at boot
+  - assign them back onto process.env.CLERK_PUBLISHABLE_KEY and process.env.CLERK_SECRET_KEY so @clerk/express keeps working without deeper rewiring
+  - return metadata for boot logging:
+    { env, pkPrefix, skPrefix, source }
+  - emit warnings if:
+    - non-production is using pk_live/sk_live
+    - production is using pk_test/sk_test
+    - either key is missing
+
+2) Update server/index.ts
+- call applyClerkEnv() during boot before auth setup / route registration
+- add a one-line boot log summarizing:
+  - resolved env
+  - publishable key prefix
+  - secret key prefix
+  - source used (test/live override vs generic fallback)
+
+3) Update server/auth.ts
+- replace direct process.env.CLERK_PUBLISHABLE_KEY usage in /api/config/public with getClerkPublishableKey()
+- preserve the existing response shape exactly
+
+4) Update server/routes/liveSync.ts
+- replace direct process.env.CLERK_SECRET_KEY usage with getClerkSecretKey()
+- preserve existing null/guard semantics
+
+Constraints
+- no frontend changes unless absolutely necessary
+- do not change client/src/App.tsx if /api/config/public already supplies the correct value
+- do not break local development
+- keep diffs minimal and additive
+- no URL-based environment inference
+- no secret key exposure in logs; only log prefixes like pk_test / pk_live / sk_test / sk_live
+
+After coding
+- show me the exact files changed
+- show the exact boot log line format
+- summarize the env matrix I should use in Render for:
+  1. staging service
+  2. production service
+  3. local development
+
+Expected Render matrix
+- staging:
+  APP_ENV=staging
+  CLERK_PUBLISHABLE_KEY=pk_test_...
+  CLERK_SECRET_KEY=sk_test_...
+
+- production:
+  APP_ENV=production
+  CLERK_PUBLISHABLE_KEY=pk_live_...
+  CLERK_SECRET_KEY=sk_live_...
+
+Optional support:
+If both *_LIVE and *_TEST vars are present, choose by APP_ENV.
+Otherwise use the generic CLERK_PUBLISHABLE_KEY / CLERK_SECRET_KEY vars as fallback.
+
+Please implement now and then paste a concise diff summary.

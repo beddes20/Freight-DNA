@@ -54,6 +54,7 @@ import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
 import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "./emailGate";
 import { describeContactJobsFlag } from "./lib/featureFlags";
+import { applyClerkEnv } from "./lib/clerkConfig";
 
 const app = express();
 const httpServer = createServer(app);
@@ -389,6 +390,25 @@ process.on("uncaughtException", (err) => {
   // boot log so operators can confirm what their env value resolved to,
   // independent of the structured warn lines emitted by gated callers.
   console.log(`[boot] CONTACT_JOBS_ENABLED=${describeContactJobsFlag()}`);
+
+  // Render-cutover env-aware Clerk key selection. Resolves which Clerk
+  // keys to use based on APP_ENV (staging → pk_test_…/sk_test_…,
+  // production → pk_live_…/sk_live_…) and assigns them onto process.env
+  // so the @clerk/express SDK (which reads CLERK_SECRET_KEY lazily on
+  // every request) transparently picks the env-correct key. See
+  // server/lib/clerkConfig.ts for the full precedence rules.
+  {
+    const summary = applyClerkEnv();
+    console.log(
+      `[boot] APP_ENV=${summary.env} clerk.publishable=${summary.publishable.prefix}` +
+        ` (from ${summary.publishable.var}, ${summary.publishable.source})` +
+        ` clerk.secret=${summary.secret.prefix}` +
+        ` (from ${summary.secret.var}, ${summary.secret.source})`,
+    );
+    for (const warning of summary.warnings) {
+      console.warn(`[boot] clerk-config WARNING: ${warning}`);
+    }
+  }
 
   // Per-phase boot wrapper. Without this, a single throw between
   // httpServer.listen() and `isReady = true` lands in process.on(

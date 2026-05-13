@@ -34,6 +34,7 @@
 
 import type { Express, Request, Response } from "express";
 import { verifyToken } from "@clerk/express";
+import { getClerkSecretKey } from "../lib/clerkConfig";
 import {
   subscribe,
   recordLiveSyncAuthOutcome,
@@ -112,7 +113,10 @@ export async function resolveOrgId(req: Request): Promise<ResolveResult> {
   //    (rare in this app) are not relied on here — the explicit token
   //    is unambiguous and works in every browser/proxy combo.
   const token = qOptStr(req.query.token);
-  const secretKey = process.env.CLERK_SECRET_KEY;
+  // Env-aware: staging → sk_test_…, production → sk_live_… (see
+  // server/lib/clerkConfig.ts). Falls back to the generic CLERK_SECRET_KEY
+  // for back-compat with the pre-cutover single-key setup.
+  const secretKey = getClerkSecretKey();
   if (!token || !secretKey) {
     emitAuthDiag({
       outcome: "401",
