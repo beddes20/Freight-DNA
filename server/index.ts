@@ -390,16 +390,51 @@ process.on("uncaughtException", (err) => {
   // independent of the structured warn lines emitted by gated callers.
   console.log(`[boot] CONTACT_JOBS_ENABLED=${describeContactJobsFlag()}`);
 
-  await runMigrations();
+  // Per-phase boot wrapper. Without this, a single throw between
+  // httpServer.listen() and `isReady = true` lands in process.on(
+  // 'unhandledRejection'), the gate never flips, and every request
+  // sees the literal "starting" / "Server starting…" trap forever
+  // (the symptom that brought us here). With it, every phase logs a
+  // start/done/FAIL line so Render logs name the trap, and only
+  // `critical: true` phases re-throw — non-critical phases continue.
+  async function bootPhase<T>(
+    name: string,
+    fn: () => Promise<T>,
+    opts: { critical: boolean },
+  ): Promise<T | undefined> {
+    const t0 = Date.now();
+    log(`[boot] start ${name}`);
+    try {
+      const out = await fn();
+      log(`[boot] done  ${name} (${Date.now() - t0}ms)`);
+      return out;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const stack = err instanceof Error ? err.stack ?? "" : "";
+      console.error(
+        `[boot] FAIL  ${name} (${Date.now() - t0}ms): ${msg}\n${stack}`,
+      );
+      if (opts.critical) throw err;
+      return undefined;
+    }
+  }
+
+  await bootPhase("runMigrations", () => runMigrations(), { critical: true });
 
   // Verify the forward-closure dedup index actually exists before any
   // request handler can reach the live-write path. The service refuses
   // to write opps until this flag is set, so a missing index degrades
   // safely to a no-op rather than letting concurrent ticks dupe rows.
-  const { verifyClosureIdempotencyIndex } = await import(
-    "./services/quoteOpportunityFromSignalService"
+  await bootPhase(
+    "verifyClosureIdempotencyIndex",
+    async () => {
+      const { verifyClosureIdempotencyIndex } = await import(
+        "./services/quoteOpportunityFromSignalService"
+      );
+      await verifyClosureIdempotencyIndex();
+    },
+    { critical: true },
   );
-  await verifyClosureIdempotencyIndex();
 
   // Schema-drift guard: after migrations run, verify the live DB has every
   // table/column that `shared/schema.ts` declares. Catches the failure mode
@@ -407,43 +442,50 @@ process.on("uncaughtException", (err) => {
   // ALTER in `runMigrations.ts` — which broke the Conversations tab in
   // production twice (Tasks #532, #533, fixed reactively in #573).
   // Production refuses to boot on drift; dev logs a loud warning.
-  const schemaDriftPool = new SchemaCheckPool({
-    connectionString: process.env.DATABASE_URL,
-  });
-  try {
-    await assertNoSchemaDrift(schemaDriftPool);
-  } finally {
-    await schemaDriftPool.end().catch(() => {});
-  }
+  await bootPhase(
+    "assertNoSchemaDrift",
+    async () => {
+      const schemaDriftPool = new SchemaCheckPool({
+        connectionString: process.env.DATABASE_URL,
+      });
+      try {
+        await assertNoSchemaDrift(schemaDriftPool);
+      } finally {
+        await schemaDriftPool.end().catch(() => {});
+      }
+    },
+    { critical: true },
+  );
 
-  await storage.deleteEmptyFinancialUploads();
-
-  // Load email live mode flag from DB and initialize the in-memory gate.
-  // Default is OFF (safe) — emails are suppressed until an admin enables live mode.
-  try {
-    const rows = await storage.getEmailLiveModeAcrossOrgs();
-    setEmailLiveMode(rows);
-  } catch {
-    setEmailLiveMode(false);
-  }
-
-  setupAuth(app);
+  await bootPhase(
+    "setupAuth",
+    async () => {
+      setupAuth(app);
+    },
+    { critical: true },
+  );
 
   // Backfill DNA agent + base persona for every existing org so the loader
   // never has to seed lazily on the first user turn (Task #290).
-  try {
-    const { backfillDefaultAgentsForAllOrgs, migrateLegacyDefaultPersonas } = await import("./agent/persona");
-    await backfillDefaultAgentsForAllOrgs();
-    // Phase 2A: supersede legacy stock persona bodies so live orgs pick up
-    // built-in routing improvements (e.g. team-activity tool guidance)
-    // without operator action. Customised persona bodies are left alone.
-    await migrateLegacyDefaultPersonas();
-  } catch (err) {
-    console.error("[startup] DNA agent backfill failed:", err);
-  }
+  await bootPhase(
+    "personaBackfill",
+    async () => {
+      const { backfillDefaultAgentsForAllOrgs, migrateLegacyDefaultPersonas } =
+        await import("./agent/persona");
+      await backfillDefaultAgentsForAllOrgs();
+      // Phase 2A: supersede legacy stock persona bodies so live orgs pick up
+      // built-in routing improvements (e.g. team-activity tool guidance)
+      // without operator action. Customised persona bodies are left alone.
+      await migrateLegacyDefaultPersonas();
+    },
+    { critical: false },
+  );
 
-  await registerRoutes(httpServer, app);
-  await initStripe();
+  await bootPhase(
+    "registerRoutes",
+    () => registerRoutes(httpServer, app),
+    { critical: true },
+  );
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -461,16 +503,49 @@ process.on("uncaughtException", (err) => {
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
   // doesn't interfere with the other routes
-  if (process.env.NODE_ENV === "production") {
-    serveStatic(app);
-  } else {
-    const { setupVite } = await import("./vite");
-    await setupVite(httpServer, app);
-  }
+  await bootPhase(
+    "serveStatic/setupVite",
+    async () => {
+      if (process.env.NODE_ENV === "production") {
+        serveStatic(app);
+      } else {
+        const { setupVite } = await import("./vite");
+        await setupVite(httpServer, app);
+      }
+    },
+    { critical: true },
+  );
 
   // Boot complete — flip the readiness gate so real handlers serve traffic.
   isReady = true;
-  log(`ready — serving on port ${port}`);
+  log(`[boot] ready — serving on port ${port}`);
+
+  // ── Post-ready, non-blocking phases ───────────────────────────────────────
+  // These were previously awaited before `isReady = true`, which meant a slow
+  // or failing call here would keep the SPA stuck on "Server starting…".
+  // None of them gate page rendering or auth — they're maintenance/integration
+  // warmup that can run after traffic starts flowing.
+  void bootPhase(
+    "deleteEmptyFinancialUploads",
+    () => storage.deleteEmptyFinancialUploads(),
+    { critical: false },
+  );
+  void bootPhase(
+    "loadEmailLiveMode",
+    async () => {
+      // Load email live mode flag from DB and initialize the in-memory gate.
+      // Default is OFF (safe) — emails are suppressed until an admin enables
+      // live mode. Failure path explicitly forces OFF.
+      try {
+        const rows = await storage.getEmailLiveModeAcrossOrgs();
+        setEmailLiveMode(rows);
+      } catch {
+        setEmailLiveMode(false);
+      }
+    },
+    { critical: false },
+  );
+  void bootPhase("initStripe", () => initStripe(), { critical: false });
 
   if (IS_DEV) {
     const startMirror = () => {
