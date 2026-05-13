@@ -19,6 +19,7 @@
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 import OpenAI from "openai";
+import { withOpenAIResilience } from "../lib/openaiResilience";
 import { db, storage } from "../storage";
 import {
   quoteOpportunities, quoteEvents, quoteCustomers, quoteReps,
@@ -468,19 +469,25 @@ export async function parseQuoteEmailAi(input: {
 
   let raw: string | null = null;
   try {
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: AI_PARSE_PROMPT },
-        { role: "user", content: userMessage },
-      ],
-    });
-    raw = completion.choices[0]?.message?.content ?? null;
+    // Quota / rate-limit / temporary-failure handling lives in the resilience
+    // wrapper. On a circuit-open skip we treat it the same as the existing
+    // `unparseable` fallback — return null so the caller's regex path runs.
+    const guarded = await withOpenAIResilience("quoteEmailIngestion.parse", () =>
+      client.chat.completions.create({
+        model: "gpt-4o-mini",
+        temperature: 0,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: AI_PARSE_PROMPT },
+          { role: "user", content: userMessage },
+        ],
+      }),
+    );
+    if (!guarded.ok) return null;
+    raw = guarded.data.choices[0]?.message?.content ?? null;
   } catch (err) {
-    // Network / rate-limit / quota errors must never crash the backfill.
-    // Caller logs aggregate failures as `unparseable`.
+    // Real programmer / data errors only — quota/rate-limit/transient is
+    // already handled by `withOpenAIResilience` and never reaches here.
     console.warn("[quoteEmailIngestion] AI parse error:", err instanceof Error ? err.message : err);
     return null;
   }
@@ -1301,19 +1308,25 @@ export async function classifyLostReasonWithLlm(
   const truncated = trimmed.length > 1500 ? trimmed.slice(0, 1500) : trimmed;
 
   try {
-    const completion = await client.chat.completions.create(
-      {
-        model: "gpt-4o-mini",
-        temperature: 0,
-        max_tokens: 50,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: LOST_REASON_LLM_PROMPT },
-          { role: "user", content: truncated },
-        ],
-      },
-      { timeout: 15_000, maxRetries: 1 },
+    const guarded = await withOpenAIResilience(
+      "quoteEmailIngestion.classifyLostReason",
+      () =>
+        client.chat.completions.create(
+          {
+            model: "gpt-4o-mini",
+            temperature: 0,
+            max_tokens: 50,
+            response_format: { type: "json_object" },
+            messages: [
+              { role: "system", content: LOST_REASON_LLM_PROMPT },
+              { role: "user", content: truncated },
+            ],
+          },
+          { timeout: 15_000, maxRetries: 1 },
+        ),
     );
+    if (!guarded.ok) return null;
+    const completion = guarded.data;
     const raw = completion.choices?.[0]?.message?.content?.trim();
     if (!raw) return null;
     let parsed: unknown;

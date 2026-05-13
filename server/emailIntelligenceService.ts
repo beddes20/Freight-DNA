@@ -20,6 +20,7 @@ import { ingestQuoteFromEmail, applyClosedLostToOpenQuote, applyClosedWonToOpenQ
 import { runEmailFactExtractors } from "./services/emailFacts";
 import type { AttachmentInput } from "./services/emailFacts/attachmentRouter";
 import { buildRateConRouter, resolveRateConUploaderId } from "./services/emailFacts/rateConEmailRouter";
+import { withOpenAIResilience } from "./lib/openaiResilience";
 
 // ─── Intent taxonomy ─────────────────────────────────────────────────────────
 
@@ -250,16 +251,26 @@ export async function extractEmailSignals(
     // gpt-4o-mini extractions (~3s) so legit calls aren't affected; anything
     // slower is treated as a failure and the message is marked processed so
     // the batch keeps draining.
-    const completion = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: buildSystemPrompt(msg.direction) },
-        { role: "user", content: buildUserPrompt(msg) },
-      ],
-      response_format: { type: "json_object" },
-      temperature: 0.1,
-      max_tokens: 1000,
-    }, { timeout: 60_000, maxRetries: 1, signal: opts?.signal });
+    //
+    // Quota / rate-limit / temporary-failure handling is centralized in
+    // `withOpenAIResilience` — when the breaker is open the call short-circuits
+    // and we return the same empty-signals fallback the catch block uses.
+    const guarded = await withOpenAIResilience("emailIntelligence.extract", () =>
+      client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: buildSystemPrompt(msg.direction) },
+          { role: "user", content: buildUserPrompt(msg) },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.1,
+        max_tokens: 1000,
+      }, { timeout: 60_000, maxRetries: 1, signal: opts?.signal }),
+    );
+    if (!guarded.ok) {
+      return { signals: [], actorType: "internal" };
+    }
+    const completion = guarded.data;
 
     const raw = completion.choices[0]?.message?.content ?? "{}";
     let parsed: unknown;

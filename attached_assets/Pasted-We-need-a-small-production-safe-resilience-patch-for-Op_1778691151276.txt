@@ -1,0 +1,89 @@
+We need a small, production-safe resilience patch for OpenAI quota failures in Freight-DNA.
+
+Context from Render logs:
+- The app is booting successfully now.
+- Background jobs and AI-powered flows are repeatedly hitting OpenAI 429 errors with:
+  - status: 429
+  - code: insufficient_quota
+  - type: insufficient_quota
+- This is causing repeated noisy logs in:
+  - emailIntelligence extraction
+  - quoteEmailIngestion AI parse
+  - possibly other OpenAI-backed background jobs
+- We are NOT fixing billing/quota right now.
+- We want graceful degradation and reduced log spam, not feature removal.
+
+Goal:
+Create a minimal patch that centralizes OpenAI quota/rate-limit handling so background jobs skip gracefully when OpenAI is unavailable due to quota/rate limits.
+
+Requirements:
+1. Find the shared OpenAI client wrapper/helper used by these flows. If no shared wrapper exists, create a very small one.
+2. Add a helper that classifies OpenAI transient/unavailable conditions, especially:
+   - 429 insufficient_quota
+   - 429 rate_limit_exceeded
+   - 5xx upstream/provider failures
+   - network timeouts / fetch failures
+3. Add a lightweight in-memory circuit breaker / cooldown for OpenAI calls:
+   - If we get insufficient_quota, open a cooldown for 15 minutes.
+   - During cooldown, background jobs should skip OpenAI calls immediately instead of retrying and spamming logs.
+   - Return a typed result like:
+     - { ok: false, skipped: true, reason: "openai_quota_cooldown" }
+   - Log the first event loudly, then suppress repetitive stack traces during the cooldown window.
+4. For rate-limit (non-quota) 429s:
+   - shorter cooldown, e.g. 60-120 seconds
+   - same graceful skip behavior
+5. Update the main OpenAI-consuming background flows to use the helper:
+   - emailIntelligence extraction path
+   - quoteEmailIngestion AI parse path
+   - any obvious scheduler/worker path sharing the same OpenAI call pattern
+6. Important behavior:
+   - Do NOT throw for known quota/rate-limit/circuit-open cases in background jobs.
+   - Instead, log one concise structured warning and skip the item/batch.
+   - Preserve existing behavior for real programmer errors or invalid responses.
+7. Keep this patch small and surgical.
+8. Do NOT refactor unrelated logic.
+9. Do NOT change business logic beyond graceful degradation.
+10. TypeScript must pass.
+
+Suggested implementation shape:
+- Create helper functions such as:
+  - isOpenAIQuotaError(error)
+  - isOpenAIRateLimitError(error)
+  - isOpenAITemporaryError(error)
+- Add module-level state such as:
+  - openAICooldownUntil: number | null
+  - openAICooldownReason: "quota" | "rate_limit" | "temporary" | null
+  - lastOpenAILogAt: number | null
+- Add a wrapper like:
+  - withOpenAIResilience(taskName, fn)
+  which:
+  - short-circuits if cooldown is active
+  - runs fn()
+  - catches OpenAI errors
+  - sets cooldown appropriately
+  - returns a typed object instead of throwing for known temporary/quota cases
+
+Desired return pattern:
+- success:
+  { ok: true, data }
+- graceful skip:
+  { ok: false, skipped: true, reason: "openai_quota_cooldown" | "openai_rate_limit" | "openai_temporarily_unavailable" }
+- true hard failure:
+  throw only for unexpected programmer/data issues
+
+Logging behavior:
+- On first insufficient_quota:
+  log warn/error once with:
+  "[openai] insufficient quota — entering cooldown for 15m"
+- During cooldown:
+  do not print full stack traces for every item
+  log at most one summary line every few minutes, e.g.
+  "[openai] cooldown active — skipping email intelligence extraction"
+- Same idea for rate limits with shorter cooldown
+
+Please implement now and then report:
+1. files changed
+2. exact wrapper/helper added
+3. which flows now use it
+4. any places still directly calling OpenAI without protection
+5. final diff summary
