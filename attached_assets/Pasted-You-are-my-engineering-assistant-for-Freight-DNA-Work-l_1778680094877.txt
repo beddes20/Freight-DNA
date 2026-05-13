@@ -1,0 +1,66 @@
+You are my engineering assistant for Freight-DNA. Work like a senior backend/platform engineer. This is a production restore + hardening task, not a feature build.
+
+Goal:
+Fix the Render production startup/readiness issue so the real app shell loads normally instead of returning plain-text "starting" / "Server starting..." on routes like / and /login.
+
+Current known facts:
+- Freight-DNA runs in Replit for development and Render for production. [Do not change hosting platforms.]
+- Production service is reachable on Render and responds to /api/health, /, and /login.
+- Browser currently shows plain text "starting" or "Server starting..." instead of the real app UI.
+- In server/index.ts:
+  - `isReady` starts as false
+  - health/readiness responses depend on `isReady`
+  - requests are gated while boot is incomplete
+  - `isReady = true` is set later in boot
+- So the core issue is: startup is not reaching the point where `isReady` flips true, or the readiness gate is too aggressive for page routes.
+- We already corrected production secrets enough that the service is at least booting and answering requests.
+- DATABASE_URL is the canonical production Postgres connection string. Do not introduce alternate DB env names.
+
+Your task:
+1. Read the relevant startup and routing files FIRST.
+2. Identify exactly why boot is not completing or why the readiness gate is trapping normal page routes.
+3. Propose the smallest safe fix that restores UI availability in production.
+4. Implement only the minimum code changes needed.
+5. Add temporary, high-signal boot logs around startup phases if needed so we can see where boot stops in Render logs.
+6. Prefer making non-critical boot work async/deferred after readiness rather than blocking the entire app.
+7. Preserve safety: do not disable critical DB/auth checks blindly; do not rip out protections without explaining the tradeoff.
+
+Scope to inspect first:
+- server/index.ts
+- startup/bootstrap/init files imported by server/index.ts
+- any readiness / health / middleware logic
+- static asset serving / SPA fallback logic
+- any awaited startup tasks: DB connect, migrations, schedulers, OAuth setup, Webex/Outlook init, backfills, warmups, cache priming, etc.
+
+Deliverables required in your response:
+A. Brief diagnosis of the exact startup blocker or gating bug
+B. File-by-file change plan
+C. The code edits
+D. Any temporary logs added
+E. A short Render verification checklist:
+   - what log lines should appear
+   - what /api/health should return
+   - what / and /login should do after fix
+
+Hard constraints:
+- Read first, then plan, then edit.
+- No broad refactors.
+- No unrelated cleanup.
+- No schema changes unless absolutely required.
+- No new features.
+- No production data mutations.
+- Keep changes surgical and reversible.
+- If there are multiple possible fixes, choose the least risky one that gets production unstuck fastest.
+
+Implementation preference:
+- If a non-essential startup task is blocking readiness, move it behind readiness or make it fire asynchronously after `isReady = true`.
+- If the readiness middleware is incorrectly intercepting `/` and `/login`, adjust it carefully so the app shell can load while APIs still protect true not-ready states.
+- If static assets / SPA fallback are being skipped until readiness, fix that path with minimal impact.
+
+Important:
+Before changing code, show me:
+1. the exact boot sequence as you understand it,
+2. the line/block that is causing the trap,
+3. the smallest recommended fix.
+
+Then make the edits.
