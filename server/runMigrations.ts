@@ -5324,9 +5324,14 @@ export async function runMigrations() {
     // Combined with the runtime `customer_name: ""` substitution and the
     // overwrite above, the residual blast radius is acceptable.
     const hardcodedRows = await clientFreightOpp820.query(
+      // The `companies` table scopes by `organization_id` (Drizzle:
+      // `companies.organizationId`). Earlier copy of this query joined on
+      // `c.org_id`, which doesn't exist on `companies` — Postgres rejected it
+      // with `column c.org_id does not exist` (hint: "t.org_id"). The hint
+      // was right about the `t` side; the `c` side needs the full column name.
       `SELECT t.id, t.kind, t.org_id, t.subject, t.body, c.name AS company_name
          FROM freight_outreach_templates t
-         JOIN companies c ON c.org_id = t.org_id
+         JOIN companies c ON c.organization_id = t.org_id
         WHERE c.name IS NOT NULL
           AND length(c.name) > 3
           AND (
