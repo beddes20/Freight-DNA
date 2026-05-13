@@ -1,0 +1,1 @@
+psql: error: verify.sql: No such file or directory

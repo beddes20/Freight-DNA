@@ -1,0 +1,69 @@
+We need a production hotfix for Freight-DNA.
+
+Context:
+- The app is deployed on Render.
+- Render startup logs show the app connects to Postgres, runs migrations, then refuses to boot because of schema drift.
+- The logs explicitly say to add the missing migration(s) to server/runMigrations.ts and redeploy.
+- Do NOT make unrelated refactors. Keep the fix minimal, idempotent, and production-safe.
+
+What the logs say is missing:
+1) Missing tables:
+- public.companyFinancialAliases
+- public.userLifecycleEvents
+
+2) Missing columns on public.users:
+- isActive
+- isServiceAccount
+- isDemo
+- isFixture
+- isQuarantined
+- deletedAt
+- deletedBy
+- deleteReason
+- deactivatedAt
+- deactivatedBy
+- deactivationReason
+- userSource
+- lastActivityAt
+
+Tasks:
+1. Inspect sharedSchema.ts and any related Drizzle/schema definitions to determine the exact expected structure for:
+   - companyFinancialAliases
+   - userLifecycleEvents
+   - all 13 missing users columns
+2. Update server/runMigrations.ts to add idempotent production-safe migrations that ensure those tables/columns exist.
+3. Use SQL patterns like:
+   - CREATE TABLE IF NOT EXISTS ...
+   - ALTER TABLE ... ADD COLUMN IF NOT EXISTS ...
+   - CREATE INDEX IF NOT EXISTS ...
+   - foreign keys/constraints only if they can be added safely and idempotently
+4. Match the real schema definitions from sharedSchema.ts as closely as possible, including:
+   - column names
+   - data types
+   - defaults
+   - nullability
+   - indexes
+   - foreign keys, if clearly defined
+5. Do not break existing data.
+6. Do not remove or rewrite old migrations unless absolutely necessary.
+7. After updating runMigrations.ts, verify there are no TypeScript/build errors.
+8. Then explain exactly what changed and provide the final git diff.
+
+Secondary issue to inspect after the drift fix:
+- The logs also show: “column c.orgId does not exist” with a hint that maybe “t.orgId” was intended.
+- Find the query causing that error.
+- Tell me whether it is startup-blocking or only a logged warning.
+- If it is a clear safe fix, include it in the same patch; otherwise explain it separately and do not guess.
+
+Success criteria:
+- The app should no longer fail startup due to schema drift.
+- The migration code must be safe to run multiple times.
+- Keep the patch as small and surgical as possible.
+
+For reference, the Render logs reported:
+- schema-drift: Missing tables: public.companyFinancialAliases, public.userLifecycleEvents
+- schema-drift: Missing columns on public.users:
+  isActive, isServiceAccount, isDemo, isFixture, isQuarantined, deletedAt, deletedBy, deleteReason, deactivatedAt, deactivatedBy, deactivationReason, userSource, lastActivityAt
+- Refusing to start in production with schema drift. Add the missing migration to server/runMigrations.ts and redeploy.
+
+Please make the code changes now.

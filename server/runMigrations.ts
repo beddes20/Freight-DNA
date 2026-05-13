@@ -423,6 +423,151 @@ export async function runMigrations() {
     clientSharedReps.release();
   }
 
+  // ─── Task #1126 / #P2.1b — additive lifecycle + financial-aliases set ────
+  // Inlined from migrations/0017_users_lifecycle_columns.sql,
+  // migrations/0018_user_lifecycle_events.sql, and
+  // migrations/0017_company_financial_aliases.sql so a fresh prod boot
+  // applies them automatically. All statements are idempotent
+  // (IF NOT EXISTS) and behavior-neutral — defaults match today's
+  // semantics for every existing row. Kept as three independent
+  // pool.connect() blocks so a failure in one does not block the others,
+  // matching the pattern used by account_summary / shared_reps / demo_requests
+  // below.
+
+  // 0017_users_lifecycle_columns — additive columns + partial indexes
+  // on `users`. Defaults preserve current behavior (active=true,
+  // service/demo/fixture/quarantined=false, deleted/deactivated/source/
+  // last_activity null). FK self-references on deleted_by/deactivated_by
+  // are added inline; safe because they reference users(id) which already
+  // exists by this point in the runner.
+  const clientUsersLifecycle = await pool.connect();
+  try {
+    await clientUsersLifecycle.query(`
+      ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS is_active            boolean      NOT NULL DEFAULT true,
+        ADD COLUMN IF NOT EXISTS is_service_account   boolean      NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS is_demo              boolean      NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS is_fixture           boolean      NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS is_quarantined       boolean      NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS deleted_at           timestamptz  NULL,
+        ADD COLUMN IF NOT EXISTS deleted_by           varchar      NULL REFERENCES users(id),
+        ADD COLUMN IF NOT EXISTS delete_reason        text         NULL,
+        ADD COLUMN IF NOT EXISTS deactivated_at       timestamptz  NULL,
+        ADD COLUMN IF NOT EXISTS deactivated_by       varchar      NULL REFERENCES users(id),
+        ADD COLUMN IF NOT EXISTS deactivation_reason  text         NULL,
+        ADD COLUMN IF NOT EXISTS user_source          text         NULL,
+        ADD COLUMN IF NOT EXISTS last_activity_at     timestamptz  NULL
+    `);
+    await clientUsersLifecycle.query(`
+      CREATE INDEX IF NOT EXISTS users_active_idx
+        ON users (organization_id)
+        WHERE deleted_at IS NULL AND is_active = true
+    `);
+    await clientUsersLifecycle.query(`
+      CREATE INDEX IF NOT EXISTS users_deleted_idx
+        ON users (deleted_at)
+        WHERE deleted_at IS NOT NULL
+    `);
+    await clientUsersLifecycle.query(`
+      CREATE INDEX IF NOT EXISTS users_service_idx
+        ON users (organization_id)
+        WHERE is_service_account = true
+    `);
+    await clientUsersLifecycle.query(`
+      CREATE INDEX IF NOT EXISTS users_quarantined_idx
+        ON users (organization_id)
+        WHERE is_quarantined = true
+    `);
+    console.log("[migrations] users lifecycle columns + partial indexes ensured");
+  } catch (err) {
+    console.error("[migrations] users lifecycle migration error:", err);
+  } finally {
+    clientUsersLifecycle.release();
+  }
+
+  // 0018_user_lifecycle_events — append-only audit log. References
+  // users(id) and organizations(id), both already created above.
+  const clientUserLifecycleEvents = await pool.connect();
+  try {
+    await clientUserLifecycleEvents.query(`
+      CREATE TABLE IF NOT EXISTS user_lifecycle_events (
+        id             uuid         PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id        varchar      NOT NULL REFERENCES users(id),
+        org_id         varchar      NOT NULL REFERENCES organizations(id),
+        actor_user_id  varchar      NULL     REFERENCES users(id),
+        event          text         NOT NULL,
+        reason         text         NULL,
+        prev_state     jsonb        NOT NULL DEFAULT '{}'::jsonb,
+        next_state     jsonb        NOT NULL DEFAULT '{}'::jsonb,
+        source         text         NULL,
+        created_at     timestamptz  NOT NULL DEFAULT now()
+      )
+    `);
+    await clientUserLifecycleEvents.query(`
+      CREATE INDEX IF NOT EXISTS user_lifecycle_events_user_idx
+        ON user_lifecycle_events (user_id, created_at DESC)
+    `);
+    await clientUserLifecycleEvents.query(`
+      CREATE INDEX IF NOT EXISTS user_lifecycle_events_org_idx
+        ON user_lifecycle_events (org_id, created_at DESC)
+    `);
+    console.log("[migrations] user_lifecycle_events table + indexes ensured");
+  } catch (err) {
+    console.error("[migrations] user_lifecycle_events migration error:", err);
+  } finally {
+    clientUserLifecycleEvents.release();
+  }
+
+  // 0017_company_financial_aliases — schema-only; backfill is a separate
+  // operator script (scripts/backfill-company-financial-aliases.ts). Source
+  // CHECK constraint enumerates the five legal sources; no readers/writers
+  // depend on this table at boot time.
+  const clientCompanyFinancialAliases = await pool.connect();
+  try {
+    await clientCompanyFinancialAliases.query(`
+      CREATE TABLE IF NOT EXISTS company_financial_aliases (
+        id                      VARCHAR PRIMARY KEY DEFAULT gen_random_uuid(),
+        org_id                  VARCHAR NOT NULL REFERENCES organizations(id),
+        company_id              VARCHAR NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        alias                   TEXT    NOT NULL,
+        alias_normalized        TEXT    NOT NULL,
+        source                  TEXT    NOT NULL,
+        confirmed_by_user_id    VARCHAR,
+        confirmed_at            TIMESTAMP,
+        created_at              TIMESTAMP NOT NULL DEFAULT now(),
+        created_by_user_id      VARCHAR,
+        updated_at              TIMESTAMP NOT NULL DEFAULT now(),
+        notes                   TEXT,
+        CONSTRAINT cfa_source_check CHECK (
+          source IN ('legacy_column', 'admin', 'financial_upload', 'heuristic', 'migration')
+        )
+      )
+    `);
+    await clientCompanyFinancialAliases.query(`
+      CREATE INDEX IF NOT EXISTS cfa_org_company_idx
+        ON company_financial_aliases (org_id, company_id)
+    `);
+    await clientCompanyFinancialAliases.query(`
+      CREATE INDEX IF NOT EXISTS cfa_org_alias_norm_idx
+        ON company_financial_aliases (org_id, alias_normalized)
+    `);
+    await clientCompanyFinancialAliases.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS cfa_org_alias_norm_uniq
+        ON company_financial_aliases (org_id, alias_normalized)
+        WHERE source <> 'heuristic'
+    `);
+    await clientCompanyFinancialAliases.query(`
+      CREATE INDEX IF NOT EXISTS cfa_quarantine_idx
+        ON company_financial_aliases (org_id)
+        WHERE source = 'heuristic' AND confirmed_by_user_id IS NULL
+    `);
+    console.log("[migrations] company_financial_aliases table + indexes ensured");
+  } catch (err) {
+    console.error("[migrations] company_financial_aliases migration error:", err);
+  } finally {
+    clientCompanyFinancialAliases.release();
+  }
+
   // demo_requests table (Task #53) — runs independently so earlier failures don't block it
   const client2 = await pool.connect();
   try {

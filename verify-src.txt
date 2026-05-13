@@ -1,0 +1,2 @@
+ls: cannot access 'postgres://postgres:password@helium/heliumdb?sslmode=disable': No such file or directory
+ls: cannot access 'verify.sql': No such file or directory
