@@ -20,10 +20,20 @@ function isUnprovisioned(d: AuthMeResponse): d is UnprovisionedAccount {
   return d !== null && typeof d === "object" && "unprovisioned" in d && d.unprovisioned === true;
 }
 
-const DEV_BYPASS = import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+// DEV_AUTH_BYPASS — two activation paths (see client/src/App.tsx for the
+// full explanation). Build-time constant is preserved for backward compat
+// with local dev workflows; server-supplied bypass is set on `window` by
+// <App/> before AppCore (and therefore this hook) ever mounts, so reading
+// it synchronously here is safe and stable for the session.
+const DEV_BYPASS_BUILD = import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+function isDevBypassActive(): boolean {
+  if (DEV_BYPASS_BUILD) return true;
+  if (typeof window !== "undefined" && (window as any).__AUTH_BYPASS__ === true) return true;
+  return false;
+}
 
 export function useAuth() {
-  if (DEV_BYPASS) {
+  if (isDevBypassActive()) {
     return useAuthBypass();
   }
   return useAuthClerk();

@@ -324,7 +324,23 @@ function Router() {
   );
 }
 
-const DEV_BYPASS = import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+// DEV_AUTH_BYPASS — two activation paths:
+//   1. Vite-time (local dev): VITE_DEV_AUTH_BYPASS=true in .env.local. The
+//      build-time constant below stays for backward compat with existing
+//      local workflows that already set this var.
+//   2. Server-supplied (Render staging): /api/config/public returns
+//      `authBypassEnabled: true`. We mirror that flag onto window so the
+//      hooks (use-auth, useLiveSync) can read it synchronously without
+//      threading it through React context. The fetch in <App/> below
+//      blocks rendering until the flag is set, so the value is stable
+//      for every render.
+const DEV_BYPASS_BUILD = import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+function isDevBypassActive(): boolean {
+  if (DEV_BYPASS_BUILD) return true;
+  if (typeof window !== "undefined" && (window as any).__AUTH_BYPASS__ === true) return true;
+  return false;
+}
+const DEV_BYPASS = DEV_BYPASS_BUILD;
 
 function AuthenticatedAppInner() {
   const { user, unprovisioned, isLoading } = useAuth();
@@ -387,7 +403,7 @@ function UnprovisionedScreen({ email, onSignOut }: { email: string | null; onSig
 }
 
 function AuthenticatedApp() {
-  if (DEV_BYPASS) return <AuthenticatedAppBypass />;
+  if (isDevBypassActive()) return <AuthenticatedAppBypass />;
   return <AuthenticatedAppInner />;
 }
 
@@ -652,17 +668,30 @@ function AppCore() {
 }
 
 function App() {
-  const [clerkKey, setClerkKey] = useState<string | null | false>(DEV_BYPASS ? false : null);
+  // Tri-state: null = loading, false = bypass (no Clerk), string = Clerk key
+  const [clerkKey, setClerkKey] = useState<string | null | false>(DEV_BYPASS_BUILD ? false : null);
 
   useEffect(() => {
-    if (DEV_BYPASS) return;
+    if (DEV_BYPASS_BUILD) return;
     fetch("/api/config/public")
       .then(r => r.json())
-      .then(cfg => setClerkKey(cfg.clerkPublishableKey || null))
+      .then(cfg => {
+        // Server-supplied bypass (e.g. Render staging with DEV_AUTH_BYPASS=true).
+        // Set window flag BEFORE flipping state so the very first render of
+        // AppCore — and every hook that calls isDevBypassActive() — sees
+        // the bypass on.
+        if (cfg.authBypassEnabled === true) {
+          (window as any).__AUTH_BYPASS__ = true;
+          setClerkKey(false);
+          return;
+        }
+        setClerkKey(cfg.clerkPublishableKey || null);
+      })
       .catch(() => setClerkKey(null));
   }, []);
 
-  if (DEV_BYPASS) {
+  // Bypass mode (build-time or server-supplied) — render directly, no Clerk.
+  if (clerkKey === false) {
     return <AppCore />;
   }
 

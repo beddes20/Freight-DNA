@@ -195,12 +195,20 @@ function dispatchTopicListeners(evt: LiveSyncEvent): void {
   }
 }
 
-// In dev with the local-auth bypass enabled, no <ClerkProvider> is mounted
-// (see `client/src/App.tsx`). The Clerk auth hooks would crash if called
-// in that mode, so we mirror the split used by `useAuth` and pick the
-// implementation at module load.
-const DEV_BYPASS =
+// In dev/staging with DEV_AUTH_BYPASS enabled, no <ClerkProvider> is
+// mounted (see `client/src/App.tsx`). The Clerk auth hooks would crash if
+// called in that mode, so we mirror the split used by `useAuth` and pick
+// the implementation per render. The window flag is set by <App/> before
+// any consumer mounts, so it's stable for the session — React's rules of
+// hooks are satisfied because the same branch is taken every render.
+const DEV_BYPASS_BUILD =
   import.meta.env.DEV && import.meta.env.VITE_DEV_AUTH_BYPASS === "true";
+function isDevBypassActive(): boolean {
+  if (DEV_BYPASS_BUILD) return true;
+  if (typeof window !== "undefined" && (window as any).__AUTH_BYPASS__ === true) return true;
+  return false;
+}
+const DEV_BYPASS = isDevBypassActive();
 
 // ── Live-sync health store (Task #967) ─────────────────────────────────────
 //

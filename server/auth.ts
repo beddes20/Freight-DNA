@@ -9,6 +9,12 @@ import type { User, Company, SharedRep } from "@shared/schema";
 import { getCanonicalCompanyOwnerId } from "./lib/companyOwner";
 import { notifyAdminsOfUnprovisionedSignIn } from "./unprovisionedSignInNotifications";
 import { getClerkPublishableKey } from "./lib/clerkConfig";
+import {
+  isAuthBypassEnabled,
+  getDevBypassUser,
+  DEV_BYPASS_USER_ID,
+  DEV_BYPASS_ORG_ID,
+} from "./lib/authBypass";
 
 const PgStore = connectPgSimple(session);
 const IS_PROD = process.env.NODE_ENV === "production";
@@ -89,15 +95,29 @@ export function getImpersonationContext(req: Request): ImpersonationContext {
 }
 
 export function setupAuth(app: any) {
-  // Clerk middleware validates the session token / JWT on every request
-  app.use(clerkMiddleware());
+  // DEV_AUTH_BYPASS mode skips Clerk wiring entirely (see
+  // server/lib/authBypass.ts). When enabled, clerkMiddleware() is NOT
+  // registered — both because it would crash without CLERK_SECRET_KEY
+  // configured and because we want to guarantee zero Clerk SDK calls in
+  // bypass mode. requireAuth / requireUser / getCurrentUser handle the
+  // injection further down.
+  const bypassed = isAuthBypassEnabled();
+  if (!bypassed) {
+    // Clerk middleware validates the session token / JWT on every request
+    app.use(clerkMiddleware());
+  }
 
   // Public endpoint — exposes the Clerk publishable key to the frontend.
   // Goes through `getClerkPublishableKey()` so staging always sees pk_test_…
   // and production always sees pk_live_… based on APP_ENV (see
-  // server/lib/clerkConfig.ts). Response shape unchanged.
+  // server/lib/clerkConfig.ts). Adds `authBypassEnabled` so the client
+  // knows whether to mount <ClerkProvider> at all (Render staging can
+  // toggle bypass without a Vite rebuild).
   app.get("/api/config/public", (_req: Request, res: Response) => {
-    res.json({ clerkPublishableKey: getClerkPublishableKey() });
+    res.json({
+      clerkPublishableKey: bypassed ? "" : getClerkPublishableKey(),
+      authBypassEnabled: bypassed,
+    });
   });
 
   // ── Development / Testing: session-based auth (NOT used in production) ──
@@ -275,6 +295,20 @@ export function setupAuth(app: any) {
 const RESOLVED_USER = Symbol("resolvedUser");
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  // DEV_AUTH_BYPASS — skip Clerk entirely, inject the synthetic user (see
+  // server/lib/authBypass.ts). Refused by the helper when APP_ENV=production.
+  if (isAuthBypassEnabled()) {
+    const user = getDevBypassUser();
+    (req as any)[RESOLVED_USER] = user;
+    if (!req.session) {
+      (req as any).session = { organizationId: user.organizationId, userId: user.id };
+    } else {
+      req.session.organizationId = req.session.organizationId || user.organizationId;
+      req.session.userId = req.session.userId || user.id;
+    }
+    return next();
+  }
+
   // Dev-only bypass: auto-attach the bypass user so the route handler just works.
   // BUT: an active session (from /api/auth/login or impersonation) takes precedence
   // so dev login as a different user actually works.
@@ -396,6 +430,15 @@ export async function resolveClerkUserToDbUser(clerkUserId: string): Promise<Use
 export async function getCurrentUser(req: Request): Promise<User | null> {
   // Return cached value if requireAuth already resolved it
   if ((req as any)[RESOLVED_USER]) return (req as any)[RESOLVED_USER];
+
+  // DEV_AUTH_BYPASS — handlers that call getCurrentUser() without first
+  // going through requireAuth() (a small minority of routes) still get
+  // the bypass user.
+  if (isAuthBypassEnabled()) {
+    const user = getDevBypassUser();
+    (req as any)[RESOLVED_USER] = user;
+    return user;
+  }
 
   // An active session (dev /api/auth/login) takes precedence over the dev bypass
   // so logging in as a different user in dev actually changes who you are.

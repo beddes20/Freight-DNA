@@ -54,7 +54,8 @@ import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
 import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "./emailGate";
 import { describeContactJobsFlag } from "./lib/featureFlags";
-import { applyClerkEnv } from "./lib/clerkConfig";
+import { applyClerkEnv, resolveAppEnv } from "./lib/clerkConfig";
+import { describeAuthMode, isAuthBypassEnabled } from "./lib/authBypass";
 
 const app = express();
 const httpServer = createServer(app);
@@ -408,6 +409,29 @@ process.on("uncaughtException", (err) => {
     for (const warning of summary.warnings) {
       console.warn(`[boot] clerk-config WARNING: ${warning}`);
     }
+  }
+
+  // DEV_AUTH_BYPASS mode (see server/lib/authBypass.ts). When enabled we
+  // skip Clerk entirely on both the API and the SSE auth path and inject
+  // a stable fake user. The helper enforces APP_ENV=production refusal,
+  // so this log line is the operator's confirmation of the resolved mode.
+  {
+    const mode = describeAuthMode();
+    const env = resolveAppEnv();
+    if (mode === "dev-bypass") {
+      console.log(`[boot] auth mode = dev-bypass (APP_ENV=${env})`);
+    } else {
+      console.log(`[boot] auth mode = clerk`);
+    }
+    // Helpful one-liner for ops: if someone set DEV_AUTH_BYPASS=true on
+    // production it was already refused inside isAuthBypassEnabled(), but
+    // re-state here so the boot log carries the full context.
+    if (env === "production" && (process.env.DEV_AUTH_BYPASS ?? "").trim().toLowerCase() === "true") {
+      console.warn(
+        `[boot] auth-bypass WARNING: DEV_AUTH_BYPASS=true was set under APP_ENV=production and forced OFF. Remove the env var.`,
+      );
+    }
+    void isAuthBypassEnabled; // keep symbol referenced for future call sites
   }
 
   // Per-phase boot wrapper. Without this, a single throw between

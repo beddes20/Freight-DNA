@@ -1,0 +1,60 @@
+Yes — let’s bypass Clerk for staging/dev instead of reworking production Clerk.
+
+Please implement a safe DEV_AUTH_BYPASS mode with these rules:
+
+Goal
+- Production auth remains exactly as-is with Clerk.
+- Staging/dev can run without Clerk at all.
+- This must be impossible to activate in production.
+
+Required behavior
+1. Add an env flag:
+   DEV_AUTH_BYPASS=true|false
+
+2. Safety rules:
+   - DEV_AUTH_BYPASS may only work when APP_ENV is development or staging.
+   - If APP_ENV=production and DEV_AUTH_BYPASS=true, log a loud warning and force it OFF.
+
+3. Frontend behavior when bypass is ON:
+   - Do not mount ClerkProvider.
+   - Do not call Clerk frontend APIs.
+   - App should boot normally without sign-in UI.
+   - Provide a lightweight auth context or compatibility layer so existing components don’t crash if they expect auth/user/org info.
+
+4. Backend behavior when bypass is ON:
+   - Skip Clerk middleware / requireAuth enforcement.
+   - Inject a fake authenticated user into req/auth or the app’s existing auth/user context.
+   - Use a clearly fake but stable dev user:
+     userId: "dev-user-ben"
+     email: "ben.beddes+dev@freightdna.local"
+     firstName: "Ben"
+     lastName: "Dev"
+     orgId: "da3ed822-8846-4435-bb13-3cc4bf26f71d"
+   - Preserve route compatibility as much as possible so existing endpoints keep working.
+
+5. Backend behavior when bypass is OFF:
+   - Keep current Clerk behavior unchanged.
+
+6. /api/config/public
+   - Return an explicit flag like authBypassEnabled: true/false so the client can decide whether to mount ClerkProvider.
+
+7. Logging
+   - Emit one clear boot line:
+     [boot] auth mode = clerk
+     or
+     [boot] auth mode = dev-bypass (APP_ENV=staging)
+   - Never expose secrets.
+
+Implementation constraints
+- Minimal diff, additive changes only.
+- No URL sniffing.
+- No production behavior changes except the safety guard that forbids bypass in production.
+- Keep typecheck passing.
+
+After implementing:
+- list exact files changed
+- show exact Render env vars to use for staging:
+  APP_ENV=staging
+  DEV_AUTH_BYPASS=true
+- show the expected boot log lines
+- explain any routes/features that may still fail under bypass if they strictly depend on Clerk-specific user/session APIs

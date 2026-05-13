@@ -35,6 +35,7 @@
 import type { Express, Request, Response } from "express";
 import { verifyToken } from "@clerk/express";
 import { getClerkSecretKey } from "../lib/clerkConfig";
+import { isAuthBypassEnabled, DEV_BYPASS_USER_ID, DEV_BYPASS_ORG_ID } from "../lib/authBypass";
 import {
   subscribe,
   recordLiveSyncAuthOutcome,
@@ -97,6 +98,19 @@ export interface ResolveResult {
 }
 
 export async function resolveOrgId(req: Request): Promise<ResolveResult> {
+  // 0) DEV_AUTH_BYPASS — short-circuit before any Clerk verifyToken call.
+  //    Returns the synthetic bypass identity so SSE works on staging
+  //    without a Clerk Development instance configured.
+  if (isAuthBypassEnabled()) {
+    emitAuthDiag({ outcome: "200", branch: "session" });
+    return {
+      orgId: DEV_BYPASS_ORG_ID,
+      userId: DEV_BYPASS_USER_ID,
+      fingerprint: "dev-bypass",
+      rejectionReason: null,
+    };
+  }
+
   // 1) Existing session — dev cookies and any impersonation flows that
   //    have already populated `req.session.organizationId` keep working
   //    without round-tripping through Clerk.
