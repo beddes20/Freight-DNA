@@ -392,6 +392,16 @@ process.on("uncaughtException", (err) => {
   // independent of the structured warn lines emitted by gated callers.
   console.log(`[boot] CONTACT_JOBS_ENABLED=${describeContactJobsFlag()}`);
 
+  // Global scheduler kill switch. Default ON when unset; only the literal
+  // string "false" (trimmed, case-insensitive) disables. Wraps every
+  // recurring scheduler/cron/background-worker init in the post-ready
+  // block below — one-shot startup tasks (orphan-thread backfill, cache
+  // pre-warm, lane-cache warm-up) still run because they don't register
+  // recurring work. Individual flags like SONAR_ENABLED keep working
+  // independently when this master switch is ON.
+  const schedulersEnabled =
+    (process.env.SCHEDULERS_ENABLED ?? "").trim().toLowerCase() !== "false";
+
   // Render-cutover env-aware Clerk key selection. Resolves which Clerk
   // keys to use based on APP_ENV (staging → pk_test_…/sk_test_…,
   // production → pk_live_…/sk_live_…) and assigns them onto process.env
@@ -608,6 +618,10 @@ process.on("uncaughtException", (err) => {
       startMirror();
     }
   }
+  if (!schedulersEnabled) {
+    console.log("[boot] schedulers disabled by env flag SCHEDULERS_ENABLED=false");
+  }
+  if (schedulersEnabled) {
   initMonthlyGoalScheduler();
   initMonthlyDataRefreshScheduler();
       initAvailableFreightImportScheduler();
@@ -695,6 +709,7 @@ process.on("uncaughtException", (err) => {
           .then(({ startCopilotLearningScheduler }) => startCopilotLearningScheduler())
           .catch(err => console.error("[copilotLearning] scheduler init error:", err));
       }, 4000);
+  } // end if (schedulersEnabled)
       // Pre-warm the financial uploads cache so the first carrier-suggestions
       // request doesn't trigger a cold full-table JSONB scan in production.
       setTimeout(() => {
@@ -743,13 +758,15 @@ process.on("uncaughtException", (err) => {
         } catch (err) {
           console.error("[conv-thread-backfill] startup error:", err);
         }
-        try {
-          const { initConversationThreadBackfillScheduler } = await import(
-            "./conversationThreadBackfillScheduler"
-          );
-          initConversationThreadBackfillScheduler();
-        } catch (err) {
-          console.error("[conv-thread-backfill-cron] init error:", err);
+        if (schedulersEnabled) {
+          try {
+            const { initConversationThreadBackfillScheduler } = await import(
+              "./conversationThreadBackfillScheduler"
+            );
+            initConversationThreadBackfillScheduler();
+          } catch (err) {
+            console.error("[conv-thread-backfill-cron] init error:", err);
+          }
         }
       }, 6000);
 
