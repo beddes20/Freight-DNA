@@ -1,0 +1,130 @@
+Freight-DNA — Customers Tab Trust Cleanup Audit
+READ-ONLY FIRST. DO NOT DELETE OR MUTATE DATA YET.
+
+I need a full trust audit of the Customers tab and all upstream logic that determines which records appear there.
+
+Core business rule:
+A company should appear in the Customers tab ONLY if:
+1. we are shipping for that company, OR
+2. the company was manually created intentionally by a user/admin.
+
+Problems observed:
+- bogus contacts were created during/after the app break
+- bogus customers were created
+- carriers were added into Customers
+- the Customers tab is no longer a trustworthy source of truth
+
+Your job:
+Determine exactly why bad records are showing up and produce the safest cleanup + hardening plan.
+
+Scope:
+- Customers tab/page
+- all server routes/services/queries that feed it
+- company classification logic
+- contact ingestion/creation flows that may auto-create companies
+- any customer/carrier crossover logic
+- any email-derived, import-derived, or fallback-derived company creation paths
+- any filters/flags that determine whether a company is treated as a customer
+
+I need this exact output:
+
+Section 1 — Executive Summary
+- overall health of Customers tab: HEALTHY / MIXED / NOT TRUSTWORTHY
+- whether current Customers results match the business rule above
+- main root causes of bogus customer/contact pollution
+
+Section 2 — Customers Contract
+Define the exact intended contract for the Customers tab:
+- what qualifies a company as a customer
+- what should explicitly NOT qualify
+- how manually created customers should be represented
+- how carriers should be represented and kept out
+- how prospects / unknowns / email-derived companies should be treated
+
+Section 3 — Current Code Path
+Trace the real code path for the Customers tab:
+- route(s)
+- page/component(s)
+- hooks/queries
+- API endpoints
+- server services/storage calls
+- tables involved
+- any flags/columns used to classify companies
+- any joins or heuristics used to include/exclude rows
+
+Section 4 — Pollution Sources
+Identify every path that can create or classify a company/contact in a way that pollutes Customers:
+- manual create
+- imports
+- email ingestion
+- quote flows
+- conversation/contact suggestion flows
+- fallback account creation
+- carrier-related workflows
+- any “ensure company exists” helper
+For each source, say:
+- whether it can create a bogus customer
+- whether it can create a bogus contact
+- whether it can misclassify a carrier as customer
+- whether it is currently guarded or unsafe
+
+Section 5 — Data Audit Plan
+Without changing data yet, define the exact buckets of records we need to identify:
+A. true customers we ship for
+B. manually created real customers
+C. carriers incorrectly showing as customers
+D. bogus/unknown/import junk companies
+E. companies with only bad contacts
+F. contacts attached to non-customer companies
+G. ambiguous records requiring review
+
+For each bucket:
+- exact identifying logic
+- likely tables/columns
+- confidence level
+- whether safe to auto-fix vs needs manual review
+
+Section 6 — Cleanup Plan
+Propose the safest cleanup strategy in phases:
+Phase 0: read-only audit queries and counts
+Phase 1: hide/quarantine wrong records from Customers UI without destructive deletes
+Phase 2: fix upstream creation/classification logic
+Phase 3: optional cleanup scripts or admin review tools
+Each phase must include:
+- exact files/tables/routes likely touched
+- blast radius
+- rollback plan
+- what should be tested before publish
+
+Section 7 — Hardening Recommendations
+Recommend the smallest guardrails to prevent this from happening again:
+- customer qualification rule
+- carrier exclusion rule
+- manual-created override rule
+- email-derived / imported company treatment
+- contact creation guardrails
+- tests / guardrails to add
+
+Section 8 — Stoplight
+Label each proposed action:
+- DO NOW
+- NEXT
+- LATER
+- DO NOT DO
+
+Constraints:
+- do not mutate data yet
+- do not delete anything yet
+- do not broaden into unrelated tabs
+- prioritize trust and correctness over convenience
+- if current behavior is ambiguous, state assumptions explicitly
+- identify any gotchas already documented in replit.md that apply here
+
+Required verification work:
+- inspect current Customers tab implementation end to end
+- inspect company/contact creation paths
+- inspect carrier/customer boundary logic
+- inspect any existing tests/guardrails
+- run typecheck
+- run build
+- clearly distinguish confirmed facts vs hypotheses
