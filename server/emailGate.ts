@@ -66,6 +66,15 @@ export function setEmailLiveMode(requested: boolean): void {
   const effective = requested && gate.allowed;
   _liveMode = effective;
 
+  // TEMP DIAGNOSTIC (Render cutover): prove which build is running and
+  // what env it sees. Safe to print — only env booleans, no secrets.
+  console.log(
+    `${ts()} [email-gate][diag] APP_ENV_raw=${JSON.stringify(process.env.APP_ENV ?? null)}` +
+      ` EMAIL_LIVE_MODE_raw=${JSON.stringify(process.env.EMAIL_LIVE_MODE ?? null)}` +
+      ` requested=${requested} envAllowed=${gate.allowed} effective=${effective}` +
+      ` build=hardened-2026-05-14`,
+  );
+
   if (effective) {
     console.log(
       `${ts()} [email-gate] ✅ Email live mode ON — outbound emails will be sent`,
