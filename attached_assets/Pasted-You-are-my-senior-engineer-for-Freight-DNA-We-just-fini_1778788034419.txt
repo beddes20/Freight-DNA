@@ -1,0 +1,62 @@
+You are my senior engineer for Freight-DNA. We just finished a deep investigation; I now need you to move from analysis to “make this safe in staging and done-done.”
+
+Context (already in code):
+- HEAD commit: 6e82885
+  - Includes:
+    - 1fb8da1: Clerk env-key wiring + boot logging
+    - 05e8198: Hardened email gate with envAllowsLiveMode() (APP_ENV=production + EMAIL_LIVE_MODE==="true")
+    - 13e5141: [email-gate][diag] logging + build=hardened-2026-05-14 canary
+    - 6e82885: /api/config/public now always returns getClerkPublishableKey()
+- server/emailGate.ts:
+  - envAllowsLiveMode() checks process.env.APP_ENV and process.env.EMAIL_LIVE_MODE
+  - setEmailLiveMode() logs a [email-gate][diag] line every time
+  - Email live mode ON/OFF strings are only defined here
+- server/index.ts:
+  - bootPhase("loadEmailLiveMode", ...) calls storage.getEmailLiveModeAcrossOrgs() then setEmailLiveMode(...)
+- server/auth.ts:
+  - /api/config/public returns:
+    { clerkPublishableKey: getClerkPublishableKey(), authBypassEnabled: bypassed }
+
+What I need from you now:
+
+1) Summarize the final state
+- In 5–7 sentences, clearly explain:
+  - What was wrong with Clerk config and how 6e82885 fixes it.
+  - What the hardened email gate guarantees now (APP_ENV + EMAIL_LIVE_MODE behavior).
+  - Why staging email should be OFF even if the DB flag says “ON,” as long as APP_ENV=staging.
+- This summary is for my internal owner notes; keep it precise and production-focused.
+
+2) Produce a Render deployment checklist I can hand to myself or another engineer
+Make me a compact, step-by-step checklist (numbered) that assumes:
+- Code is already correct at 6e82885.
+- We just need to make sure Render is actually running that commit with a fresh bundle.
+
+Checklist must include:
+- How to confirm the deployed commit SHA in Render (Events tab).
+- Which button to press: “Clear build cache & deploy” from main.
+- How to confirm in the build log that dist/index.cjs was rebuilt.
+- The exact boot-log window we should see in staging once it’s truly running 6e82885, including:
+  - [email-gate][diag] APP_ENV_raw="staging" ... envAllowed=false effective=false build=hardened-2026-05-14
+  - Email live mode OFF — outbound emails disabled (env gate blocked: APP_ENV=staging (not production); DB/admin requested ON, ignored)
+- The expected /api/config/public response in staging:
+  {"clerkPublishableKey":"pk_test_…","authBypassEnabled":true}
+
+3) Give me a tiny “post-deploy sanity script”
+This is NOT code to run on the server. It’s a human runbook:
+- 5–8 lines of “After the deploy, do X, Y, Z” to convince myself:
+  - Clerk is wired correctly (key in API response).
+  - Staging email is OFF at the gate level regardless of DB flag.
+  - There is no path where APP_ENV=staging + EMAIL_LIVE_MODE=false results in live outbound mail.
+
+Constraints:
+- Do NOT propose new code changes; assume 6e82885 is correct.
+- Do NOT expand scope into other features (Customer Quotes, contact jobs, etc.).
+- Do NOT hand-wave logging; use the exact strings that exist in server/emailGate.ts and server/auth.ts.
+- Keep all outputs in plain text (no Markdown headings) so I can paste them into internal docs and tickets.
+
+Output format:
+1. Final state summary
+2. Render deployment checklist (numbered)
+3. Post-deploy sanity script (short, imperative bullet list)
+
+Start now.
