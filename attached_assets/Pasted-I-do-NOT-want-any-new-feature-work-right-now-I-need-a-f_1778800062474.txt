@@ -1,0 +1,62 @@
+I do NOT want any new feature work right now.
+
+I need a full post-incident health audit of the app covering every auth/bootstrap change made since the app broke about a week ago. Your goal is to verify that the app is globally healthy before any further changes are made.
+
+Scope:
+- audit the current codebase and recent changes related to:
+  1. app bootstrap / initial render
+  2. landing page load
+  3. /login route behavior
+  4. ClerkProvider vs staging bypass mode behavior
+  5. /api/config/public
+  6. /api/auth/me
+  7. use-auth.ts
+  8. useLiveSync.ts
+  9. logout behavior in staging bypass mode
+  10. any route guards, auth wrappers, or error boundaries touched during fixes
+
+Deliverables:
+1. produce a concise “health audit” report with:
+   - what changed
+   - why it changed
+   - what risk each change was addressing
+   - whether it is now verified working
+2. identify any temporary/staging-only patches or bypass behavior that should NOT be relied on for production
+3. identify any remaining fragile areas or likely regression points
+4. propose a minimal smoke-test checklist for every future deploy
+
+Required verification work:
+- inspect all relevant files and diffs from the last week
+- run typecheck
+- run build
+- run any existing tests related to auth/bootstrap if present
+- trace the startup path from first request to authenticated app render
+- verify there are no conditional Clerk renders in bypass mode that can still crash
+- verify logout UI is intentionally disabled/hidden only in bypass mode
+- verify production Clerk behavior is preserved in code paths
+- verify no obvious redirect loops or hook-order hazards remain
+- verify no duplicated auth fetch loops or refetch storms were introduced
+
+I also want you to create a PASS/FAIL checklist for these user journeys:
+A. landing page loads
+B. click Login in staging bypass mode
+C. /login does not crash
+D. app redirects/loads correctly after login in staging bypass mode
+E. dashboard renders without error boundary
+F. logout UI behaves intentionally in bypass mode
+G. production Clerk login path remains intact in code
+H. no known console errors from the recent incident remain
+
+Output format:
+- Section 1: Executive summary
+- Section 2: Change inventory
+- Section 3: PASS/FAIL checklist
+- Section 4: Remaining risks
+- Section 5: Recommended next actions
+
+Constraints:
+- do not make any new feature changes
+- do not refactor unrelated code
+- do not “improve” things unless you find a concrete health issue
+- if you find a failing item, stop and fix only that issue, then continue the audit
+- show exact files touched if any fix is necessary
