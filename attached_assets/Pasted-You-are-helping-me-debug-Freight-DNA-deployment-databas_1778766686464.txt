@@ -1,0 +1,107 @@
+You are helping me debug Freight-DNA deployment/database wiring inside Replit.
+
+This is a READ-FIRST, PLAN-FIRST investigation task. Do not make changes, do not rotate credentials, do not create branches, do not run destructive SQL, do not republish, and do not modify production or staging config unless I explicitly approve after your report.
+
+Goal:
+Figure out exactly why my Render staging app is pointing at a Neon database that does not contain the Freight-DNA core schema, while Replit appears to be connected to a different production database host that likely does contain the real data.
+
+Known facts you must treat as source-of-truth:
+1. Render staging DATABASE_URL host is:
+   ep-sparkling-shape-akfttl2r-pooler.c-3.us-west-2.aws.neon.tech
+
+2. Replit Production Database host is:
+   ep-spring-rain-ai1q6vt7.c-4.us-east-1.aws.neon.tech
+
+3. In the Neon project currently used for Render staging, running:
+   select count(*) from organizations;
+   returns:
+   ERROR: relation "organizations" does not exist
+
+4. Render logs showed many boot/migration failures like:
+   - relation "organizations" does not exist
+   - relation "users" does not exist
+   - relation "monitored_mailboxes" does not exist
+   - relation "quote_reps" does not exist
+   - relation "email_conversation_threads" does not exist
+
+5. Render logs also showed the app partially booting, schedulers running, org-specific warmups, and later Clerk errors:
+   - Publishable key is missing
+   This suggests multiple overlapping environment issues, but the immediate DB mismatch is the main blocker.
+
+What I need from you:
+A. Inspect this Replit codebase and determine the single canonical source of truth for database connection selection.
+B. Determine all places where DATABASE_URL / PGHOST / PGDATABASE / PGUSER / PGPASSWORD / Neon/Replit DB config are read or derived.
+C. Determine whether the app can override DATABASE_URL at runtime, or whether any scripts / boot code / migration code / env loaders can silently switch DB targets between local, Replit, and Render.
+D. Determine how production, staging, and development are intended to choose databases in this codebase.
+E. Determine whether the current code assumes Render Postgres, Replit DB, Neon branch DB, or generic Postgres.
+F. Determine the minimum safe path to make Render staging point at a SAFE COPY of the REAL Freight-DNA production database lineage.
+
+Hard constraints:
+- READ ONLY unless I explicitly approve changes.
+- Do not run any write SQL.
+- Do not alter any env vars.
+- Do not create any Neon branches.
+- Do not “fix” Clerk.
+- Do not republish.
+- Do not hand-wave. Show exact file paths, exact env var names, and exact boot flow.
+
+Investigation tasks:
+1. Search the repo for all references to:
+   DATABASE_URL
+   PGHOST
+   PGDATABASE
+   PGUSER
+   PGPASSWORD
+   process.env
+   runMigrations
+   server/index.ts
+   db.ts
+   drizzle
+   postgres
+   neon
+   render
+   replit
+   clerk
+   auth
+   environment
+   config
+
+2. Identify:
+   - the main DB client initialization file(s)
+   - the migration runner entrypoint(s)
+   - any code that constructs connection strings dynamically
+   - any code that falls back from DATABASE_URL to PG* vars
+   - any code that chooses different DBs based on NODE_ENV / APP_ENV / REPLIT / RENDER / production / staging flags
+
+3. Produce a concise map of:
+   - startup boot order
+   - config/env loading order
+   - DB initialization order
+   - migration execution order
+   - auth initialization order
+
+4. Tell me whether the currently observed mismatch is most likely caused by:
+   - Render pointing at the wrong DATABASE_URL
+   - Replit and Render using different production lineages
+   - code-level env override/fallback behavior
+   - migration assumptions against an empty DB
+   - some combination of the above
+
+5. Give me a recommended action plan with exactly 3 sections:
+   Section 1: “What is true”
+   Section 2: “What should be done next”
+   Section 3: “What I should not touch yet”
+
+Output format:
+1. Short diagnosis paragraph.
+2. Exact files to inspect, with one-line reason for each.
+3. Exact env vars that matter, grouped by DB / auth / scheduler / email.
+4. Boot-flow summary in numbered steps.
+5. Root-cause assessment with confidence level per hypothesis.
+6. A concrete, production-safe next-step checklist I can follow manually.
+7. If code changes are needed later, list them separately under “Not implemented yet”.
+
+Important:
+If you need to run commands, keep them read-only (grep, ripgrep, file inspection, typecheck only if truly necessary).
+If you find ambiguity, state it explicitly instead of guessing.
+Do not implement anything in this task. This task is investigation and diagnosis only.
