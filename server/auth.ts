@@ -184,7 +184,14 @@ export function setupAuth(app: any) {
   app.get("/api/auth/me", async (req: Request, res: Response) => {
     try {
       const user = await getCurrentUser(req);
-      const { userId: clerkUserId } = getAuth(req);
+      // DEV_AUTH_BYPASS — clerkMiddleware() is NOT registered in bypass mode
+      // (see setupAuth above), so calling getAuth(req) would throw
+      // "clerkMiddleware should be registered before using getAuth". Skip
+      // every Clerk SDK touch when bypassed; the synthetic dev user already
+      // came back from getCurrentUser, and impersonation is a Clerk-only
+      // concept that does not apply here.
+      const bypassed = isAuthBypassEnabled();
+      const clerkUserId = bypassed ? null : getAuth(req).userId;
       if (!user) {
         // Distinguish "signed into Clerk but no DB row" from "not signed in".
         if (clerkUserId) {
@@ -206,7 +213,11 @@ export function setupAuth(app: any) {
       // exactly what the cockpit route reads via `getImpersonationContext`,
       // so the client `currentUser.isImpersonating` flag and the server-
       // side base owner scope can never disagree about who is being viewed.
-      const { isImpersonating } = getImpersonationContext(req);
+      // In DEV_AUTH_BYPASS mode there is no Clerk session and impersonation
+      // is unreachable; skip the helper because it calls getAuth(req).
+      const { isImpersonating } = bypassed
+        ? { isImpersonating: false }
+        : getImpersonationContext(req);
 
       let impersonatingAdminName: string | null = null;
       if (isImpersonating) {
