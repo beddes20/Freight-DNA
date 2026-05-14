@@ -8,7 +8,7 @@ import {
   CommandDialog, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandSeparator,
 } from "@/components/ui/command";
 import { allVisibleDestinations, type NavItem } from "@/lib/nav-items";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth, useIsAuthBypassed } from "@/hooks/use-auth";
 import { useLogTouch } from "@/context/log-touch-context";
 
 const RECENTS_KEY = "cmdk_recents_v1";
@@ -81,6 +81,7 @@ export function CommandPalette() {
   const [recents, setRecents] = useState<RecentEntry[]>([]);
   const [, navigate] = useLocation();
   const { user, logout } = useAuth();
+  const authBypassed = useIsAuthBypassed();
   const { openDialog: openLogTouch } = useLogTouch();
   const { toggle: toggleTheme } = useTheme();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -284,14 +285,16 @@ export function CommandPalette() {
             {document.documentElement.classList.contains("dark") ? <Sun /> : <Moon />}
             <span>Toggle dark mode</span>
           </CommandItem>
-          <CommandItem
-            value="sign out logout exit"
-            onSelect={() => runAction(() => { logout.mutate(); })}
-            data-testid="cmd-action-logout"
-          >
-            <LogOut />
-            <span>Sign out</span>
-          </CommandItem>
+          {!authBypassed && (
+            <CommandItem
+              value="sign out logout exit"
+              onSelect={() => runAction(() => { logout.mutate(); })}
+              data-testid="cmd-action-logout"
+            >
+              <LogOut />
+              <span>Sign out</span>
+            </CommandItem>
+          )}
         </CommandGroup>
 
         <CommandSeparator />

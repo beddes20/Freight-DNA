@@ -39,6 +39,15 @@ export function useAuth() {
   return useAuthClerk();
 }
 
+// `bypassed` is surfaced so user-facing controls (sidebar Sign Out,
+// command-palette Sign Out) can disable themselves in staging — the
+// synthetic dev user is server-env-driven, so a client-side logout
+// would just bounce them right back in via /api/auth/me. Production
+// Clerk mode always returns false here.
+export function useIsAuthBypassed(): boolean {
+  return isDevBypassActive();
+}
+
 function useAuthBypass() {
   const { data, isLoading } = useQuery<AuthMeResponse>({
     queryKey: ["/api/auth/me"],

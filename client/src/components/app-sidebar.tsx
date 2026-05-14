@@ -23,7 +23,7 @@ import { Label } from "@/components/ui/label";
 import { SignatureEditor } from "@/components/signature-editor";
 import { WebexMyConnection } from "@/components/webex-my-connection";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { useAuth } from "@/hooks/use-auth";
+import { useAuth, useIsAuthBypassed } from "@/hooks/use-auth";
 import { Button } from "@/components/ui/button";
 import { useNotificationCounts } from "@/hooks/use-notifications";
 import { NotificationBell } from "@/components/notification-bell";
@@ -304,6 +304,7 @@ function usePendingIntelCount() {
 export function AppSidebar() {
   const [location] = useLocation();
   const { user, logout } = useAuth();
+  const authBypassed = useIsAuthBypassed();
   const { taskCount, suggestionCount, podCount } = useNotificationCounts();
   const unactionedReplyCount = useUnactionedReplyCount();
   const conversationsWaitingCount = useConversationsWaitingCount();
@@ -904,10 +905,11 @@ export function AppSidebar() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent"
-                    onClick={() => logout.mutate()}
+                    className="shrink-0 text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent disabled:opacity-50 disabled:cursor-not-allowed"
+                    onClick={() => { if (!authBypassed) logout.mutate(); }}
+                    disabled={authBypassed}
                     data-testid="button-logout"
-                    aria-label="Sign out"
+                    aria-label={authBypassed ? "Sign out (disabled in staging bypass mode)" : "Sign out"}
                   >
                     <LogOut className="h-4 w-4" />
                   </Button>
@@ -915,7 +917,11 @@ export function AppSidebar() {
                 <TooltipContent side="top" align="center">
                   <div className="max-w-[15rem]">
                     <p className="font-medium">Sign Out</p>
-                    <p className="text-xs text-muted-foreground">{desc("Sign Out")}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {authBypassed
+                        ? "Disabled in staging bypass mode — the synthetic dev user is server-env-driven and cannot be signed out from the browser."
+                        : desc("Sign Out")}
+                    </p>
                   </div>
                 </TooltipContent>
               </Tooltip>
