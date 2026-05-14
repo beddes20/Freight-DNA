@@ -208,7 +208,6 @@ function isDevBypassActive(): boolean {
   if (typeof window !== "undefined" && (window as any).__AUTH_BYPASS__ === true) return true;
   return false;
 }
-const DEV_BYPASS = isDevBypassActive();
 
 // ── Live-sync health store (Task #967) ─────────────────────────────────────
 //
@@ -372,7 +371,7 @@ export function _resetLiveSyncStatusForTests(): void {
 }
 
 export function useLiveSync(topics?: ReadonlyArray<string>): void {
-  if (DEV_BYPASS) {
+  if (isDevBypassActive()) {
     // eslint-disable-next-line react-hooks/rules-of-hooks
     return useLiveSyncCookies(topics);
   }
