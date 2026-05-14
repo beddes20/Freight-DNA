@@ -110,12 +110,23 @@ export function setupAuth(app: any) {
   // Public endpoint — exposes the Clerk publishable key to the frontend.
   // Goes through `getClerkPublishableKey()` so staging always sees pk_test_…
   // and production always sees pk_live_… based on APP_ENV (see
-  // server/lib/clerkConfig.ts). Adds `authBypassEnabled` so the client
-  // knows whether to mount <ClerkProvider> at all (Render staging can
-  // toggle bypass without a Vite rebuild).
+  // server/lib/clerkConfig.ts).
+  //
+  // `clerkPublishableKey` is the resolved per-env key REGARDLESS of bypass
+  // mode. It is a config readback — what the server thinks the key is — and
+  // matches the boot log line `[boot] APP_ENV=… clerk.publishable=…`. The
+  // publishable key is non-secret by Clerk's design (see
+  // https://clerk.com/docs/references/javascript/clerk/publishable-key)
+  // so returning it under bypass leaks nothing.
+  //
+  // `authBypassEnabled` is the separate signal the client uses to decide
+  // whether to mount <ClerkProvider>. When true, the client renders
+  // without Clerk and ignores `clerkPublishableKey` for provider mounting
+  // — but the key is still surfaced here so the debug page / readback
+  // tooling matches the server's view.
   app.get("/api/config/public", (_req: Request, res: Response) => {
     res.json({
-      clerkPublishableKey: bypassed ? "" : getClerkPublishableKey(),
+      clerkPublishableKey: getClerkPublishableKey(),
       authBypassEnabled: bypassed,
     });
   });

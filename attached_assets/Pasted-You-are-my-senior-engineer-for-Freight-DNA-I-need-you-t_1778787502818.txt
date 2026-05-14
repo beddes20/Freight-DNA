@@ -1,0 +1,116 @@
+You are my senior engineer for Freight-DNA. I need you to diagnose and fix two production-staging configuration/code-path issues in our existing app on Render.
+
+IMPORTANT:
+- This is an existing codebase, not a greenfield build.
+- Do not redesign the app.
+- Do not make unrelated refactors.
+- Work in the smallest safe set of changes.
+- Start with investigation, then propose the exact fix, then implement only after confirming the code path.
+- Keep all fixes staging-safe and production-safe.
+- Prefer deterministic logging and explicit env handling over “magic.”
+- At the end, give me a concise validation checklist and the exact expected log lines.
+
+Context:
+- App: Freight-DNA
+- Deployment: Render
+- Runtime currently shows APP_ENV=staging
+- Build is fresh and correct; Render is building and running a new dist/index.cjs bundle (~6.2mb), so this is no longer a stale-build problem.
+- Database/migrations are now healthy; schema drift check passes.
+- The remaining problems are:
+  1) Clerk public config mismatch
+  2) Email gate code-path mismatch
+
+Observed evidence:
+
+1) Clerk mismatch
+Boot log says:
+[boot] APP_ENV=staging clerk.publishable=pk_test_… (from CLERK_PUBLISHABLE_KEY, generic) clerk.secret=sk_test_… (from CLERK_SECRET_KEY, generic)
+
+But runtime API says:
+GET /api/config/public -> {"clerkPublishableKey":"","authBypassEnabled":true}
+
+So the server says the Clerk publishable key exists, but the frontend is being told it is blank.
+
+2) Email gate mismatch
+Boot window shows:
+[express] [boot] start loadEmailLiveMode
+[email-gate] ✅ Email live mode ON — outbound emails will be sent
+[express] [boot] done  loadEmailLiveMode (...)
+
+Expected hardened behavior in staging:
+- A diagnostic line should appear:
+  [email-gate][diag] APP_ENV_raw=... EMAIL_LIVE_MODE_raw=... requested=... envAllowed=... effective=... build=hardened-2026-05-14
+- In staging, live email should be OFF unless explicitly and safely allowed by env policy.
+- Right now there is NO [diag] line, and live email is ON in staging, which is unsafe.
+
+Your tasks:
+1. Find the exact implementation of:
+   - /api/config/public
+   - loadEmailLiveMode
+   - the email gate / setEmailLiveMode / any helper it calls
+   - any env parsing utility used by Clerk config or email-gate config
+
+2. Determine whether:
+   - /api/config/public is reading the wrong env var, wrong config object, or applying an APP_ENV filter that blanks the Clerk key in staging
+   - loadEmailLiveMode is calling the wrong helper or an older helper that does not include the hardened env gate and [diag] logger
+   - there are duplicate implementations of Clerk config or email gate logic
+
+3. Fix Clerk public config:
+   - Make /api/config/public return the same publishable key source that the boot logger reports
+   - In staging with test Clerk keys, the API response should include the publishable key, not an empty string
+   - Do not expose secrets
+   - Preserve authBypassEnabled behavior if intentionally enabled in staging
+
+4. Fix email gate:
+   - Ensure the boot path used by loadEmailLiveMode calls the hardened implementation
+   - Add or preserve the [email-gate][diag] line
+   - Enforce env-based blocking so APP_ENV=staging cannot turn live email ON unless explicitly allowed by the intended policy
+   - Make the boot logs clearly show requested / envAllowed / effective values
+   - Keep wording explicit enough that I can instantly tell whether staging is safe
+
+5. Add minimal validation logging only where necessary:
+   - No noisy spam logging
+   - Just enough to prove the correct code path is executing
+
+6. After changes, provide:
+   - files changed
+   - exact code-path explanation
+   - exact expected Render boot log lines
+   - exact expected /api/config/public JSON
+   - any required env vars to verify in Render
+   - any risk notes
+
+Constraints:
+- Do not touch unrelated product features
+- Do not change database schema unless absolutely required (it should not be required)
+- Do not remove existing useful boot logs
+- Do not rely on localStorage/sessionStorage
+- Do not invent new configuration systems if the current one can be corrected cleanly
+- Prefer a single canonical source for each setting
+
+Definition of done:
+
+A) Clerk
+Boot log still shows Clerk publishable/secret sources.
+AND
+GET /api/config/public returns something like:
+{"clerkPublishableKey":"pk_test_...","authBypassEnabled":true}
+
+B) Email gate
+Boot log window must show:
+[express] [boot] start loadEmailLiveMode
+[email-gate][diag] APP_ENV_raw="staging" EMAIL_LIVE_MODE_raw="..." requested=... envAllowed=false effective=false build=hardened-2026-05-14
+[email-gate] Email live mode OFF — outbound emails disabled (...)
+[express] [boot] done  loadEmailLiveMode (...)
+
+Output format:
+1. Findings
+2. Root cause
+3. Fix plan
+4. Exact files to change
+5. Code changes made
+6. Validation steps
+7. Expected logs / expected API response
+8. Remaining risks
+
+Begin by inspecting the current code paths and showing me the precise files/functions responsible before making changes.
