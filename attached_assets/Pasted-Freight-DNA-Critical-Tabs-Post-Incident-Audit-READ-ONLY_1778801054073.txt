@@ -1,0 +1,121 @@
+Freight-DNA — Critical Tabs Post-Incident Audit
+READ-ONLY FIRST. DO NOT MAKE FEATURE CHANGES.
+
+You are auditing the most important Freight-DNA tabs to confirm they are healthy after the recent auth/bootstrap incident and staging cutover.
+
+Tabs in scope:
+1. Dashboard
+2. Available Freight
+3. User Roster
+4. Customer Quotes
+5. Conversations
+6. Lane Work Queue
+
+Primary goal:
+I want to know whether these tabs are currently strong, trustworthy, hard to break, and working intuitively. I spent time hardening these before moving to Render, so I need you to verify they are still behaving correctly and were not indirectly regressed by the recent staging/auth/bootstrap fixes.
+
+Operating rules:
+- Start with read-only investigation.
+- Do not make code changes unless you find a concrete failing issue.
+- If you find an issue, stop and show me:
+  1. the exact root cause,
+  2. the files/routes/hooks/queries involved,
+  3. the safest minimal fix,
+  4. rollout risk,
+  before editing anything.
+- Keep scope tightly limited to these six tabs and any shared contracts they depend on.
+- Protect trust, ownership rules, role visibility, freshness signals, and user intuition.
+- Call out any place where UI appears healthy but is actually misleading, stale, polluted, incorrectly scoped, or fragile.
+
+I need a tab-by-tab audit with this exact output format:
+
+Section 1 — Executive Summary
+- Overall health verdict for the six tabs: HEALTHY / MIXED / NOT READY
+- Which tabs are strongest
+- Which tabs are highest risk
+- Whether any tab should be considered “do not touch until stabilized”
+
+Section 2 — Tab-by-Tab Audit
+For EACH of the six tabs, provide:
+
+A. Purpose
+- What this tab is supposed to do in Freight-DNA operationally
+- Which user roles likely depend on it
+- What trust contract this tab must uphold
+
+B. Current Behavior
+- Main route(s), components, loaders, hooks, queries, jobs, and API endpoints involved
+- Primary tables or data sources involved
+- Any feature flags, env gates, or bypass-sensitive paths involved
+
+C. Health Check
+- Does it render correctly?
+- Does the data appear trustworthy?
+- Are freshness/staleness signals present and correct?
+- Are empty states, broken states, and loading states clearly differentiated?
+- Are ownership / access / org-scope rules clear and enforced?
+- Is the UX intuitive for the intended user?
+- Any signs of hidden fragility or regression risk?
+
+D. Known Hardening Already Present
+- Identify any existing guardrails, trust protections, kill switches, soft-delete logic, filters, labels, or safety checks already in place
+- Explicitly note if the tab appears stronger because of work already done before Render
+
+E. Risks / Gaps
+- Anything stale, misleading, duplicated, polluted, over-permissive, bypass-sensitive, or likely to regress
+- Any mismatch between UI promise and backend truth
+- Any performance issues or suspicious query patterns tied to this tab
+
+F. Verdict
+- PASS / PASS WITH RISKS / FAIL
+- One-sentence reason
+
+Section 3 — Cross-Tab Findings
+- Shared dependencies that could break multiple tabs at once
+- Shared auth/org/user ownership assumptions
+- Shared query/state patterns that look fragile
+- Any repeated anti-pattern across these tabs
+
+Section 4 — Regression Check Against Recent Incident
+Specifically verify that recent auth/bootstrap fixes did NOT indirectly damage these tabs:
+- /api/config/public behavior
+- /api/auth/me behavior
+- bypass-mode auth branching
+- Clerk-dependent client surfaces
+- shared ErrorBoundary behavior
+- any shared hooks used by these tabs
+
+Section 5 — Priority List
+- Rank the six tabs from safest/strongest to most fragile
+- Identify the top 3 things that should be hardened next
+- Separate:
+  1. urgent trust issues,
+  2. intuitive UX issues,
+  3. cleanup / technical debt
+
+Section 6 — Recommended Next Actions
+- If all six tabs are healthy, say so clearly and recommend a safe next build area
+- If any are not healthy, propose the smallest possible next fixes in isolated tasks
+- Each recommended task must include exact files likely to touch and why
+
+Required verification work:
+- inspect the current code paths for all six tabs
+- inspect shared hooks, routes, guards, loaders, and API contracts they rely on
+- inspect whether auth bypass or recent Render cutover changes could affect any of them
+- run typecheck
+- run build
+- search for tests covering these tabs or their critical contracts
+- identify gaps where there is no regression protection
+- distinguish clearly between “confirmed in code” vs “needs browser/manual verification”
+
+Important:
+- do not give shallow opinions
+- do not just summarize the UI
+- trace actual code paths and data dependencies
+- do not broaden scope into unrelated tabs
+- do not propose rewrites
+- prioritize trust, accuracy, role-safety, and usability over visual polish
+
+Final instruction:
+If the tabs appear healthy overall, I want a clear statement that these six are safe enough to continue building on.
+If not, I want a stoplight list of what must be fixed before more feature work.
