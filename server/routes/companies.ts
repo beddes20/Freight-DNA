@@ -37,14 +37,52 @@ export function registerCompanyRoutes(app: Express): void {
       // Task #1095 — Customers list hides rows the inbound-email pipeline
       // auto-created unless the caller explicitly opts in.
       const includeEmailDerived = qStr(req.query.includeEmailDerived) === "true";
-      let allCompanies = await storage.getCompanies(req.session.organizationId!, { includeEmailDerived });
+      const includeArchived = qStr(req.query.includeArchived) === "true";
+      // Customers Trust Cleanup Subtask B (2026-05-15) — STRICTLY OPT-IN.
+      // The Bucket D thin-stub filter only applies when the caller passes
+      // `?customersOnly=true` explicitly. We deliberately do NOT default
+      // this to true at the route level — `/api/companies` has ~60
+      // client consumers (dashboard, dialogs, company-detail tabs,
+      // contact pickers, NBA, etc.) that rely on the full list, and
+      // silently narrowing them would be a stealth regression. The
+      // Customers page (`client/src/pages/customers.tsx`) is the only
+      // caller that opts in today; other surfaces stay on the legacy
+      // full view until they're individually migrated.
+      const customersOnly = qStr(req.query.customersOnly) === "true";
+      let allCompanies = await storage.getCompanies(
+        req.session.organizationId!,
+        { includeEmailDerived, customersOnly },
+      );
       const visibleIds = await getVisibleCompanyIds(currentUser);
       if (visibleIds !== null) {
         allCompanies = allCompanies.filter(c => visibleIds.includes(c.id));
       }
-      const includeArchived = qStr(req.query.includeArchived) === "true";
       if (!includeArchived) {
         allCompanies = allCompanies.filter(c => !c.archivedAt);
+      }
+      // Disclosure header so the Customers UI can surface "N thin accounts
+      // hidden" without a separate round-trip. We compute the delta against
+      // the same-org list with the thin-stub filter OFF (still respecting
+      // `includeEmailDerived` so the count reflects what the admin would
+      // see if they opted out). Cache hits make this near-free on repeat
+      // calls; on first call we pay one extra SELECT.
+      if (customersOnly) {
+        try {
+          const fullList = await storage.getCompanies(
+            req.session.organizationId!,
+            { includeEmailDerived, customersOnly: false },
+          );
+          const visibleFull = visibleIds === null
+            ? fullList
+            : fullList.filter(c => visibleIds.includes(c.id));
+          const archivedScoped = includeArchived
+            ? visibleFull
+            : visibleFull.filter(c => !c.archivedAt);
+          const hidden = Math.max(0, archivedScoped.length - allCompanies.length);
+          res.setHeader("X-Customers-Hidden-Count", String(hidden));
+        } catch {
+          // Header is purely advisory; never block the response on it.
+        }
       }
       // Customers-tab ownership unification: attach `ownerUserId` (the
       // canonical owner per `getCanonicalCompanyOwnerId`) and `ownerName`

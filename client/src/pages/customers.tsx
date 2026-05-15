@@ -207,6 +207,13 @@ export default function Customers() {
   // default Customers list hides.
   const [showEmailDerived, setShowEmailDerived] = useState(false);
   const [showAdminOwned, setShowAdminOwned] = useState(false);
+  // Customers Trust Cleanup Subtask B (2026-05-15) — admin-only opt-out
+  // from the default `customersOnly=true` filter. When true, the main
+  // companies query refetches with `?customersOnly=false` so admins can
+  // review the Bucket D thin stubs (no enrichment / no contacts / no
+  // freight) the default view hides. Reps never see the toggle.
+  const [showAllAccounts, setShowAllAccounts] = useState(false);
+  const [hiddenThinCount, setHiddenThinCount] = useState<number | null>(null);
   const [showFilters, setShowFilters] = useState(() => {
     const p = new URLSearchParams(window.location.search);
     return ["rep", "industry", "touch"].some(k => p.has(k) && p.get(k) !== "all");
@@ -318,13 +325,22 @@ export default function Customers() {
   });
 
   const { data: companies, isLoading: companiesLoading, isError: companiesError, refetch: refetchCompanies } = useQuery<Company[]>({
-    queryKey: ["/api/companies", { includeEmailDerived: showEmailDerived }],
+    queryKey: ["/api/companies", { includeEmailDerived: showEmailDerived, customersOnly: !showAllAccounts }],
     queryFn: async () => {
-      const url = showEmailDerived
-        ? "/api/companies?includeEmailDerived=true"
-        : "/api/companies";
+      const params = new URLSearchParams();
+      if (showEmailDerived) params.set("includeEmailDerived", "true");
+      // Customers Trust Cleanup Subtask B (2026-05-15) — explicit OPT-IN
+      // to the Bucket D thin-stub filter. The route no longer defaults
+      // this on (would silently narrow ~60 other /api/companies
+      // consumers); the Customers page is the only surface that asks
+      // for the cleaned view today. Admin chip below flips it back off
+      // to show all accounts including Bucket D.
+      if (!showAllAccounts) params.set("customersOnly", "true");
+      const url = `/api/companies?${params.toString()}`;
       const res = await fetch(url, { credentials: "include" });
       if (!res.ok) throw new Error("Failed to fetch");
+      const hidden = res.headers.get("X-Customers-Hidden-Count");
+      setHiddenThinCount(hidden !== null ? Number(hidden) : null);
       return res.json();
     },
   });
@@ -591,6 +607,33 @@ export default function Customers() {
               >
                 {showAdminOwned ? "Hide Admin-Owned" : "Show Admin-Owned"}
               </Button>
+            )}
+            {/* Customers Trust Cleanup Subtask B (2026-05-15) — admin-only
+                disclosure chip. Reps never see it; their default-cleaned
+                view is the trust win. Admins use it to spot-check Bucket D
+                thin-stub rows the filter excludes. */}
+            {!showArchived && isAdminPreviewViewer && (
+              <Button
+                variant={showAllAccounts ? "default" : "outline"}
+                onClick={() => setShowAllAccounts(v => !v)}
+                className={showAllAccounts ? "" : "bg-white/10 border-white/20 text-white hover:bg-white/20"}
+                data-testid="toggle-show-all-accounts"
+                title="Include 'thin' accounts with no owner, contacts, freight, or notes (Customers Trust Cleanup Subtask B)"
+              >
+                {showAllAccounts
+                  ? "Showing all accounts"
+                  : hiddenThinCount && hiddenThinCount > 0
+                    ? `Show all (${hiddenThinCount} hidden)`
+                    : "Show all accounts"}
+              </Button>
+            )}
+            {!showArchived && isAdminPreviewViewer && !showAllAccounts && hiddenThinCount !== null && hiddenThinCount > 0 && (
+              <span
+                className="text-xs text-white/60"
+                data-testid="text-thin-accounts-hidden-count"
+              >
+                {hiddenThinCount} thin accounts hidden
+              </span>
             )}
             <Button
               variant={showArchived ? "default" : "outline"}

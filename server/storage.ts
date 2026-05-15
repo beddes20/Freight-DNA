@@ -8,6 +8,7 @@ import {
   companies,
   organizations,
   contacts,
+  freightDailyUploadFact,
   rfps,
   awards,
   marketShareEntries,
@@ -581,7 +582,7 @@ export interface IStorage {
    * pipeline. Pass true from the admin email-derived view (and any other
    * caller that explicitly wants the full set) to bypass the filter.
    */
-  getCompanies(organizationId: string, opts?: { includeEmailDerived?: boolean }): Promise<Company[]>;
+  getCompanies(organizationId: string, opts?: { includeEmailDerived?: boolean; customersOnly?: boolean }): Promise<Company[]>;
   getCompaniesByIds(ids: string[], organizationId: string): Promise<Company[]>;
   // Workflow OS — Task #930. Resolve a batch of free-text customer names
   // (e.g. `load_fact.customer_name`) to their matching `companies` rows so
@@ -2495,22 +2496,51 @@ export class DatabaseStorage implements IStorage {
 
   async getCompanies(
     organizationId: string,
-    opts?: { includeEmailDerived?: boolean },
+    opts?: { includeEmailDerived?: boolean; customersOnly?: boolean },
   ): Promise<Company[]> {
     // Task #1095 — by default we hide rows the inbound-email pipeline
     // auto-created (sender domain we'd never seen before). Admin tooling
     // and migrations can opt in via `includeEmailDerived: true`.
+    //
+    // Customers Trust Cleanup Subtask B (2026-05-15) — when
+    // `customersOnly: true`, also exclude "Bucket D" thin stubs: rows with
+    // no enrichment signal (no owner / assigned / salesperson / industry /
+    // notes), no active contacts, and no freight history. Mirrors the
+    // production audit query in docs/customers-bucket-audit-2026-05-15.md
+    // (246 of 304 default-visible rows on the Value Truck org). Default is
+    // OFF so internal/service callers (auth visibility, CQ chokepoints,
+    // freight-fact writers, NBA, leaderboards, etc.) inherit legacy
+    // behavior unchanged. Only the public `GET /api/companies` route flips
+    // the flag on for the Customers tab.
     const includeEmailDerived = opts?.includeEmailDerived === true;
-    const key = `companies:${organizationId}:ied=${includeEmailDerived ? 1 : 0}`;
+    const customersOnly = opts?.customersOnly === true;
+    const key = `companies:${organizationId}:ied=${includeEmailDerived ? 1 : 0}:co=${customersOnly ? 1 : 0}`;
     const cached = cacheGet<Company[]>(key);
     if (cached) return cached;
-    const where = includeEmailDerived
-      ? eq(companies.organizationId, organizationId)
-      : and(
-          eq(companies.organizationId, organizationId),
-          eq(companies.isEmailDerived, false),
-        );
-    const result = await db.select().from(companies).where(where);
+    const conds: SQL[] = [eq(companies.organizationId, organizationId)];
+    if (!includeEmailDerived) {
+      conds.push(eq(companies.isEmailDerived, false));
+    }
+    if (customersOnly) {
+      conds.push(sql`(
+        ${companies.ownerRepId} IS NOT NULL
+        OR ${companies.assignedTo} IS NOT NULL
+        OR ${companies.salesPersonId} IS NOT NULL
+        OR ${companies.industry} IS NOT NULL
+        OR ${companies.notes} IS NOT NULL
+        OR EXISTS (
+          SELECT 1 FROM ${contacts} ct
+           WHERE ct.company_id = ${companies.id}
+             AND ct.deleted_at IS NULL
+        )
+        OR EXISTS (
+          SELECT 1 FROM ${freightDailyUploadFact} f
+           WHERE f.org_id = ${companies.organizationId}
+             AND lower(btrim(f.customer)) = lower(btrim(${companies.name}))
+        )
+      )`);
+    }
+    const result = await db.select().from(companies).where(and(...conds));
     cacheSet(key, result, 30_000);
     return result;
   }

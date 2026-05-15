@@ -1,0 +1,67 @@
+Approve B, with a small visibility tweak.
+
+You’re right: with A=0 and D=246, the thin-stub junk is the whole story for now. Let’s do Subtask B next, focused ONLY on hiding D by default while keeping B visible.
+
+Subtask B — execution instructions
+- Implement the Customers read-filter hardening as planned, with these specifics:
+
+1) Filter behavior
+- Default /customers view:
+  - Keep Bucket B visible (the 58 enriched / likely-real accounts).
+  - Hide Bucket D (the 246 thin stubs: no owner/manager/salesperson/industry/notes/contacts/freight).
+  - Preserve the existing is_email_derived default-hide.
+- Do NOT attempt to use freight_daily_upload_fact yet (A=0 in prod).
+- Do NOT change any CQ chokepoints or internal storage callers.
+
+2) API / storage changes
+- server/storage.ts:getCompanies
+  - Add a customersOnly?: boolean option.
+  - When customersOnly === true, apply:
+    - the existing org + archived + is_email_derived filters, AND
+    - the thin-stub exclusion (the same predicate you used for Bucket D in the audit).
+  - When customersOnly is undefined, behave exactly as today (no new filters).
+- server/routes/companies.ts: GET /api/companies
+  - For the normal /customers caller, default customersOnly=true.
+  - Introduce an explicit customersOnly=false path for admin/audit (see UI tweak below).
+  - For any internal/service usage (e.g., CQ), keep the current behavior: do NOT flip customersOnly on, and do NOT change existing call sites in customerQuotes.ts or freight_daily_upload_fact-related code.
+
+3) UI tweak / disclosure
+- client/src/pages/customers.tsx
+  - Add a small, non-intrusive disclosure chip or banner when Bucket D rows are being hidden, something like:
+    - “246 thin accounts hidden — Admins can review all accounts”
+  - That chip should:
+    - be visible to admins (and optionally all users),
+    - when clicked, re-fetch with customersOnly=false and clearly mark that the view is now “Full (includes thin accounts)”.
+  - Normal reps should continue to see the cleaned list by default (customersOnly=true).
+
+4) Callers audit
+- Before you finalize B, grep all /api/companies consumers and explicitly list them in your report.
+  - For each caller, state:
+    - whether it should use customersOnly=true (Customers tab),
+    - or customersOnly=false / undefined (admin tools, CQ, etc.).
+- Make sure CQ, freight_daily_upload_fact writers, and email-derived flows are not changed by B.
+
+5) Tests / guardrails for this subtask
+- Add tests/customers-tab-trust-contract.test.ts with at least:
+  - “Bucket D-style thin stub is excluded when customersOnly=true.”
+  - “Bucket B-style enriched account is included.”
+  - “?customersOnly=false returns both B and D (legacy behavior for admins/audit).”
+  - “?includeEmailDerived=true still honors the is_email_derived contract.”
+- Update tests/code-quality-guardrails.test.ts with a new Section asserting:
+  - getCompanies accepts customersOnly and uses it.
+  - GET /api/companies reads customersOnly from query and defaults to true only for the public /customers path.
+
+6) Stop and report before C
+- After B:
+  - paste the exact diff (files touched),
+  - list all /api/companies callers and how they were treated,
+  - summarize behavioral changes on /customers,
+  - confirm which tests you added/updated, and
+  - confirm CQ / 1051 / 1095 contracts are unchanged.
+- Then STOP and wait for my approval before you start Subtask C.
+
+Important: do NOT change the scope of Subtask C yet.
+- For now, leave C as “carrier-name guard in upsertCompany” on the table, but don’t start it.
+- Once B is live in prod and we see how much better /customers looks in practice, we can re-scope C around an is_carrier flag + fuzzy/keyword queue, using the D-samples (Chrobinson, Arrivelogistics, etc.) as ground truth.
+
+Please confirm you understand this adjustment to B and then execute only Subtask B next, following the stop rule.

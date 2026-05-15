@@ -7918,3 +7918,114 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "tests/customer-quotes-handoff-toast-contract.test.ts must exist and pin the three toast branches (auto / pending_approval / none) plus the `_handoff` alias fallback. Deleting it removes the runtime fence Task #1153 added.",
   );
 })();
+
+
+// ── Section 1300: Customers Tab Trust Cleanup — Subtask B (2026-05-15) ────
+// Restores the rule "company appears in /customers ONLY if (a) we ship for
+// them OR (b) it was manually created" by hiding Bucket D thin-stub rows
+// (no owner / assigned / sales / industry / notes / active contact / freight
+// history). The audit that produced these buckets lives in
+// docs/customers-bucket-audit-2026-05-15.md (246/304 thin stubs on Value
+// Truck). Contracts:
+//   1. `storage.getCompanies` accepts a `customersOnly` option AND applies a
+//      thin-stub exclusion when true (referencing contacts + freight-fact).
+//   2. The IStorage signature exposes `customersOnly` so route handlers can
+//      pass it without `any` casts.
+//   3. `GET /api/companies` reads `customersOnly` from the query string but
+//      DOES NOT default it on (strict opt-in). The route default must stay
+//      legacy-safe — `/api/companies` has ~60 client consumers and silently
+//      narrowing them was rejected during code review.
+//   4. `customers.tsx` exposes the admin-only `toggle-show-all-accounts`
+//      chip, sends `?customersOnly=true` by DEFAULT (the Customers tab is
+//      the only opt-in caller today), and drops the param when the admin
+//      flips the chip on.
+//   5. `server/services/customerQuotes.ts` does NOT call
+//      `getCompanies({ customersOnly: true })` — CQ chokepoints stay on the
+//      legacy "every row" view (CQ-2/CQ-5 stability contract).
+//   6. The runtime contract test exists.
+(function section1300CustomersTrustCleanup() {
+  console.log("\n── Section 1300: Customers Tab Trust Cleanup (Subtask B) ──");
+  const storageSrc = readFile("server/storage.ts");
+  const routesSrc = readFile("server/routes/companies.ts");
+  const customersPageSrc = readFile("client/src/pages/customers.tsx");
+  const cqSrc = readFile("server/services/customerQuotes.ts");
+
+  assert(
+    "server/storage.ts — IStorage.getCompanies signature exposes customersOnly",
+    /getCompanies\(\s*organizationId:\s*string,\s*opts\?:\s*\{[^}]*customersOnly\?:\s*boolean[^}]*\}\s*\)/.test(storageSrc),
+    "IStorage.getCompanies must accept customersOnly so route handlers can pass it without `any` casts",
+  );
+  assert(
+    "server/storage.ts — getCompanies impl threads customersOnly into the predicate",
+    /customersOnly\s*=\s*opts\?\.customersOnly\s*===\s*true/.test(storageSrc) &&
+      /if\s*\(\s*customersOnly\s*\)/.test(storageSrc),
+    "getCompanies must compute customersOnly from opts and branch on it",
+  );
+  assert(
+    "server/storage.ts — thin-stub predicate references contacts + freight-fact",
+    /customersOnly[\s\S]{0,1500}EXISTS[\s\S]{0,200}\$\{contacts\}[\s\S]{0,800}EXISTS[\s\S]{0,200}\$\{freightDailyUploadFact\}/.test(storageSrc),
+    "the customersOnly branch must reference contacts (active-contacts EXISTS) and freightDailyUploadFact (freight-history EXISTS) — these are the two enrichment signals beyond the per-row columns",
+  );
+  assert(
+    "server/storage.ts — cache key includes the customersOnly bit",
+    /companies:\$\{organizationId\}:ied=\$\{[^}]+\}:co=\$\{[^}]+\}/.test(storageSrc),
+    "cache key must vary on customersOnly so the cleaned and full lists do not collide in cache",
+  );
+
+  assert(
+    "server/routes/companies.ts — reads customersOnly from query string",
+    /qStr\(\s*req\.query\.customersOnly\s*\)/.test(routesSrc),
+    "GET /api/companies must read ?customersOnly from the query string",
+  );
+  assert(
+    "server/routes/companies.ts — customersOnly is STRICT OPT-IN (no route-level default)",
+    /const\s+customersOnly\s*=\s*qStr\(\s*req\.query\.customersOnly\s*\)\s*===\s*"true"/.test(routesSrc) &&
+      !/customersOnly\s*=\s*!includeArchived\s*&&\s*!includeEmailDerived/.test(routesSrc),
+    "route must compute customersOnly only from explicit ?customersOnly=true and must NOT default it on for other consumers (~60 client callers would silently narrow)",
+  );
+  assert(
+    "server/routes/companies.ts — passes customersOnly into storage.getCompanies",
+    /storage\.getCompanies\(\s*req\.session\.organizationId![^)]*customersOnly[^)]*\)/.test(routesSrc),
+    "GET /api/companies must forward customersOnly into storage.getCompanies",
+  );
+  assert(
+    "server/routes/companies.ts — emits X-Customers-Hidden-Count disclosure header",
+    /setHeader\(\s*"X-Customers-Hidden-Count"/.test(routesSrc),
+    "route must surface the hidden-row count via a response header so the UI chip can show it without a second round-trip",
+  );
+
+  assert(
+    "client/src/pages/customers.tsx — exposes admin-only toggle-show-all-accounts chip",
+    /data-testid="toggle-show-all-accounts"/.test(customersPageSrc) &&
+      /isAdminPreviewViewer/.test(customersPageSrc),
+    "customers page must render the admin-only chip and gate it behind the admin-viewer hook",
+  );
+  assert(
+    "client/src/pages/customers.tsx — main fetch opts in via customersOnly=true by DEFAULT (drops param when chip flipped on)",
+    /if\s*\(\s*!\s*showAllAccounts\s*\)\s*params\.set\(\s*"customersOnly"\s*,\s*"true"\s*\)/.test(customersPageSrc),
+    "the Customers tab is the only opt-in caller — it must explicitly send ?customersOnly=true unless the admin chip is flipped on (in which case the param is omitted entirely so the route returns the legacy full list)",
+  );
+  assert(
+    "client/src/pages/customers.tsx — query key varies on customersOnly so the cache splits cleanly",
+    /queryKey:\s*\[\s*"\/api\/companies"\s*,\s*\{[^}]*customersOnly[^}]*\}\s*\]/.test(customersPageSrc),
+    "the queryKey must include customersOnly so the cleaned and full views do not share a cache slice",
+  );
+  assert(
+    "client/src/pages/customers.tsx — surfaces the hidden-count disclosure",
+    /data-testid="text-thin-accounts-hidden-count"/.test(customersPageSrc) &&
+      /X-Customers-Hidden-Count/.test(customersPageSrc),
+    "customers page must read the X-Customers-Hidden-Count header and render the hidden-count disclosure span",
+  );
+
+  assert(
+    "server/services/customerQuotes.ts — does NOT pass customersOnly (CQ chokepoints stay on the legacy view)",
+    !/getCompanies\([^)]*customersOnly/.test(cqSrc),
+    "CQ stability contract (CQ-2/CQ-5) — customer-quotes service must keep using the legacy `every row` getCompanies view; widening it would silently drop unmatched-customer quotes",
+  );
+
+  assert(
+    "Section 1300 — runtime contract test tests/customers-tab-trust-contract.test.ts exists",
+    fs.existsSync(path.join(ROOT, "tests", "customers-tab-trust-contract.test.ts")),
+    "tests/customers-tab-trust-contract.test.ts must exist and pin the four runtime cases (Bucket D excluded, Bucket B included, customersOnly=false returns both, includeEmailDerived contract preserved)",
+  );
+})();
