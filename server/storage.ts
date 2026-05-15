@@ -2,7 +2,7 @@ import { eq, inArray, ilike, or, and, asc, desc, isNull, isNotNull, gte, lte, lt
 import { drizzle } from "drizzle-orm/node-postgres";
 import pg from "pg";
 import { cacheGet, cacheSet, cacheInvalidatePrefix } from "./cache";
-import { assertNotFixtureEmail, isFixtureMailboxAddress } from "./lib/fixtureMailboxes";
+import { assertNotFixtureEmail, isFixtureMailboxAddress, FIXTURE_MAILBOX_LIKE_PATTERNS } from "./lib/fixtureMailboxes";
 import {
   users,
   companies,
@@ -494,12 +494,21 @@ export interface UserLifecycleImpact {
 // it receives. `is_fixture` rows stay excluded under EVERY flag — there
 // is no `includeFixture` knob, by design (keeps our fixture-poisoning
 // guard intact even if an admin opts into the noisy buckets).
+//
+// Users Roster Trust (Subtask B, 2026-05-15) adds `includeJunkSuspects`.
+// Default-excludes rows whose `LOWER(username)` ends with any
+// FIXTURE_MAILBOX_LIKE_PATTERNS suffix (`@example.com` family + RFC 6761
+// reserved TLDs). This is a READ-TIME pattern filter only; no flag is
+// written to the row. The pattern list is the SAME constant the
+// `assertNotFixtureEmail` boundary guard uses on `storage.createUser`,
+// so the read-time view and the write-time guard cannot drift.
 export interface UserListFilter {
   includeInactive?: boolean;
   includeDeleted?: boolean;
   includeServiceAccounts?: boolean;
   includeQuarantined?: boolean;
   includeDemo?: boolean;
+  includeJunkSuspects?: boolean;
 }
 
 export interface IStorage {
@@ -2063,6 +2072,19 @@ export class DatabaseStorage implements IStorage {
     }
     // is_fixture: always excluded. No flag.
     clauses.push(sql`COALESCE(${users.isFixture}, false) = false`);
+    // Users Roster Trust (Subtask B, 2026-05-15) — default-exclude rows whose
+    // username matches a fixture/junk suffix (`@example.com` etc). Admins can
+    // opt back in via `includeJunkSuspects:true`. The pattern list is the
+    // exact same FIXTURE_MAILBOX_LIKE_PATTERNS used by the createUser
+    // boundary guard, so read-time visibility and write-time rejection share
+    // a single source of truth.
+    if (!filter.includeJunkSuspects && FIXTURE_MAILBOX_LIKE_PATTERNS.length > 0) {
+      const lowered = sql`LOWER(${users.username})`;
+      const junkClauses = FIXTURE_MAILBOX_LIKE_PATTERNS.map(
+        (p) => sql`${lowered} LIKE ${p}`,
+      );
+      clauses.push(sql`NOT (${sql.join(junkClauses, sql` OR `)})`);
+    }
     return db.select().from(users).where(and(...clauses));
   }
 

@@ -1503,7 +1503,10 @@ function BillingPanel() {
 //
 // `includeDemo` is intentionally NOT wired in this step. `is_fixture` rows
 // have no opt-in by 4a-API contract.
-type LifecycleTab = "active" | "inactive" | "service" | "quarantined" | "deleted";
+//
+// Users Roster Trust (Subtask B, 2026-05-15) adds the "Junk suspects" tab —
+// admin-only opt-in for fixture-domain usernames (`@example.com` family).
+type LifecycleTab = "active" | "inactive" | "service" | "quarantined" | "deleted" | "junk_suspects";
 
 const LIFECYCLE_TABS: ReadonlyArray<{ key: LifecycleTab; label: string }> = [
   { key: "active", label: "Active" },
@@ -1511,6 +1514,7 @@ const LIFECYCLE_TABS: ReadonlyArray<{ key: LifecycleTab; label: string }> = [
   { key: "service", label: "Service accounts" },
   { key: "quarantined", label: "Quarantined" },
   { key: "deleted", label: "Deleted" },
+  { key: "junk_suspects", label: "Junk suspects" },
 ];
 
 function buildUsersUrlForLifecycle(tab: LifecycleTab): string {
@@ -1525,6 +1529,8 @@ function buildUsersUrlForLifecycle(tab: LifecycleTab): string {
       return "/api/users?includeQuarantined=true";
     case "deleted":
       return "/api/users?includeDeleted=true";
+    case "junk_suspects":
+      return "/api/users?includeJunkSuspects=true";
   }
 }
 
@@ -1547,7 +1553,21 @@ export default function AdminUsers() {
   // Non-admins always read the cleaned default roster — they never see the
   // lifecycle strip, so we never let their tab state leak into the URL.
   const usersUrl = isAdmin ? buildUsersUrlForLifecycle(lifecycleTab) : "/api/users";
-  const { data: users = [], isLoading } = useQuery<SafeUser[]>({ queryKey: [usersUrl] });
+  // Users Roster Trust (Subtask B, 2026-05-15) — capture the
+  // X-Users-Junk-Hidden-Count header so we can surface a disclosure chip
+  // next to the lifecycle strip whenever the junk-suspect exclusion is in
+  // effect (i.e. the active tab is NOT "junk_suspects").
+  const [hiddenJunkCount, setHiddenJunkCount] = useState<number | null>(null);
+  const { data: users = [], isLoading } = useQuery<SafeUser[]>({
+    queryKey: [usersUrl],
+    queryFn: async () => {
+      const res = await fetch(usersUrl, { credentials: "include" });
+      if (!res.ok) throw new Error("Failed to fetch users");
+      const hidden = res.headers.get("X-Users-Junk-Hidden-Count");
+      setHiddenJunkCount(hidden !== null ? Number(hidden) : null);
+      return res.json();
+    },
+  });
   const [editUser, setEditUser] = useState<SafeUser | undefined>();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<SafeUser | null>(null);
@@ -1726,6 +1746,14 @@ export default function AdminUsers() {
                 data-testid={`lifecycle-tab-${key}`}
               >
                 {label}
+                {key === "junk_suspects" && hiddenJunkCount !== null && hiddenJunkCount > 0 && lifecycleTab !== "junk_suspects" && (
+                  <span
+                    className="ml-1.5 inline-flex items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/40 px-1.5 text-xs text-amber-700 dark:text-amber-300"
+                    data-testid="text-junk-suspects-hidden-count"
+                  >
+                    {hiddenJunkCount}
+                  </span>
+                )}
               </button>
             );
           })}

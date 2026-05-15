@@ -783,6 +783,12 @@ RULES FOR YOUR RESPONSES:
       // once at debug level) rather than 403 so shared frontend code can
       // pass speculative flags without breaking. `includeInactive` is
       // available to any caller. `is_fixture` is never opt-in.
+      //
+      // Users Roster Trust (Subtask B, 2026-05-15) adds `includeJunkSuspects`
+      // — admin-only opt-in to surface fixture-domain usernames
+      // (`@example.com` family + RFC 6761 reserved TLDs). When the
+      // exclusion is in effect we emit X-Users-Junk-Hidden-Count so the
+      // admin UI can surface a disclosure chip.
       const callerIsAdmin = isAdmin(currentUser);
       const requested = {
         includeInactive: req.query.includeInactive === "true",
@@ -790,6 +796,7 @@ RULES FOR YOUR RESPONSES:
         includeServiceAccounts: req.query.includeServiceAccounts === "true",
         includeQuarantined: req.query.includeQuarantined === "true",
         includeDemo: req.query.includeDemo === "true",
+        includeJunkSuspects: req.query.includeJunkSuspects === "true",
       };
       const filter = {
         includeInactive: requested.includeInactive,
@@ -797,6 +804,7 @@ RULES FOR YOUR RESPONSES:
         includeServiceAccounts: callerIsAdmin && requested.includeServiceAccounts,
         includeQuarantined: callerIsAdmin && requested.includeQuarantined,
         includeDemo: callerIsAdmin && requested.includeDemo,
+        includeJunkSuspects: callerIsAdmin && requested.includeJunkSuspects,
       };
       if (!callerIsAdmin) {
         const ignored = (Object.keys(requested) as Array<keyof typeof requested>)
@@ -811,6 +819,26 @@ RULES FOR YOUR RESPONSES:
 
       const allUsers = await storage.getUsers(req.session.organizationId!, filter);
       const safeUsers = allUsers.map(({ password, ...u }) => u);
+
+      // Users Roster Trust (Subtask B, 2026-05-15) — emit hidden-count
+      // disclosure header when the junk-suspect exclusion is in effect.
+      // Computed via a same-org callback that flips ONLY the junk knob
+      // on, mirroring the same lifecycle scoping the user is currently
+      // viewing so the disclosure number is comparable to the visible
+      // list. The header is only set when the exclusion is actually
+      // narrowing the response (i.e. !filter.includeJunkSuspects).
+      if (!filter.includeJunkSuspects) {
+        try {
+          const withJunk = await storage.getUsers(req.session.organizationId!, {
+            ...filter,
+            includeJunkSuspects: true,
+          });
+          const hidden = Math.max(0, withJunk.length - allUsers.length);
+          res.setHeader("X-Users-Junk-Hidden-Count", String(hidden));
+        } catch {
+          // Header is non-essential disclosure; never break the route on it.
+        }
+      }
       if (isAdmin(currentUser)) return res.json(safeUsers);
 
       const teamIds = await storage.getTeamMemberIds(currentUser.id, currentUser.organizationId);
