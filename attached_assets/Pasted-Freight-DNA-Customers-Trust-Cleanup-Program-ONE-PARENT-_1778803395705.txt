@@ -1,0 +1,136 @@
+Freight-DNA — Customers Trust Cleanup Program
+ONE PARENT TASK WITH REQUIRED SUBTASKS
+Do not start coding immediately.
+
+Context:
+Freight-DNA is now back up after the auth/bootstrap incident. I do NOT want random feature work right now. I want to restore trust in the Customers tab.
+
+Business rule:
+A company should appear in the Customers tab ONLY if:
+1. we are shipping for that company, OR
+2. the company was manually created intentionally.
+
+Current problem:
+- bogus customers were created
+- bogus contacts were created
+- carriers were added into Customers
+- the Customers tab is not trustworthy right now
+- the audit already found that GET /api/companies is too broad and that multiple company creation paths can pollute the companies table
+
+Important known findings from the read-only audit:
+- GET /api/companies currently filters by org, archived, and is_email_derived, but NOT by “we ship for them” and NOT by carrier exclusion
+- POST /api/companies is intentionally left open as a recovery hatch and must NOT be removed
+- upsertCompany is a major pollution source from freight/opportunity/prospect ingestion
+- carriers live in a separate carriers table, but carrier names can still leak into companies
+- is_email_derived protection is working and should remain intact
+- we must NOT hard-delete companies or contacts
+- we must NOT break CQ chokepoints or freight_daily_upload_fact contracts
+
+Your assignment:
+Treat this as one large parent task, but break it into sub-tasks before implementation.
+I want you to first produce a structured execution plan with subtask boundaries, dependencies, risk, and rollback approach.
+Only after that plan is approved should implementation begin.
+
+Required output format before any code changes:
+Section 1 — Parent task summary
+- objective
+- success criteria
+- non-goals
+- trust contracts that must not be broken
+
+Section 2 — Proposed subtask breakdown
+Create the parent task and split it into small sub-tasks.
+Each subtask must include:
+- subtask name
+- goal
+- exact files likely touched
+- whether it is read-only, backend, frontend, tests, or data-audit
+- blast radius
+- rollback plan
+- acceptance criteria
+- dependency order
+
+I expect the subtasks to look roughly like this, unless you find a better decomposition:
+Subtask A — Phase 0 production/read-only bucket audit
+Subtask B — Customers read filter hardening (hide carriers + thin stubs by default)
+Subtask C — Carrier guard in upsertCompany
+Subtask D — Tests and code guardrails for Customers inclusion contract
+Subtask E — Optional schema prep for created_via / created_by_user_id
+Subtask F — Optional admin cleanup tooling plan
+
+Section 3 — Implementation recommendation
+Tell me which subtasks should be done NOW vs NEXT vs LATER.
+Recommend the smallest safe first implementation slice.
+
+Section 4 — Risks
+Call out:
+- anything that could affect Customer Quotes stability contract
+- anything that could affect freight_daily_upload_fact / Section 1051
+- anything that could affect conversations/email-derived handling
+- anything that could affect rep recovery paths
+- any route or helper that must remain untouched
+
+Section 5 — Stop rule
+Do not implement until you show me the subtask plan.
+
+After I approve the plan, implementation rules:
+1. execute one subtask at a time
+2. after each subtask, stop and report:
+   - exact diff
+   - tests run
+   - what changed behaviorally
+   - rollback note
+3. do not bundle multiple risky changes in one pass
+4. if you find a blocker, stop and isolate it rather than fixing unrelated things inline
+
+Technical intent for the program:
+Phase 0 / read-only:
+- run the bucket audit queries from the Customers trust audit
+- produce counts for:
+  A. true customers we ship for
+  B. likely manual real customers
+  C. carriers incorrectly showing as customers
+  D. thin-stub junk companies
+  E. companies with only bad contacts
+  F. contacts attached to non-customer companies
+  G. ambiguous review-needed records
+
+Phase 1 / safest product fix:
+- harden the Customers-tab read path so default Customers behavior excludes:
+  - carrier matches
+  - obvious junk thin stubs
+  - while preserving existing is_email_derived handling
+- this must be scoped carefully so it does NOT accidentally break CQ/internal consumers
+- if needed, use a customersOnly=true style filter scoped to the Customers tab pathway
+
+Phase 2 / stop future pollution:
+- add a carrier-name guard in upsertCompany
+- before creating a new companies row, check carriers for exact same-org name match
+- refuse or quarantine exact carrier collisions
+- preserve the manual POST /api/companies recovery path, but harden it with warnings/guards rather than removing it
+
+Phase 3 / regression protection:
+- add tests for the Customers inclusion contract
+- add code guardrails so future changes cannot quietly re-broaden GET /api/companies or skip the carrier check in upsertCompany
+
+Phase 4 / optional future hardening:
+- design, but do not necessarily implement yet, a created_via / created_by_user_id model for companies
+- design, but do not necessarily implement yet, an admin cleanup console
+- do not do large schema work unless it is clearly justified after the first safe slices land
+
+Constraints:
+- no hard deletes
+- no data mutations until the read-only audit results are known
+- no weakening of #1095 is_email_derived behavior
+- no breaking of CQ stability contract
+- no changes to freight_daily_upload_fact writer contract
+- no broad refactor unless required
+- prefer additive, reversible changes
+- preserve recovery paths for reps
+
+Expected deliverable for the first response:
+A complete parent-task plan with subtask decomposition only.
+No code changes yet.
+No partial implementation yet.
+No “I went ahead and started” behavior.
+Wait for approval after the subtask plan.
