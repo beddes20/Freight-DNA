@@ -1,0 +1,123 @@
+Freight-DNA — Conversations Trust Program (Phase 1.1)
+Subtask: CONV-1.1-A — Rep visibility audit (read-only)
+
+Context:
+Phase 1 planning for Conversations is complete. Key takeaways:
+- Visibility today is strictly ownerUserId-based via getVisibleRepUserIds(user).
+- Threads where ownerUserId IS NULL are only reachable via the separate
+  ?unowned=1 bucket, not through “mine” even if I own the account.
+- There is no documented or test-pinned contract for:
+  - the rep visibility predicate itself, or
+  - how often “I own the account but not the thread” actually happens.
+- We have several candidate trust gaps (CONV-G1..G8), but no hard numbers.
+
+Goal:
+Run a SELECT-only audit that quantifies, per rep and per org, how often
+Conversations visibility disagrees with account ownership, without changing
+any production behavior.
+
+This is analogous to the CQ ownership audit we already did:
+numbers first, decisions later.
+
+Scope:
+- NEW tools/audit-conversations-visibility.ts (or similar).
+- NEW docs/conversations-visibility-audit-YYYY-MM-DD.md with the results.
+- READ-ONLY access to:
+  - email_conversation_threads
+  - email_messages (if needed for examples)
+  - companies
+  - users
+- No changes to server/routes, services, schema, writers, or guardrails.
+
+What the audit should compute (minimum):
+
+For each org (at least Value Truck) and each active rep R (users.isActive != false):
+
+1) mine_threads_count(R)
+   - Count of threads where:
+     email_conversation_threads.ownerUserId = R.id
+     AND orgId = R.organizationId
+     AND thread is not archived/snoozed per whatever definition is used for the
+     default “mine” bucket today (reuse that logic; do not invent new filters).
+
+2) account_owned_unowned_threads_count(R)
+   - Count of threads where:
+     companies.ownerRepId = R.id
+     AND email_conversation_threads.linkedAccountId = companies.id
+     AND email_conversation_threads.ownerUserId IS NULL.
+
+   (This is the “I own the account but the thread is unowned” cohort from CONV-G1.)
+
+3) account_owned_misowned_threads_count(R)
+   - Count of threads where:
+     companies.ownerRepId = R.id
+     AND email_conversation_threads.linkedAccountId = companies.id
+     AND email_conversation_threads.ownerUserId IS NOT NULL
+     AND email_conversation_threads.ownerUserId != R.id.
+
+   (This is the “I own the account but the thread is stamped to someone else” cohort.)
+
+4) Optional but helpful: org-level aggregates
+   - Totals across all reps for:
+     - mine_threads_count
+     - account_owned_unowned_threads_count
+     - account_owned_misowned_threads_count
+   - For each bucket, include a small sample of thread ids, account ids/names,
+     and owner ids to illustrate the patterns.
+
+Output format:
+
+Create docs/conversations-visibility-audit-YYYY-MM-DD.md containing:
+
+- Grand totals per org for:
+  - mine_threads_count_sum
+  - account_owned_unowned_threads_count_sum
+  - account_owned_misowned_threads_count_sum
+- Per-rep table for Value Truck (and any other real orgs), with columns:
+  - rep_user_id
+  - rep_name
+  - mine_threads_count
+  - account_owned_unowned_threads_count
+  - account_owned_misowned_threads_count
+- A short “Findings” section summarizing:
+  - how big the CONV-G1 gap is in practice,
+  - whether ownership and ownerUserId generally agree or not,
+  - any surprising outliers (e.g., a rep with many account_owned_unowned threads).
+
+Strict constraints:
+
+- The audit script must be SELECT-only; no INSERT/UPDATE/DELETE.
+- Do NOT change any production code (no edits to server/routes,
+  server/services, shared/schema, client, or existing tests).
+- Do NOT add any new env flags, filters, or view behavior.
+
+Verification:
+
+- Run the audit script (e.g., npx tsx tools/audit-conversations-visibility.ts).
+- Make sure it completes successfully for Value Truck and any other relevant orgs.
+
+After the audit completes, respond with:
+
+A. Diff summary
+   - List the new files (audit script + docs) and a 1–2 line description of each.
+
+B. Commands run
+   - The exact command you used to run the audit, and whether it succeeded.
+
+C. Audit results (high level)
+   - Grand totals for the three counts across Value Truck.
+   - Any notable per-rep patterns (e.g., “most reps have 0 gaps; two reps
+     have lots of account-owned-but-unowned threads”).
+
+D. Behavior changes
+   - Confirm “none” — this subtask must not change runtime behavior.
+
+E. Rollback note
+   - Explain how a single revert (removing the audit script + doc) restores
+     the previous state.
+
+Stop rule:
+
+- Do NOT start any other Conversations Phase 1.1 subtask (CONV-1.1-B/C/D/E/F)
+  until I explicitly approve after reviewing this audit.
+- Do NOT make any production code changes as part of this subtask.
