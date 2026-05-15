@@ -1,0 +1,82 @@
+Freight-DNA — Customers Trust Cleanup — Close-out Slice
+
+Goal:
+Close out the current Customers trust cleanup program at a stable, shippable point so we can move on to other tabs.
+
+Assume:
+- Subtask A (bucket audit) is complete and documented.
+- Subtask B (Customers read-filter hardening) is complete, stable, and deployed:
+  - /customers opts into ?customersOnly=true by default.
+  - Bucket D thin stubs are hidden by default.
+  - Bucket B enriched accounts remain visible.
+  - is_email_derived default-hide is preserved.
+  - All other /api/companies consumers and internal storage.getCompanies callers are on the legacy full list.
+- Subtask C′ (design-only company classification model) is complete as a doc and represents the *target future state*, but we are NOT implementing the full classification system right now.
+
+What I want for this close-out slice:
+One very small, concrete implementation step that:
+- locks in what we have,
+- reduces the chance of regression,
+- and makes it easier to come back later to implement the full classification model,
+WITHOUT:
+- adding new columns,
+- running backfills,
+- or changing behavior beyond what is already live from Subtask B.
+
+Think of this as “Phase 1.0.1 — pin and document the current behavior and clean up loose ends”, NOT “Phase 2 schema work”.
+
+Required output:
+Section 1 — Quick diagnosis
+- Briefly restate:
+  - what behavior is now in production for /customers,
+  - what behavior remains for other /api/companies consumers,
+  - what the main remaining risks are if we leave the model as-is for a while (e.g., someone accidentally removing customersOnly, re-broadening the filter, etc.).
+
+Section 2 — Proposed close-out subtask(s)
+Propose 1–2 *tiny* subtasks that we can safely do now to “close the loop” without big schema changes. Examples of the kind of thing I’m looking for (you choose the best ones):
+- improving in-app disclosure (e.g., a tiny explanation on the Customers page about what is being hidden and why),
+- tightening tests/guardrails (e.g., an extra guardrail that prevents /customers from ever calling GET /api/companies without customersOnly=true),
+- adding a small internal doc in docs/ summarizing the current effective Customers contract (post-Subtask B) for future devs,
+- adding targeted logging/telemetry for future classification work (without changing behavior).
+
+Each proposed subtask should include:
+- name,
+- goal,
+- files likely touched,
+- behavior change (if any),
+- blast radius,
+- rollback plan,
+- acceptance criteria.
+
+Section 3 — Recommendation
+From your proposed tiny subtasks, pick:
+- 1 best subtask to execute now as the “close-out” change,
+- 1–2 that we explicitly defer to the future classification program.
+
+Section 4 — Stop rule
+- Restate clearly that:
+  - you will execute **at most one** tiny subtask now,
+  - no schema changes,
+  - no data backfills,
+  - no changes to CQ, freight_daily_upload_fact, email ingestion, or contacts,
+  - no widening or shrinking of the current customersOnly behavior beyond what’s already shipped.
+- After executing that one subtask, you will:
+  - paste the diff,
+  - list tests run,
+  - confirm behavior diffs,
+  - and then STOP and wait for my signal before doing any further Customers work.
+
+Constraints:
+- No DDL / migrations.
+- No writes to production data.
+- No changes to company_type / created_via implementation (those remain design-only for now).
+- No touching customerQuotes.ts, freightDailyUploadFact writers, or processUserMailboxEmail.
+- No broad refactors; keep this as a single, focused PR/diff.
+
+Intent:
+I want to:
+- leave the Customers tab in a clearly-documented, test-pinned, stable state,
+- with a good design doc in place for future classification,
+- and then move attention to the next high-value surface (likely Quotes or Conversations).
+
+Please respond with Sections 1–4 as above and wait for my approval before implementing the chosen close-out subtask.
