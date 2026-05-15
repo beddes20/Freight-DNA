@@ -1,0 +1,116 @@
+Freight-DNA — Customers Trust Cleanup Program
+Next step: Design-only Subtask C′ (no implementation yet)
+
+Context:
+- Subtask A (bucket audit) is complete and documented.
+- Subtask B (Customers read-filter hardening) is complete and stable:
+  - /customers now opts into ?customersOnly=true and hides Bucket D thin stubs by default.
+  - Bucket B (58 enriched, likely-real accounts) remains visible.
+  - is_email_derived default-hide is preserved.
+  - All other /api/companies consumers and internal getCompanies callers remain on the legacy full list.
+  - CQ/freight-fact/email-derived/contacts contracts are untouched.
+
+Current state:
+- The Customers page is now much more trustworthy operationally: reps see a curated list instead of 300+ junky rows.
+- Bucket A = 0 for Value Truck in prod (no freight_daily_upload_fact rows yet), so “we ship for them” cannot be enforced from data alone right now.
+- Bucket D = 246 thin-stub accounts (≈81% of default-visible companies) and includes many carrier/partner/vendor-looking names that were never modeled in carriers.
+- Subtask C (originally “exact-name carrier guard in upsertCompany”) was intentionally deferred, and that exact-name approach is probably too narrow.
+
+What I want now:
+A design-only Subtask C′ that answers:
+“How should we model and treat carriers / partners / non-customer companies in `companies` so that future cleanup and enforcement are safe, explainable, and testable?”
+
+Important: This is a PLANNING/DESIGN task only.
+- No migrations yet.
+- No changes to upsertCompany yet.
+- No changes to routes or UI yet.
+- No data mutations.
+- No changes to CQ, freight_daily_upload_fact, email ingestion, or contacts.
+- No feature flags added yet.
+
+Required output format (no code changes):
+Section 1 — Restate current Customers contract and gaps
+- Briefly restate the current effective contract AFTER Subtask B:
+  - What qualifies a company for default /customers today?
+  - What is explicitly hidden (Bucket D)? 
+  - What is still ambiguous (e.g., carriers/partners living as thin stubs)?
+- Call out the remaining modeling gaps: no `is_carrier`, no `company_type`, no `created_via`, no `created_by_user_id`.
+
+Section 2 — Proposed company classification model
+Design a minimal but future-safe classification model for `companies`, including:
+- A `company_type` or similar column (enum or structured string), with proposed values such as:
+  - `customer`
+  - `prospect`
+  - `carrier`
+  - `vendor_partner` (e.g., tech vendors, tools)
+  - `system_stub` (legacy/temporary rows that should never appear in Customers)
+- A `created_via` and `created_by_user_id` model that distinguishes:
+  - manual UI-created accounts
+  - freight_ingest / opportunity_ingest
+  - prospect_ingest
+  - email_persist_unknown
+  - signature_sweep
+  - won_quote_handoff
+  - fixture/test
+- How these new fields should interact with the Customers contract once implemented:
+  - e.g., “Customer” tab shows:
+    - type in {customer, maybe vendor_partner with explicit opt-in}
+    - OR created_via=manual
+    - OR has freight history
+    - and never type=carrier unless explicitly allowed.
+
+Section 3 — How to treat carriers and dual-role entities
+- Define how we should treat:
+  - pure carriers (entities that should never appear in Customers by default),
+  - freight-tech vendors/tools/partners,
+  - dual-role entities (e.g., a company that is both a carrier and, in some cases, a customer).
+- For each, propose:
+  - what `company_type` they should have,
+  - whether they should appear in Customers by default,
+  - whether they should appear only under an “advanced / admin” toggle,
+  - how we should handle naming collisions (e.g., the same name appears in carriers + companies).
+- Explain how this interacts with:
+  - the existing `carriers` table,
+  - the Bucket D thin stubs we’re currently hiding,
+  - and the future “admin cleanup console” idea.
+
+Section 4 — Future Subtask C implementation sketch (but NO code yet)
+Design a future Subtask C (implementation, deferred) based on this model. For that future subtask:
+- Describe the minimal schema changes needed (DDL sketch only, no migration file).
+- Describe how to backfill values for existing companies using:
+  - Bucket audit shapes (A–G),
+  - known carrier/partner names,
+  - `created_at`, `owner_rep_id`, contacts presence, etc.
+- Describe how to:
+  - use `company_type` and/or `created_via` in:
+    - getCompanies({ customersOnly: true }) behavior on /customers,
+    - upsertCompany guardrails to avoid creating the wrong types.
+- Describe the risk and blast radius of that future implementation, and how it can be staged/flagged.
+
+Section 5 — DO / DO-NOT list for this program
+- List actions that this current design-only subtask recommends we:
+  - DO in future implementation work (e.g., add `company_type`, add `created_via`, build a cleanup console, etc.).
+  - explicitly DO NOT do (e.g., do not auto-flip existing companies into `carrier` without human review; do not rely solely on name-matching; do not hard-delete companies).
+- Keep this grounded in the existing contracts:
+  - CQ stability (Section 1100),
+  - freight_daily_upload_fact (Section 1051),
+  - email-derived (Section 1095),
+  - contact soft-delete (1093/1200),
+  - POST /api/companies recovery hub (1094).
+
+Section 6 — Stop rule
+- Restate clearly that this response is PLANNING ONLY.
+- Do not write migrations.
+- Do not modify code.
+- Do not mutate data.
+- Stop after producing the design and wait for my approval before proposing any implementation subtask based on this model.
+
+Constraints reminder:
+- No changes to production behavior in this subtask.
+- No assumptions that Bucket A will remain 0 — the model must remain valid once freight_daily_upload_fact starts filling in.
+- Prefer the smallest classification model that will still support:
+  - Clean Customers,
+  - Safe re-use of companies in CQ, conversations, dashboards,
+  - Future cleanup passes that are explainable and reversible.
+
+Please respond with the design-only output in Sections 1–6 and STOP. Do not propose code changes until I explicitly request the implementation subtask.
