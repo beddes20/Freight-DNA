@@ -1,0 +1,129 @@
+Freight-DNA — Customer Quotes Trust Program (Phase 1)
+PLANNING-FIRST — DO NOT CHANGE CODE YET
+
+Context:
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+We just:
+- Stabilized the Customers tab (strict customersOnly opt-in + contract doc).
+- Stabilized the Users roster (junk-pattern hide + contract doc).
+- Hardened CQ guardrails so tests match the canonical code.
+
+Now I want to bring Customer Quotes (CQ) up to that same “trustable and pinned” standard.
+
+Scope:
+This program is about Customer Quotes as a rep-facing surface:
+- /customer-quotes page UI (and any embedded CQ widgets on other tabs).
+- The server routes and services that feed CQ.
+- Ownership/visibility rules (who sees which quotes, and why).
+- Any key integrity constraints (what is “a quote” vs junk/noise).
+
+Out of scope for this first phase:
+- Pricing algorithms or optimization.
+- New quote features (templates, cloning, etc.).
+- Bulk migrations/backfills.
+- Scheduler jobs, invoices, or freight-fact scoring (unless they directly break CQ trust).
+
+Posture:
+Planning-first, read-first.
+Do not modify production code in this task.
+You may read any files, schemas, and tests you need.
+The output of THIS task is a plan and diagnosis only.
+
+Goals for Phase 1:
+- Make it clear and documented what CQ is supposed to show, and why.
+- Identify the main trust gaps and failure modes (ownership, visibility, stale data, bogus quotes, etc.).
+- Propose a small, low-blast-radius set of initial subtasks (Phase 1.1) that improve trust without changing core business rules or doing heavy schema work.
+- Align guardrails/tests/docs with the real canonical behavior the way we just did for Customers & Users.
+
+Required output sections (no code changes yet):
+
+Section 1 — Current behavior snapshot
+- Describe, based on actual code and schema, what:
+  - /customer-quotes renders today (layout, filters, ownership/visibility rules).
+  - The backing routes/services do (key endpoints, query parameters, filters).
+  - The data model looks like (tables, key columns, status fields, ownership fields).
+- Summarize how a rep’s visible quote list is computed end-to-end:
+  - From HTTP request → auth → any ownership filters → DB queries → in-memory filtering → UI.
+
+Section 2 — Intended contract (from existing docs/tests)
+- Read docs/customer-quotes-stability-contract.md and any CQ-related Gotchas in replit.md.
+- Summarize what those existing contracts say CQ SHOULD do, in your own words:
+  - Ownership precedence (who “owns” a quote).
+  - Which quotes should be visible vs hidden by default (status, deleted flags, junk/test rows).
+  - Any guarantees around “one canonical ownership rule.”
+- Call out any contradictions or fuzziness between docs, tests, and the actual code.
+
+Section 3 — Trust gaps and failure modes
+Based on code + docs + your own reasoning, list the main ways CQ can break trust for reps:
+- Examples: quotes missing from where a rep expects them; quotes visible to the wrong people;
+  stale or duplicate quotes; “junk/test” quotes polluting lists; confusing status handling; etc.
+For each gap:
+- Give it an ID (CQ-G1, CQ-G2, …).
+- Describe the scenario.
+- Point to the specific code paths / tables involved.
+- Classify it as:
+  - visibility/ownership,
+  - junk/noise,
+  - status/semantics,
+  - data-staleness/freshness,
+  - or “unknown / needs more investigation.”
+
+Section 4 — Guardrails vs reality
+- Look at existing CQ sections in tests/code-quality-guardrails.test.ts (including the ones
+  we just hardened) and any CQ-focused runtime tests.
+- For each guardrail that touches CQ:
+  - say what it is trying to protect,
+  - whether the current code actually matches it,
+  - and whether the guardrail is:
+    - correct and aligned,
+    - stale but harmless,
+    - missing entirely for an important behavior.
+- Identify any NEW behaviors that are “canonical in code” but not yet pinned by tests/docs.
+
+Section 5 — Proposed Phase 1.1 subtasks (tiny, reversible)
+Propose a short list (3–6) of very small subtasks you would do next to improve CQ trust.
+Each subtask should:
+- have a clear name and goal,
+- specify files likely touched,
+- be as low-blast-radius as possible,
+- be 100% reversible with a single revert,
+- and fall into one of these categories:
+  - read-only audit / reporting,
+  - small read-path behavior fixes (e.g. tighter filters),
+  - tests/guardrails alignment,
+  - docs/contract clarifications.
+
+Examples of acceptable Phase 1.1 tasks (pick the ones that actually fit what you see):
+- A read-only audit of “quotes visible vs quotes that exist” per org.
+- Hiding obviously bogus/demo quotes from default lists with an admin override,
+  similar to Customers/Users.
+- Tightening ownership resolution so one canonical rule is used everywhere CQ
+  appears (if that’s not already true).
+- Adding or updating guardrails/tests that pin existing canonical behavior.
+
+Section 6 — Recommended starting subtask
+From the Phase 1.1 list, pick:
+- ONE subtask that is the best first move (highest trust impact, lowest risk),
+- and briefly say why it should go first (and what we should explicitly defer).
+
+Section 7 — Stop rule for this program
+Explicitly state:
+- That no production code has been modified yet.
+- That after you output this plan, you will wait for my approval before
+  implementing any Phase 1.1 subtask.
+- That future implementation subtasks will:
+  - be one-at-a-time,
+  - include diff summaries, tests run, behavior changes, and rollback notes,
+  - and respect the same “no destructive changes without explicit approval” rules
+    we used on Customers and Users.
+
+Constraints:
+- Do NOT modify any production code in this task.
+- Do NOT change schemas, schedule jobs, or write data.
+- Do NOT alter Customer Quotes business logic yet; this is planning/diagnosis only.
+- Keep all changes (if any) restricted to docs/notes under this program until I
+  explicitly approve a concrete Phase 1.1 subtask.
+
+Expected output:
+A single response with Sections 1–7 filled out based on the current codebase.
+Then STOP and wait for my approval before implementing anything.
