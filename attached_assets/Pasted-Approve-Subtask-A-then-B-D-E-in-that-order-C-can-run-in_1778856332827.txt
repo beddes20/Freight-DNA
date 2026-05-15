@@ -1,0 +1,42 @@
+Approve Subtask A, then B, D, E in that order. C can run in parallel; F is deferred.
+
+1) Run Subtask A (read-only roster audit) first.
+   - Use the existing roster-health classifier / export.
+   - Produce docs/users-bucket-audit-YYYY-MM-DD.md with:
+     - counts per bucket A–F, and
+     - the “default-roster leakage” count per org with sample IDs.
+   - No code changes, no writes.
+
+After A, STOP and report:
+   - bucket counts per org,
+   - default-roster leakage count,
+   - a few example bogus users (e.g. WQTest/example.com),
+   - the audit doc path.
+
+2) If A looks as expected (junk is clearly junk, no real managers in the junk bucket),
+   then proceed with Subtask B (default roster filter hardening) and its paired subtasks:
+
+   - B: implement the junk-pattern exclusion in storage.getUsers + GET /api/users
+        and the admin “Junk suspects” tab + X-Users-Junk-Hidden-Count header,
+        exactly as planned (read-time only, no writes, no schema).
+   - D: add tests/users-roster-trust-contract.test.ts and Section 1400 guardrails
+        to pin the new behavior and keep CQ / Top Opps / internal callers on the legacy view.
+   - E: add the replit.md “Users Roster Trust” Gotcha and docs/users-roster-trust-contract.md,
+        mirroring what we did for Customers.
+
+Constraints (restate and enforce):
+- No deletes, no lifecycle flips, no role/RBAC/auth changes.
+- No schema/DDL or backfills.
+- No edits to customerQuotes.ts, freight_daily_upload_fact writers,
+  processUserMailboxEmail, contacts, or core auth paths.
+- storage.getUsers(orgId) no-opts overload must remain unchanged for internal callers.
+
+After each subtask (A, B, D, E):
+- paste the diff summary,
+- list tests run (guardrails + typecheck, plus new contract test where applicable),
+- clearly describe behavior changes (or “none” for A/E),
+- include a rollback note,
+- and STOP until I explicitly approve the next subtask.
+
+Do NOT start Subtask F (future user classification design) in this program.
+That can be its own future planning task once this close-out is done.
