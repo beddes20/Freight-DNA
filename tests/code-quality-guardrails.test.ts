@@ -8028,4 +8028,21 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     fs.existsSync(path.join(ROOT, "tests", "customers-tab-trust-contract.test.ts")),
     "tests/customers-tab-trust-contract.test.ts must exist and pin the four runtime cases (Bucket D excluded, Bucket B included, customersOnly=false returns both, includeEmailDerived contract preserved)",
   );
+
+  // ── Subtask C1 close-out — pin the documentation surfaces ─────────────
+  // The post-Subtask B contract is documented in two places that future
+  // agents/devs reflexively read: replit.md Gotchas (prompt-time signal)
+  // and docs/customers-tab-trust-contract.md (PR-review-time signal).
+  // Both must exist or this whole Section 1300 contract becomes
+  // discoverable only via guardrail failures, which is too late.
+  assert(
+    "Section 1300 — replit.md Gotchas pins the Customers Tab Trust (Subtask B) contract",
+    /Customers Tab Trust \(Subtask B, 2026-05-15\)/.test(readFile("replit.md")),
+    "replit.md must contain the 'Customers Tab Trust (Subtask B, 2026-05-15)' Gotcha header so future agents see the strict-opt-in invariant before touching /api/companies or customers.tsx",
+  );
+  assert(
+    "Section 1300 — docs/customers-tab-trust-contract.md exists",
+    fs.existsSync(path.join(ROOT, "docs", "customers-tab-trust-contract.md")),
+    "docs/customers-tab-trust-contract.md must exist as the canonical CT-1..CT-4 contract doc, mirroring docs/customer-quotes-stability-contract.md",
+  );
 })();
