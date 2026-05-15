@@ -1,0 +1,166 @@
+Freight-DNA — Users Trust Cleanup Program
+ONE PARENT TASK WITH REQUIRED SUBTASKS
+Do not start coding immediately.
+
+Context:
+We just completed the Customers Trust Cleanup Program using a safe pattern:
+1. read-only audit
+2. smallest safe behavior fix
+3. tests/guardrails
+4. docs/gotcha close-out
+
+I want to do the same thing now for User Management because the app break last week left us with bogus users in the roster.
+
+Observed issue:
+The /admin/users page currently includes obvious bogus/test accounts mixed in with real employees.
+Examples visible in the current roster include WQTest-style accounts using example.com emails and suspicious fake identities.
+This makes User Management less trustworthy as the roster/source-of-truth for actual people.
+
+High-level goal:
+Restore User Management so the default roster is a trustworthy view of real human users in the org, while still preserving safe admin visibility into test/fixture/system/bogus users for audit or cleanup.
+
+Important:
+This is planning-first.
+Do NOT code yet.
+Do NOT delete any users yet.
+Do NOT mutate roles, lifecycle state, reports-to chains, or auth behavior yet.
+
+Business intent:
+By default, the main User Management roster should show real team members.
+Test users / fixture users / bogus imports / example.com fake accounts / non-human artifacts should be hidden from the default roster unless an admin explicitly opts in to view them.
+
+Your assignment:
+Treat this as one parent task and break it into sub-tasks before implementation.
+I want a structured execution plan first, with dependencies, blast radius, rollback plan, and acceptance criteria.
+
+Required output format before any code changes:
+
+Section 1 — Parent task summary
+- objective
+- success criteria
+- non-goals
+- trust contracts that must not be broken
+
+Section 2 — Proposed subtask breakdown
+Create the parent task and split it into small sub-tasks.
+Each subtask must include:
+- subtask name
+- goal
+- exact files likely touched
+- whether it is read-only, backend, frontend, tests, docs, or data-audit
+- blast radius
+- rollback plan
+- acceptance criteria
+- dependency order
+
+I expect the subtasks to look roughly like this unless you find a better decomposition:
+Subtask A — Read-only production roster audit
+Subtask B — Default roster filter hardening for bogus/test users
+Subtask C — Upstream user-creation / provisioning path audit and guard proposal
+Subtask D — Tests + code guardrails for roster inclusion contract
+Subtask E — Docs / replit.md gotcha close-out
+Subtask F — Optional future design for user classification / user_type / cleanup console
+
+Section 3 — Roster contract
+Define the intended contract for default /admin/users:
+- who should appear
+- who should not appear by default
+- how admins should opt in to show hidden users
+- how fixture/test/system/service users should be represented
+- how dormant or never-logged-in users should be treated
+- whether example.com users should be hidden by default
+- whether users with no financial ID / no manager / no activity should be hidden or just flagged
+
+Section 4 — Current code path
+Trace the real implementation end-to-end:
+- route(s)
+- page/component(s)
+- API endpoint(s)
+- storage/service calls
+- schema columns used
+- filters used today
+- roles/permissions used today
+- any existing lifecycle / soft-delete / fixture / status fields that could support this cleanup
+
+Section 5 — Pollution sources
+Identify every path that can create bogus users or make them show up in the default roster:
+- manual add-user flow
+- fixture/seed scripts
+- auth bootstrap / provisioning
+- CSV/import scripts
+- tests accidentally polluting prod/dev
+- lifecycle backfills
+- mailbox or integration side effects
+- any “ensure user exists” helper
+For each source, say:
+- whether it can create bogus/test users
+- whether it is currently guarded
+- whether it affects default roster visibility
+- whether it should be changed now or deferred
+
+Section 6 — Read-only audit plan
+Define exact audit buckets for production users, similar to what we did for Customers.
+At minimum include:
+A. real active employees
+B. likely real but incomplete users
+C. obvious test/fixture/example.com users
+D. dormant never-used junk users
+E. system/service/integration identities
+F. ambiguous records needing review
+For each bucket:
+- identifying logic
+- likely columns/tables
+- confidence level
+- whether safe to auto-hide vs needs review
+
+Section 7 — Cleanup strategy
+Propose the safest phased plan:
+Phase 0 — read-only audit and counts
+Phase 1 — hide/quarantine wrong users from default roster without destructive deletes
+Phase 2 — upstream creation/provisioning guardrails
+Phase 3 — optional cleanup tooling / user classification design
+For each phase:
+- likely files touched
+- blast radius
+- rollback plan
+- required tests
+
+Section 8 — Risks
+Call out:
+- auth / sign-in regressions
+- role/RBAC regressions
+- reporting hierarchy regressions
+- lifecycle state regressions
+- any risk to admin visibility
+- any interaction with prior Section 1126 lifecycle work
+
+Section 9 — Stop rule
+Do not implement until you show me the subtask plan.
+After I approve the plan, execute one subtask at a time and stop after each one with:
+- exact diff
+- tests run
+- behavioral changes
+- rollback note
+
+Constraints:
+- no deletes yet
+- no role changes yet
+- no auth behavior changes yet
+- no broad schema refactor yet
+- prioritize trust and reversibility
+- preserve admin recovery paths
+- clearly separate confirmed facts from hypotheses
+
+Required verification work:
+- inspect /admin/users implementation end to end
+- inspect every user-creation/provisioning path
+- inspect lifecycle/fixture/status columns already in schema
+- inspect current tests and guardrails
+- run typecheck
+- distinguish read-path fixes from write-path fixes
+
+Expected first response:
+Plan only.
+No code changes yet.
+No “I already started implementing” behavior.
+Wait for my approval after the subtask plan.
