@@ -1,0 +1,58 @@
+Approve P1.1-A — CQ ownership audit (read-only) as the first Phase 1.1 subtask.
+
+Scope:
+- Read-only audit of Customer Quotes ownership resolution.
+- No production code, no schema, no writers, no CQ behavior changes.
+- Goal is to measure how often CQ’s strict ownerRepId rule disagrees with
+  the canonical getCanonicalCompanyOwnerId(c) chain used by Customers/auth.
+
+Execute P1.1-A with these constraints:
+
+1) Implement a one-off audit script, e.g. tools/audit-cq-ownership.ts, that:
+
+- For each org we care about (at least Value Truck):
+  - Loads all quote_opportunities rows that would appear in /quote-requests
+    under today’s filters (use the same read path CQ uses, including
+    applyFilters and enrich, but WITHOUT changing any behavior).
+  - For each quote row, computes:
+    - CQ_owner_user_id: what /quote-requests actually shows today
+      (via enrich()’s Account Owner fallback using companies.ownerRepId).
+    - canonical_owner_user_id: what getCanonicalCompanyOwnerId(c) would
+      resolve for the same company (ownerRepId ?? assignedTo ?? salesPersonId).
+  - Classifies each row into buckets:
+    - agree: both owners present and equal
+    - cq_only: CQ has an owner but canonical is null
+    - customers_only: canonical has an owner but CQ is null
+    - both_unowned: both are null
+- Writes a markdown or CSV report to:
+  docs/cq-ownership-audit-2026-05-15.md (or similar), including:
+  - per-org counts in each bucket
+  - overall percentages
+  - a small sample table of representative rows from each non-agree bucket
+    (ids, customerId, CQ_owner, canonical_owner, key flags).
+
+2) Do NOT:
+- Change server/services/customerQuotes.ts, server/routes/customerQuotes.ts,
+  server/lib/companyOwner.ts, or any other production source.
+- Modify any schema, schedulers, or writers.
+- Add any new flags or filters to CQ behavior.
+
+3) After the script is in place and run:
+
+- Paste the diff summary:
+  - tools/audit-cq-ownership.ts (and any helper files)
+  - docs/cq-ownership-audit-2026-05-15.md
+- Summarize the audit results:
+  - counts/percentages for agree / cq_only / customers_only / both_unowned
+  - any surprising patterns (e.g., large customers_only cohort).
+- List any commands run (node/tsx script, etc.).
+- Confirm that:
+  - no production code paths were changed,
+  - no data was written,
+  - no tests/guardrails were modified in this subtask.
+
+Then STOP and wait for my approval before starting any other Phase 1.1 subtask
+(P1.1-B/C/D/E/F). We’ll use the audit numbers to decide whether to:
+
+- simply document the CQ vs Customers ownership divergence as intentional, or
+- schedule a future, scoped unification program under Task #1169.
