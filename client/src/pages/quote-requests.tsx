@@ -113,6 +113,21 @@ import {
   Loader2,
 } from "lucide-react";
 
+// ─── Constants ────────────────────────────────────────────────────────────
+
+// CQ-8 — Single source of truth for the "Unknown — needs review" sentinel
+// used by `quote_customers.name` when an inbound email's sender could not
+// be resolved to a known account. The Quote Requests default list hides
+// rows with this customer name (post-filter, not at the server chokepoint
+// CQ-2 which keeps the rows alive for audit / Account-Owner-fallback
+// flows). The toggle `data-testid="toggle-show-unknown-senders"` opts
+// back in. Drilldowns force the toggle ON so KPI ↔ list parity holds.
+// Renaming this string requires updating the seeded `quote_customers`
+// row, this constant, the contract entry CQ-8 in
+// docs/customer-quotes-stability-contract.md, and Section 1100.8 of
+// tests/code-quality-guardrails.test.ts in the same commit.
+export const UNKNOWN_CUSTOMER_NAME = "Unknown — needs review";
+
 // ─── Types ────────────────────────────────────────────────────────────────
 
 type Quote = {
@@ -1180,14 +1195,14 @@ function QuoteRequestsInner(): JSX.Element {
       // A free-email row is one where the source thread came from a
       // public mail domain. Without per-row sender data we approximate
       // by checking the customer name length / "Unknown" bucket.
-      rows = rows.filter(r => r.customerName === "Unknown — needs review");
+      rows = rows.filter(r => r.customerName === UNKNOWN_CUSTOMER_NAME);
     } else if (!showUnknownSenders) {
-      // Default-trust filter: hide UNKNOWN_CUSTOMER_NAME ("Unknown —
-      // needs review") rows from the rep's working view. Mutually
-      // exclusive with `freeEmailOnly` — that chip explicitly narrows
-      // *to* the unknown bucket, so we skip the hide there. Flipped on
-      // via the "Show unknown senders" chip in the toolbar.
-      rows = rows.filter(r => r.customerName !== "Unknown — needs review");
+      // Default-trust filter: hide UNKNOWN_CUSTOMER_NAME rows from the
+      // rep's working view (CQ-8). Mutually exclusive with
+      // `freeEmailOnly` — that chip explicitly narrows *to* the unknown
+      // bucket, so we skip the hide there. Flipped on via the "Show
+      // unknown senders" chip in the toolbar.
+      rows = rows.filter(r => r.customerName !== UNKNOWN_CUSTOMER_NAME);
     }
     if (domainFilter) {
       const dom = domainFilter.toLowerCase();
@@ -1339,7 +1354,7 @@ function QuoteRequestsInner(): JSX.Element {
                 // the visible delta).
                 if (!showUnknownSenders && !freeEmailOnly) {
                   const unknownInPage = (listQuery.data?.rows ?? []).filter(
-                    r => r.customerName === "Unknown — needs review",
+                    r => r.customerName === UNKNOWN_CUSTOMER_NAME,
                   ).length;
                   if (unknownInPage > 0) {
                     buckets.push({

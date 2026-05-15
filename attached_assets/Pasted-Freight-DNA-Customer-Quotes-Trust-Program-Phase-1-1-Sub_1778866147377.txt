@@ -1,0 +1,116 @@
+Freight-DNA — Customer Quotes Trust Program (Phase 1.1)
+Subtask: CQ-8 — Pin the “Unknown — needs review” sentinel + toggle
+
+Context:
+We just completed P1.1-A (CQ ownership audit). Results:
+- ownerRepId-based CQ-3 fallback is effectively dormant in prod (agree ≈ 0.01%).
+- The main data quality issues are:
+  - 62.6% of visible quotes have no owner on any column.
+  - 35.8% have no CRM company link at all.
+- There is a small customers_only divergence cohort (~1.5%), but the bigger
+  story is overall ownership and linkage hygiene, not the CQ-3 vs helper rule.
+
+For this subtask, we are explicitly:
+- NOT changing ownership rules.
+- NOT changing CQ filters or schema.
+- JUST pinning the “Unknown — needs review” behavior so it can’t silently drift.
+
+Goal:
+Turn the “Unknown — needs review” behavior into a pinned contract:
+- The sentinel name is stable.
+- The toggle exists and behaves as documented.
+- Drilldown behavior (forced show when ?drilldown= is active) is protected.
+- All of this is captured in both tests and docs, not just tribal knowledge.
+
+Scope:
+- tests/code-quality-guardrails.test.ts (Section 1100.x addition)
+- docs/customer-quotes-stability-contract.md (add CQ-8 or a new sub-section)
+- client/src/pages/quote-requests.tsx (read-only for inspection; no behavior
+  change beyond possibly tightening testids/props to what’s already true)
+
+Do NOT:
+- Change any CQ filters in server/services/customerQuotes.ts or routes.
+- Change any owner / rep / routing logic.
+- Change schemas, schedulers, or writers.
+- Touch quoteEmailIngestion, Companies, Users, or any other surfaces.
+
+Requirements:
+
+1) Confirm current behavior (read-only):
+- Identify the constant used for the sentinel name in quote-requests.tsx
+  (UNKNOWN_CUSTOMER_NAME or equivalent).
+- Confirm:
+  - this literal matches the seeded row in quote_customers (name column),
+  - the default list hides rows whose customerName is this sentinel,
+  - there is a toggle (data-testid="toggle-show-unknown-senders") that
+    opts back in,
+  - when ?drilldown=<id> is present, the toggle is effectively forced ON
+    so KPIs and list stay honest.
+
+2) Add/adjust docs:
+- In docs/customer-quotes-stability-contract.md, add a new contract entry,
+  e.g. CQ-8, or extend an existing one, that states:
+
+  - Source of truth:
+    - quote_customers.name has the sentinel row "Unknown — needs review"
+      (or whatever the literal is today).
+  - UI behavior:
+    - Default CQ lists hide this sentinel by default but show a visible
+      toggle labeled “Unknown — needs review” or similar.
+    - When a quote drilldown is active (?drilldown=), unknown senders are
+      forced visible so counts/numbers are honest.
+  - Must:
+    - The sentinel is configured in one place in code.
+    - The toggle/testid exists and is wired to the sentinel behavior.
+  - Must NOT:
+    - Change the sentinel string without updating the contract and tests.
+    - Hide unknown senders in drilldown mode.
+    - Hide unknown senders in KPIs/funnel.
+
+3) Add a guardrail block to tests/code-quality-guardrails.test.ts:
+- New sub-section under the Customer Quotes area (Section 1100.x).
+- Assert at minimum:
+
+  - quote-requests.tsx defines the sentinel constant name and value.
+  - The sentinel literal matches the value documented in the contract.
+  - The file contains a toggle with data-testid="toggle-show-unknown-senders"
+    (or the current testid).
+  - Drilldown handling code references the toggle logic so that
+    ?drilldown= forces unknown senders visible.
+
+You may inspect quote-requests.tsx and related client files, but any code
+changes beyond adding/adjusting the toggle testid or wiring must be:
+- strictly behavior-preserving with respect to current prod semantics, and
+- clearly documented in your report if you find a real bug that needs fixing.
+
+4) Tests and verification:
+- Run:
+  - npx tsx tests/code-quality-guardrails.test.ts
+  - npm run check
+- Ensure:
+  - All prior CQ guardrails remain green.
+  - The new CQ-8 guardrails pass.
+
+5) Output format:
+After implementing this subtask, respond with:
+
+A. Diff summary
+   - Files changed, with a 1–2 line description for each.
+
+B. Tests run
+   - Commands, and whether they passed.
+
+C. Behavior changes
+   - Describe any behavioral changes to /quote-requests, or explicitly say
+     “none” if this was tests/docs-only.
+
+D. Rollback note
+   - Explain how a single revert would restore the prior state.
+
+E. Contracts touched
+   - List which CQ contracts you updated (e.g. CQ-8 added, Section 1100.x).
+
+Stop rule:
+- Do NOT start any other Phase 1.1 subtask (P1.1-C/D/E/F) until I explicitly
+  approve after reviewing your report for CQ-8.
+- Do NOT change CQ ownership rules or routing in this subtask.

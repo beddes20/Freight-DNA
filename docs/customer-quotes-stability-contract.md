@@ -250,6 +250,125 @@ rows the main queue hides — defeating the screen's purpose.
 
 ---
 
+## CQ-8 — "Unknown — needs review" sentinel + default-trust hide
+
+**Problem we fixed.** The Quote Requests default queue was getting
+polluted by inbound emails whose sender could not be resolved to a
+known account. The ingestion path persists these rows under a
+seeded sentinel customer (`quote_customers.name = "Unknown — needs
+review"`) so the row is preserved (PERSIST-UNKNOWN) and the
+Account-Owner-fallback in CQ-3 / audit surfaces in `funnel-
+diagnostics` (CQ-6) can still reach them. But reps' default
+working view should not see these rows mixed in with resolvable
+customer quotes; they need their own opt-in chip.
+
+**Contract.**
+
+1. **Single sentinel constant.** The sentinel literal is defined in
+   exactly one place in the client:
+   ```ts
+   export const UNKNOWN_CUSTOMER_NAME = "Unknown — needs review";
+   ```
+   in `client/src/pages/quote-requests.tsx`. Every reference inside
+   that file MUST go through the constant; no string-literal
+   duplicates of `"Unknown — needs review"` may live in the same
+   file.
+
+2. **Server chokepoints untouched.** The hide is a **client-side
+   post-filter** on `listQuery.data.rows`. The server's
+   `applyFilters` chokepoint (CQ-2) deliberately keeps these rows
+   alive so the audit / funnel-diagnostics (CQ-6) and Account-Owner-
+   fallback (CQ-3) paths still see them. Pushing this hide into
+   `applyFilters` would defeat both contracts and is forbidden.
+
+3. **Toggle.** The chip `data-testid="toggle-show-unknown-senders"`
+   exists in `quote-requests.tsx` and is wired to a `showUnknown
+   Senders` boolean; flipping it to `true` re-includes sentinel
+   rows. The chip is mutually exclusive with `data-testid="toggle-
+   free-email"` (which narrows TO the sentinel bucket — when
+   `freeEmailOnly` is true the show-unknown switch is `disabled`
+   and the row set is unconditionally filtered to sentinel rows).
+
+4. **KPI ↔ list parity in drilldowns.** When a `?drilldown=<id>`
+   URL param is active, the cold-load default of `showUnknown
+   Senders` is **forced to `true`** (`useState(!!initialDrilldown
+   Id)` at the state declaration). Additionally, `applyDrilldown`
+   calls `setShowUnknownSenders(true)` so a chip-applied drilldown
+   also opts in. This is load-bearing because the server-side
+   snapshot KPIs that drilldowns count from include sentinel rows;
+   keeping the chip OFF in drilldown mode would silently undershoot
+   the tile's count.
+
+5. **Hidden-count disclosure.** When the hide is in effect (i.e.
+   `!showUnknownSenders && !freeEmailOnly`), the `Hidden Counts
+   Disclosure` header surfaces a `unknown-sender` bucket so reps
+   know the chip is what's narrowing the view. The bucket count is
+   computed from `listQuery.data.rows` so it never exceeds the
+   visible delta.
+
+**Source of truth.**
+
+- `client/src/pages/quote-requests.tsx`:
+  - `UNKNOWN_CUSTOMER_NAME` constant near the top of the file
+    (immediately above the `Types` section).
+  - `showUnknownSenders` state declaration with
+    `useState(!!initialDrilldownId)`.
+  - The two `r.customerName === UNKNOWN_CUSTOMER_NAME` /
+    `!== UNKNOWN_CUSTOMER_NAME` post-filters in the `useMemo` that
+    builds the visible row set.
+  - The `setShowUnknownSenders(true)` call inside `applyDrilldown`
+    (with the "KPI ↔ list parity" comment block).
+  - The `data-testid="toggle-show-unknown-senders"` chip with
+    `disabled={freeEmailOnly}`.
+  - The hidden-counts `unknown-sender` bucket push.
+
+- Database: the seeded `quote_customers.name = "Unknown — needs
+  review"` row(s), one per organization. (Replit.md Gotcha
+  describes the same constraint at the data-layer level.)
+
+**Must.**
+
+- Keep the sentinel literal in **one** constant within the file.
+- Keep the chip's `data-testid` stable as `toggle-show-unknown-
+  senders` (Playwright + replit.md Gotcha both pin this name).
+- Keep the drilldown auto-show wiring intact in BOTH the
+  `useState` cold-load default AND the `applyDrilldown` callback —
+  removing either silently breaks drilldown parity for the other
+  entry path.
+- Keep the chip's `disabled={freeEmailOnly}` mutual-exclusion.
+
+**Must NOT.**
+
+- Change the sentinel string without updating this contract entry,
+  the constant in `quote-requests.tsx`, the seeded `quote_
+  customers` row, and Section 1100.8 of
+  `tests/code-quality-guardrails.test.ts` in the same commit.
+- Push the hide into `applyFilters` / `loadContext` / `enrich` —
+  that breaks CQ-2, CQ-3, and CQ-6.
+- Hide sentinel rows when a drilldown is active (would silently
+  break KPI ↔ list parity).
+- Hide sentinel rows from KPI / funnel / `funnel-diagnostics`
+  counts (server-side snapshot KPIs intentionally include them).
+- Re-introduce duplicate `"Unknown — needs review"` literals
+  anywhere in `quote-requests.tsx` — Section 1100.8 fails if any
+  duplicate of the literal appears outside the constant
+  declaration.
+
+**Out of scope (do not regress here).**
+
+- No edits to `applyFilters` (CQ-2), `loadContext` / `enrich`
+  (CQ-3), `attachResponseTimes` (CQ-4), the `__none__` resolver
+  (CQ-1), the weak-signal heuristic (CQ-7), or the funnel-
+  diagnostics rep-gate bypass (CQ-6).
+- No changes to `quoteEmailIngestion`, schema, schedulers,
+  writers, Companies, Users, or any other surface.
+- The existing replit.md "Quote Requests default-trust hide
+  (2026-05-08)" Gotcha is the README pointer to this contract;
+  no Gotcha edit is required for CQ-8 as the existing Gotcha
+  already documents the same behavior.
+
+---
+
 ## Fragile areas to call out explicitly
 
 The contracts above are most likely to be broken by the following well-meant

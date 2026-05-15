@@ -4623,7 +4623,7 @@ console.log("\n── Section 1029: LWQ D — Row redesign (reason chip + lifecy
   );
   assert(
     "[CQ-default-hide] visibleRows post-filter drops `Unknown — needs review` when showUnknownSenders is off",
-    /!showUnknownSenders[\s\S]{0,400}customerName !== "Unknown — needs review"/.test(qrPage),
+    /!showUnknownSenders[\s\S]{0,500}customerName\s*!==\s*(?:UNKNOWN_CUSTOMER_NAME|"Unknown — needs review")/.test(qrPage),
   );
   // Belt & braces: the post-filter must NOT have leaked into the server
   // chokepoint. applyFilters body is already pinned by the CQ-2/CQ-5
@@ -8328,5 +8328,123 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "Section 1450 — replit.md Gotchas pins the CQ Guardrail Hardening (2026-05-15) program",
     /CQ Guardrail Hardening \(2026-05-15\)/.test(fs.readFileSync(path.join(ROOT, "replit.md"), "utf8")),
     "replit.md must carry a Gotcha entry headed `CQ Guardrail Hardening (2026-05-15)` so future contributors find this contract from the prompt-time README",
+  );
+})();
+
+// ──────────────────────────────────────────────────────────────────────────
+// Section 1100.8 — CQ-8 "Unknown — needs review" sentinel + default-trust
+// hide.
+//
+// Pins the contract added in docs/customer-quotes-stability-contract.md
+// CQ-8: a single `UNKNOWN_CUSTOMER_NAME` constant in the file is the only
+// place the literal lives, the toggle testid stays stable, and the
+// drilldown auto-show wiring (cold-load default + applyDrilldown setter)
+// stays intact. Every assert below targets the rep-facing list page only;
+// CQ-2 / CQ-3 / CQ-6 / CQ-7 are intentionally out of scope.
+// ──────────────────────────────────────────────────────────────────────────
+
+(() => {
+  console.log("\n── Section 1100.8: CQ-8 Unknown sentinel + default-trust hide ────");
+  const QR_PATH = path.join(ROOT, "client", "src", "pages", "quote-requests.tsx");
+  const qr = fs.readFileSync(QR_PATH, "utf8");
+  const SENTINEL = "Unknown — needs review";
+
+  // ── 1. The constant is declared exactly once, with the canonical literal ──
+  const constDeclMatches = qr.match(
+    /export\s+const\s+UNKNOWN_CUSTOMER_NAME\s*=\s*"Unknown — needs review"\s*;/g,
+  ) ?? [];
+  assert(
+    "Section 1100.8 — UNKNOWN_CUSTOMER_NAME constant declared exactly once with the canonical literal",
+    constDeclMatches.length === 1,
+    `quote-requests.tsx must export exactly one \`const UNKNOWN_CUSTOMER_NAME = "${SENTINEL}"\` declaration; found ${constDeclMatches.length}`,
+  );
+
+  // ── 2. No BEHAVIORAL duplicates of the literal exist — every
+  //       comparison (===, !==) and filter call MUST go through the
+  //       constant. Comment / docstring / tooltip-label occurrences of
+  //       the human-readable literal are intentionally allowed (the
+  //       JSX `title=` tooltip needs the readable string for screen
+  //       readers, and the surrounding comments document the contract).
+  const behavioralDup = /customerName\s*[!=]==\s*"Unknown — needs review"/.test(qr);
+  assert(
+    "Section 1100.8 — no behavioral comparison uses the bare sentinel literal (every === / !== goes through UNKNOWN_CUSTOMER_NAME)",
+    !behavioralDup,
+    `quote-requests.tsx must not contain any \`customerName === "${SENTINEL}"\` or \`customerName !== "${SENTINEL}"\` — replace bare-literal comparisons with UNKNOWN_CUSTOMER_NAME so the constant remains the single source of truth`,
+  );
+
+  // ── 3. The post-filter goes through the constant in BOTH directions
+  //       (== for the freeEmailOnly narrow-to bucket; != for the
+  //       default-trust hide). Both sites are inside the visible-rows
+  //       useMemo per CQ-8 §3.
+  assert(
+    "Section 1100.8 — freeEmailOnly post-filter narrows TO sentinel rows via the constant",
+    /r\.customerName\s*===\s*UNKNOWN_CUSTOMER_NAME/.test(qr),
+    "quote-requests.tsx must contain `r.customerName === UNKNOWN_CUSTOMER_NAME` (the freeEmailOnly narrow-to-sentinel branch)",
+  );
+  assert(
+    "Section 1100.8 — default-trust hide filter excludes sentinel rows via the constant",
+    /r\.customerName\s*!==\s*UNKNOWN_CUSTOMER_NAME/.test(qr),
+    "quote-requests.tsx must contain `r.customerName !== UNKNOWN_CUSTOMER_NAME` (the !showUnknownSenders default hide)",
+  );
+
+  // ── 4. The toggle testid is stable. ──
+  assert(
+    "Section 1100.8 — toggle-show-unknown-senders testid present",
+    /data-testid="toggle-show-unknown-senders"/.test(qr),
+    "the chip that opts back in to sentinel rows must keep `data-testid=\"toggle-show-unknown-senders\"` — Playwright + replit.md Gotcha + CQ-8 §3 all pin this name",
+  );
+
+  // ── 5. Mutual exclusion with the free-email narrow-to chip: the
+  //       show-unknown switch is `disabled={freeEmailOnly}` per CQ-8 §3. ──
+  assert(
+    "Section 1100.8 — show-unknown switch is disabled when freeEmailOnly is on (mutual exclusion)",
+    /disabled=\{freeEmailOnly\}/.test(qr),
+    "the show-unknown <Switch> must be `disabled={freeEmailOnly}` so the two chips can't fight (CQ-8 §3)",
+  );
+
+  // ── 6. KPI ↔ list parity in drilldowns: the cold-load default of
+  //       `showUnknownSenders` must be `useState(!!initialDrilldownId)`
+  //       (forces ON when the URL carries ?drilldown=). ──
+  assert(
+    "Section 1100.8 — cold-load default of showUnknownSenders is forced ON when ?drilldown= is present",
+    /\[\s*showUnknownSenders\s*,\s*setShowUnknownSenders\s*\]\s*=\s*useState\(\s*!!initialDrilldownId\s*\)/.test(qr),
+    "showUnknownSenders state must be `useState(!!initialDrilldownId)` so a hard refresh on a drilldown URL doesn't silently undershoot the tile count (CQ-8 §4)",
+  );
+
+  // ── 7. KPI ↔ list parity in drilldowns: applyDrilldown must call
+  //       setShowUnknownSenders(true) so the chip-applied entry path
+  //       also opts in. ──
+  assert(
+    "Section 1100.8 — applyDrilldown forces showUnknownSenders ON",
+    /setShowUnknownSenders\(true\)/.test(qr),
+    "applyDrilldown must call `setShowUnknownSenders(true)` so a chip-applied drilldown re-includes sentinel rows (CQ-8 §4)",
+  );
+
+  // ── 8. Hidden-counts disclosure surfaces the unknown-sender bucket
+  //       when the hide is in effect. ──
+  assert(
+    "Section 1100.8 — hidden-counts disclosure pushes an `unknown-sender` bucket when the hide is active",
+    /id:\s*"unknown-sender"/.test(qr),
+    "the HiddenCountsSummary must include a bucket with `id: \"unknown-sender\"` so reps know the chip is what's narrowing the view (CQ-8 §5)",
+  );
+
+  // ── 9. The CQ-8 contract entry exists in docs and the contract still
+  //       names the canonical literal. ──
+  const contractPath = path.join(ROOT, "docs", "customer-quotes-stability-contract.md");
+  assert(
+    "Section 1100.8 — docs/customer-quotes-stability-contract.md exists",
+    fs.existsSync(contractPath),
+    "the CQ stability contract document must exist",
+  );
+  const contract = fs.readFileSync(contractPath, "utf8");
+  assert(
+    "Section 1100.8 — CQ-8 contract entry present in stability-contract.md",
+    /## CQ-8 — "Unknown — needs review" sentinel \+ default-trust hide/.test(contract),
+    "docs/customer-quotes-stability-contract.md must carry a `## CQ-8 — \"Unknown — needs review\" sentinel + default-trust hide` section",
+  );
+  assert(
+    "Section 1100.8 — CQ-8 contract pins the canonical literal value",
+    contract.includes(`UNKNOWN_CUSTOMER_NAME = "${SENTINEL}"`),
+    `the CQ-8 contract must spell out the canonical literal \`UNKNOWN_CUSTOMER_NAME = "${SENTINEL}"\` so renames are caught at review time`,
   );
 })();
