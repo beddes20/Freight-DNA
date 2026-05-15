@@ -5962,9 +5962,15 @@ console.log("\n── Section 1053: Email→Exec 2 — Needs Routing hints ─�
     /const\s*\{\s*opp,\s*handoff\s*\}\s*=\s*await updateQuote\(/.test(cqRoute),
     "PATCH route must destructure the new updateQuote return shape",
   );
+  // Task #1153 added the canonical `handoff` field alongside the
+  // `_handoff` compatibility alias. Section 1153 (below) pins each key
+  // independently with stricter asserts; this older Section 1142 regex
+  // is updated to match the current dual-key shape so it stops failing
+  // green-on-green code. Net contract effect: zero — Section 1153 is
+  // the binding contract for the handoff payload.
   assert(
     "routes/customerQuotes.ts — PATCH response surfaces _handoff alongside the quote detail",
-    /res\.json\(\{\s*\.\.\.detail,\s*_handoff:\s*handoff\s*\}\)/.test(cqRoute),
+    /res\.json\(\{\s*\.\.\.detail,\s*handoff,\s*_handoff:\s*handoff\s*\}\)/.test(cqRoute),
     "PATCH must attach _handoff to the JSON body so the client can branch the toast",
   );
 
@@ -7512,12 +7518,26 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
   console.log("\n── Section 1143: Customers-tab ownership canon ─────────\n");
 
   // ── 1. Canonical owner-coalesce in all three sites ──
-  // The string varies only by parameter name (`c` in auth.ts,
-  // `company` in customers.tsx). Both forms must end with
-  // `?? (… as any).salesPersonId ?? null` so the precedence is
-  // unambiguous. A new contributor who reorders or drops a column
-  // must update this section deliberately.
-  const coalesceRx = /(?:c|company)\.ownerRepId\s*\?\?\s*(?:c|company)\.assignedTo\s*\?\?\s*\((?:c|company) as any\)\.salesPersonId\s*\?\?\s*null/g;
+  //
+  // Originally Section 1143 demanded the literal coalesce
+  // `c.ownerRepId ?? c.assignedTo ?? (c as any).salesPersonId ?? null`
+  // be inlined in BOTH server/auth.ts and client/src/pages/customers.tsx.
+  // Two legitimate refactors landed since:
+  //   1. server/auth.ts now delegates to `getCanonicalCompanyOwnerId(c)`
+  //      from server/lib/companyOwner.ts (single source of truth — the
+  //      helper docstring explicitly references this section). Section
+  //      1450 (below) pins the helper's literal contents so the canonical
+  //      truth is locked in one place.
+  //   2. client/src/pages/customers.tsx accepts an optional
+  //      `(company as any).ownerUserId ??` prefix on the coalesce so the
+  //      server-attached precomputed `ownerUserId` (which resolves
+  //      against the FULL users list including soft-deleted historical
+  //      owners — strictly safer than the bare client-side coalesce) is
+  //      consulted first and the canonical chain is the fall-through.
+  // The protected invariant — `ownerRepId → assignedTo → salesPersonId
+  // → null` precedence — is preserved verbatim in both branches.
+  const customersCoalesceRx = /(?:\(company as any\)\.ownerUserId\s*\?\?\s*)?company\.ownerRepId\s*\?\?\s*company\.assignedTo\s*\?\?\s*\(company as any\)\.salesPersonId\s*\?\?\s*null/g;
+  const authInlineCoalesceRx = /c\.ownerRepId\s*\?\?\s*c\.assignedTo\s*\?\?\s*\(c as any\)\.salesPersonId\s*\?\?\s*null/g;
 
   let authSrc = "";
   try {
@@ -7526,11 +7546,28 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     assert("server/auth.ts — file exists", false);
     return;
   }
-  const authMatches = (authSrc.match(coalesceRx) || []).length;
+  const authInlineMatches = (authSrc.match(authInlineCoalesceRx) || []).length;
+  const authHelperUses = /getCanonicalCompanyOwnerId\s*\(\s*c\s*\)/.test(authSrc);
   assert(
     "server/auth.ts — getVisibleCompanyIds uses the canonical owner-coalesce",
-    authMatches === 1,
-    `expected exactly 1 occurrence of \`c.ownerRepId ?? c.assignedTo ?? (c as any).salesPersonId ?? null\` in server/auth.ts; found ${authMatches}. Splitting or duplicating the coalesce re-introduces the visibility split-brain.`,
+    authInlineMatches === 1 || authHelperUses,
+    `expected getVisibleCompanyIds to either inline \`c.ownerRepId ?? c.assignedTo ?? (c as any).salesPersonId ?? null\` exactly once OR delegate to \`getCanonicalCompanyOwnerId(c)\` from server/lib/companyOwner.ts. Found ${authInlineMatches} inline matches and helper-used=${authHelperUses}. Splitting or duplicating the coalesce re-introduces the visibility split-brain; Section 1450 pins the helper's literal contents.`,
+  );
+
+  // The canonical truth must live somewhere — pin the helper file and
+  // its literal coalesce. (Section 1450 also pins this; duplicated here
+  // to keep Section 1143's contract self-contained.)
+  let companyOwnerSrc = "";
+  try {
+    companyOwnerSrc = fs.readFileSync("server/lib/companyOwner.ts", "utf8");
+  } catch {
+    assert("server/lib/companyOwner.ts — file exists", false);
+    return;
+  }
+  assert(
+    "server/lib/companyOwner.ts — contains the canonical literal coalesce",
+    /company\.ownerRepId\s*\?\?\s*company\.assignedTo\s*\?\?\s*company\.salesPersonId\s*\?\?\s*null/.test(companyOwnerSrc),
+    "the canonical helper must contain the literal `company.ownerRepId ?? company.assignedTo ?? company.salesPersonId ?? null` chain — this is THE single source of truth that auth.ts and customers.tsx both consume",
   );
 
   let customersSrc = "";
@@ -7540,11 +7577,11 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     assert("client/src/pages/customers.tsx — file exists", false);
     return;
   }
-  const customersMatches = (customersSrc.match(coalesceRx) || []).length;
+  const customersMatches = (customersSrc.match(customersCoalesceRx) || []).length;
   assert(
     "client/src/pages/customers.tsx — uses the canonical owner-coalesce in BOTH applyFilters and OwnerLabel",
-    customersMatches === 2,
-    `expected exactly 2 occurrences of the coalesce in customers.tsx (applyFilters + the OwnerLabel parent); found ${customersMatches}. Adding/removing one means updating Section 1143.`,
+    customersMatches >= 2,
+    `expected at least 2 occurrences of the coalesce in customers.tsx (applyFilters + the OwnerLabel parent), with an optional \`(company as any).ownerUserId ??\` prefix permitted; found ${customersMatches}. Adding/removing call sites means updating Section 1143.`,
   );
 
   // No alternative ordering may sneak into the Customers page.
@@ -7604,7 +7641,13 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
 
   // ── 3. Customers-tab amUsers picker drops deactivated reps ──
   // Locate the amUsers useMemo body and assert the lifecycle predicate.
-  const amUsersRx = /const\s+amUsers\s*=\s*useMemo\([^]+?\},\s*\[teamMembers\]\s*\)\s*;/;
+  // Task #1141 legitimately added `showAdminOwned` to the deps array so
+  // the picker re-runs when leadership flips the "Show Admin-Owned"
+  // toggle; allow extra deps beyond [teamMembers] in the outer regex.
+  // The two protected invariants (admins out by default, deactivated
+  // reps out) are pinned by the inner asserts below — those are the
+  // binding contract.
+  const amUsersRx = /const\s+amUsers\s*=\s*useMemo\([^]+?\},\s*\[teamMembers(?:\s*,\s*[A-Za-z_$][\w$]*)*\s*\]\s*\)\s*;/;
   const amMatch = customersSrc.match(amUsersRx);
   assert(
     "customers.tsx — amUsers useMemo resolved",
@@ -8173,5 +8216,117 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "Section 1400 — runtime contract test tests/users-roster-trust-contract.test.ts exists",
     fs.existsSync(path.join(ROOT, "tests", "users-roster-trust-contract.test.ts")),
     "tests/users-roster-trust-contract.test.ts must exist and pin the six runtime cases (UR-1/2/3 default exclusion + inclusion, UR-4 admin opt-in, UR-5 no-opts overload preserved, UR-6 is_fixture invariant)",
+  );
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1450 — Customers & Quotes Guardrail Hardening (2026-05-15)
+//
+// Belt-and-suspenders positive asserts that pin the canonical shapes
+// matched by the relaxed Section 1142/1143 regexes above. Section 1153
+// already pins the handoff payload more precisely; Section 1450 is the
+// binding contract for the cross-file canonical-helper invariant
+// (server/lib/companyOwner.ts ← server/auth.ts, client customers.tsx).
+//
+// Hardening-only program — zero production code changes; this section
+// asserts the CURRENT canonical state so accidental regressions surface
+// immediately.
+// ─────────────────────────────────────────────────────────────────────────────
+(() => {
+  console.log("\n── Section 1450: CQ Guardrail Hardening (2026-05-15) ────────────\n");
+
+  // ── 1. Canonical helper exists and contains the literal coalesce ──
+  let companyOwnerSrc = "";
+  try {
+    companyOwnerSrc = fs.readFileSync("server/lib/companyOwner.ts", "utf8");
+  } catch {
+    assert("Section 1450 — server/lib/companyOwner.ts exists", false);
+    return;
+  }
+  assert(
+    "Section 1450 — server/lib/companyOwner.ts exports getCanonicalCompanyOwnerId",
+    /export\s+function\s+getCanonicalCompanyOwnerId\s*\(/.test(companyOwnerSrc),
+    "the canonical owner-coalesce helper must be exported from server/lib/companyOwner.ts so auth.ts and route payloads can share one rule",
+  );
+  assert(
+    "Section 1450 — getCanonicalCompanyOwnerId contains the literal `ownerRepId ?? assignedTo ?? salesPersonId ?? null` chain",
+    /company\.ownerRepId\s*\?\?\s*company\.assignedTo\s*\?\?\s*company\.salesPersonId\s*\?\?\s*null/.test(companyOwnerSrc),
+    "the helper's body is THE single source of truth for owner precedence — reordering or dropping a column here forks every downstream visibility / label rule",
+  );
+
+  // ── 2. server/auth.ts delegates to the canonical helper ──
+  const authSrc2 = fs.readFileSync("server/auth.ts", "utf8");
+  assert(
+    "Section 1450 — server/auth.ts imports getCanonicalCompanyOwnerId",
+    /import\s*\{[^}]*\bgetCanonicalCompanyOwnerId\b[^}]*\}\s*from\s*["']\.\/lib\/companyOwner["']/.test(authSrc2)
+      || /import\s*\{[^}]*\bgetCanonicalCompanyOwnerId\b[^}]*\}\s*from\s*["']@\/lib\/companyOwner["']/.test(authSrc2),
+    "auth.ts must import the canonical helper from server/lib/companyOwner.ts; an inline coalesce is allowed (Section 1143) but the helper import is the canonical state shipped today",
+  );
+  assert(
+    "Section 1450 — getVisibleCompanyIds calls getCanonicalCompanyOwnerId(c)",
+    /getCanonicalCompanyOwnerId\s*\(\s*c\s*\)/.test(authSrc2),
+    "getVisibleCompanyIds must call the canonical helper rather than re-implement the chain; Section 1143 still allows the inline literal as a fallback if a future rollback is needed",
+  );
+
+  // ── 3. Customer-quotes PATCH response keeps BOTH `handoff` and `_handoff` ──
+  const cqRoute2 = fs.readFileSync("server/routes/customerQuotes.ts", "utf8");
+  assert(
+    "Section 1450 — PATCH response includes canonical `handoff` field",
+    /\.\.\.detail,\s*handoff\b/.test(cqRoute2),
+    "the canonical `handoff` field must appear on the PATCH detail spread; Section 1153 binds this contract — Section 1450 mirrors it for cross-section discoverability",
+  );
+  assert(
+    "Section 1450 — PATCH response keeps `_handoff: handoff` compatibility alias",
+    /_handoff\s*:\s*handoff\b/.test(cqRoute2),
+    "the `_handoff` compatibility alias must remain alongside `handoff` for one release so old clients keep their toast branching; Section 1153 binds this contract — Section 1450 mirrors it",
+  );
+
+  // ── 4. customers.tsx prefers server-attached `ownerUserId` then the canonical chain ──
+  const customersSrc2 = fs.readFileSync("client/src/pages/customers.tsx", "utf8");
+  const ownerUserIdPrefixed = /\(company as any\)\.ownerUserId\s*\?\?\s*company\.ownerRepId\s*\?\?\s*company\.assignedTo\s*\?\?\s*\(company as any\)\.salesPersonId\s*\?\?\s*null/g;
+  const ownerUserIdPrefixedCount = (customersSrc2.match(ownerUserIdPrefixed) || []).length;
+  assert(
+    "Section 1450 — customers.tsx prefers server-attached `ownerUserId` before the canonical chain (≥1 site)",
+    ownerUserIdPrefixedCount >= 1,
+    `expected at least one occurrence of \`(company as any).ownerUserId ?? company.ownerRepId ?? company.assignedTo ?? (company as any).salesPersonId ?? null\` in customers.tsx (the OwnerLabel parent and applyFilters both ship with the prefix today); found ${ownerUserIdPrefixedCount}. The server resolves \`ownerUserId\` against the FULL users list including soft-deleted historical owners — dropping the prefix loses correct attribution for those rows.`,
+  );
+  assert(
+    "Section 1450 — customers.tsx still contains the canonical chain (with or without the ownerUserId prefix)",
+    /company\.ownerRepId\s*\?\?\s*company\.assignedTo\s*\?\?\s*\(company as any\)\.salesPersonId\s*\?\?\s*null/.test(customersSrc2),
+    "the canonical fall-through chain must remain so older cached payloads (no ownerUserId attached) still resolve",
+  );
+
+  // ── 5. amUsers picker drops admins (default) and deactivated reps ──
+  const amUsersRx2 = /const\s+amUsers\s*=\s*useMemo\([^]+?\},\s*\[teamMembers(?:\s*,\s*[A-Za-z_$][\w$]*)*\s*\]\s*\)\s*;/;
+  const amMatch2 = customersSrc2.match(amUsersRx2);
+  assert(
+    "Section 1450 — amUsers useMemo present (deps array may include extras beyond teamMembers)",
+    !!amMatch2,
+    "could not locate the amUsers useMemo with a [teamMembers, …] deps array — the picker contract cannot be validated",
+  );
+  if (amMatch2) {
+    const body = amMatch2[0];
+    assert(
+      "Section 1450 — amUsers excludes admins from the picker (role !== \"admin\")",
+      /role\s*!==\s*"admin"/.test(body),
+      "admins are not assignable owners on the Customers tab; the picker must continue to exclude them by default (the leadership `showAdminOwned` toggle is allowed to widen the predicate)",
+    );
+    assert(
+      "Section 1450 — amUsers excludes deactivated reps (isActive !== false)",
+      /isActive\s*!==\s*false/.test(body),
+      "the picker must drop deactivated reps even though they remain in accountOwnerMap for historical-owner label resolution",
+    );
+  }
+
+  // ── 6. Hardening artifact + replit.md gotcha exist ──
+  assert(
+    "Section 1450 — docs/cq-guardrail-hardening-2026-05-15.md exists",
+    fs.existsSync(path.join(ROOT, "docs", "cq-guardrail-hardening-2026-05-15.md")),
+    "the hardening program's audit + per-fix rationale + rollback note must live at docs/cq-guardrail-hardening-2026-05-15.md",
+  );
+  assert(
+    "Section 1450 — replit.md Gotchas pins the CQ Guardrail Hardening (2026-05-15) program",
+    /CQ Guardrail Hardening \(2026-05-15\)/.test(fs.readFileSync(path.join(ROOT, "replit.md"), "utf8")),
+    "replit.md must carry a Gotcha entry headed `CQ Guardrail Hardening (2026-05-15)` so future contributors find this contract from the prompt-time README",
   );
 })();

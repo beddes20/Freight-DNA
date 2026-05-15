@@ -1,0 +1,86 @@
+Approve Subtask B as planned.
+
+Your audit shows:
+- All four failures are stale regexes in tests/code-quality-guardrails.test.ts.
+- The current production code already matches the desired contracts:
+  - customerQuotes PATCH returns { ...detail, handoff, _handoff: handoff }.
+  - getCanonicalCompanyOwnerId(c) is the shared canonical owner chain helper.
+  - customers.tsx prefers ownerUserId when present, then the canonical chain.
+  - amUsers usesMemo includes showAdminOwned in deps to keep the picker fresh.
+- Section 1153 already pins the handoff/_handoff shape more precisely; the
+  older Section 1142 regex is the one that needs updating.
+
+Execute Subtask B with these exact changes (tests only, no runtime code):
+
+1) Update the four failing guardrail regexes in tests/code-quality-guardrails.test.ts:
+
+- Section 1142:
+  - Change the PATCH response regex to require both keys:
+    from:
+      res.json({ ...detail, _handoff: handoff })
+    to:
+      res.json({ ...detail, handoff, _handoff: handoff })
+  - Keep the comment noting Task #1153 and that Section 1153 separately pins
+    both keys.
+
+- Section 1143 (auth owner-coalesce):
+  - Update the guardrail so it allows either:
+    - the inline coalesce:
+      c.ownerRepId ?? c.assignedTo ?? c.salesPersonId ?? null
+    - or a call to the canonical helper:
+      getCanonicalCompanyOwnerId(c)
+  - Add a separate assert that:
+    - server/lib/companyOwner.ts exists, and
+    - contains the literal coalesce chain
+      ownerRepId ?? assignedTo ?? salesPersonId ?? null
+    so the canonical truth is pinned in one place.
+
+- Customers owner chain (applyFilters + OwnerLabel):
+  - Update the regex to allow an optional `(company as any).ownerUserId ??`
+    prefix before the existing chain:
+      ownerRepId ?? assignedTo ?? (company as any).salesPersonId ?? null
+  - Preserve the original invariant that the underlying order is exactly:
+      ownerRepId → assignedTo → salesPersonId → null
+
+- amUsers useMemo deps:
+  - Update the regex to allow extra deps beyond [teamMembers], e.g.:
+      [teamMembers, showAdminOwned, ...]
+    instead of demanding a single-element deps array.
+  - Keep the inner asserts that require:
+      u.role !== "admin"  (admins out by default)
+      u.isActive !== false  (deactivated reps out)
+
+2) Add Section 1450 to tests/code-quality-guardrails.test.ts:
+
+- Positive asserts that:
+  - server/lib/companyOwner.ts exists and contains the canonical coalesce.
+  - getVisibleCompanyIds in auth.ts uses getCanonicalCompanyOwnerId(c) or
+    equivalent, not a divergent chain.
+  - customerQuotes PATCH response includes both handoff and _handoff.
+  - customers.tsx owner chain includes the ownerUserId-prefixed form and
+    still falls back to the canonical chain.
+  - amUsers filters out admins and inactive users.
+
+3) No production code changes:
+- Do NOT edit server/auth.ts, customerQuotes.ts, customers.tsx, or any
+  routes/services/schemas.
+- This subtask is tests/guardrails only.
+
+4) After changes, run:
+- npx tsx tests/code-quality-guardrails.test.ts
+- npm run check
+
+Then STOP and report:
+- diff summary (which guardrail sections changed, new Section 1450),
+- tests run and results,
+- confirm no runtime/behavioral changes,
+- rollback note (single revert of the test/doc changes).
+
+We are explicitly NOT:
+- inlining the helper back into auth.ts (the shared helper is the better
+  contract and is now what the guardrail should pin),
+- touching customerQuotes.ts, CQ services, freight_daily_upload_fact writers,
+  contacts, auth behavior, or any schema.
+
+After Subtask B is green, proceed to Subtask D/E (docs + gotcha) as you
+outlined, then stop this “Customers & Quotes Guardrail Hardening” program.
