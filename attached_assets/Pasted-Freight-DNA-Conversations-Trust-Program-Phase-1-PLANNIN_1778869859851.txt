@@ -1,0 +1,145 @@
+Freight-DNA — Conversations Trust Program (Phase 1)
+PLANNING-FIRST — DO NOT CHANGE CODE YET
+
+Context:
+Freight-DNA is a high-trust CRM + workflow OS for freight brokerage.
+
+Recent work:
+- Customers Tab Trust program: strict customersOnly filter, contract doc, guardrails.
+- Users Roster Trust program: junk-pattern hide, contract doc, guardrails.
+- Customer Quotes Phase 1: CQ contracts (1–8) pinned, guardrails hardened, ownership
+  audit done, unknown-sender sentinel documented and tested.
+
+Now I want to bring Conversations (email / message threads) up to the same “trustable
+and pinned” standard, starting with a planning-only pass.
+
+Scope for this program:
+- The Conversations tab/page (UI and routing).
+- The backing email/message models and routes:
+  - threads, messages, any email_signals / email_messages tables, etc.
+- How threads are associated to companies, contacts, and users.
+- Visibility rules:
+  - which threads a given rep sees and why.
+  - how “mine” / “team” / “org-wide” are defined (if applicable).
+
+Out of scope for Phase 1:
+- New features (reply from app, bulk actions, etc.).
+- Any deliverability or mailbox-connection work (IMAP/OAuth plumbing).
+- Auto-classification of content unless it already exists and affects trust.
+- Lane Work Queue / Available Freight / Dashboard.
+
+Posture:
+Planning-first, read-first. This task must be **docs + diagnosis only**.
+No production code changes, no schema changes, no writers.
+
+Goals for this Phase 1 planning task:
+- Map the Conversations stack end-to-end based on the actual code and schema.
+- Understand how identity and ownership work for threads (company/contact/user).
+- Identify the main trust gaps and failure modes from a rep’s perspective.
+- Propose a small, low-blast-radius set of Phase 1.1 subtasks that:
+  - improve trust or safety,
+  - are reversible with a single revert,
+  - and avoid heavy schema or behavior changes.
+
+Required output sections (no code changes yet):
+
+Section 1 — Current behavior snapshot
+Based on the real code (UI + server + schema), describe:
+- What the Conversations tab/page shows by default:
+  - list layout, filters, search, any “Mine vs Team vs All” toggles or similar.
+- Which routes and services back it:
+  - list endpoint(s), detail endpoint(s), any snapshot/KPI endpoints.
+- The data model:
+  - tables used (e.g., email_messages, email_conversation_threads,
+    email_signals, contacts, companies, users, monitored_mailboxes),
+  - key columns (thread id, message id, company/contact linkage, owner/user).
+
+Summarize end-to-end:
+- For a rep R, how do we decide which threads appear in their Conversations view?
+  - mention auth, any mailbox-mapping, any “team membership” or org-wide rules,
+    and any post-filtering in the client.
+
+Section 2 — Intended contracts (from existing docs/tests)
+- Read any existing docs/contract files and Gotchas that mention Conversations,
+  email ingestion, monitored mailboxes, or threads.
+- Summarize (in your own words) what the current contracts say:
+  - How threads should attach to companies and contacts.
+  - How “visible to user X” is supposed to work.
+  - Any guarantees about not dropping messages, not double-counting threads, etc.
+- Point out places where docs/tests and real code seem to disagree or leave gaps.
+
+Section 3 — Trust gaps and failure modes
+From a rep’s perspective, list the main ways Conversations can break trust:
+- Examples:
+  - “Important emails are missing from my view.”
+  - “Threads show up under the wrong company/contact.”
+  - “Test/junk/system emails pollute my list.”
+  - “Ownership / visibility feels random.”
+
+For each gap:
+- Give it an ID (CONV-G1, CONV-G2, …).
+- Describe the scenario.
+- Point to the specific code paths / tables involved.
+- Classify it as:
+  - visibility/ownership,
+  - identity/linkage (company/contact),
+  - noise/junk,
+  - data-staleness/freshness,
+  - or “unknown/needs more investigation”.
+
+Section 4 — Guardrails vs reality
+- Identify any existing tests/guardrails that touch Conversations, email ingestion,
+  monitored mailboxes, or threads.
+- For each:
+  - state what it’s trying to protect,
+  - whether the current code matches it,
+  - and whether the guardrail is:
+    - correct and aligned,
+    - stale but harmless,
+    - missing for an important behavior.
+- Identify behaviors that are canonical in code but not yet pinned by tests/docs.
+
+Section 5 — Proposed Phase 1.1 subtasks (tiny, reversible)
+Propose a short list (3–6) of very small subtasks suitable for Phase 1.1.
+Each subtask should:
+- have a clear name and goal,
+- list likely files touched,
+- be low-blast-radius and single-revert reversible,
+- and fall into one of:
+  - read-only audit / reporting,
+  - small read-path safety/cleanup changes,
+  - tests/guardrails alignment,
+  - docs/contract clarifications.
+
+Examples of acceptable tasks (only if they match what you find):
+- A read-only audit of “unlinked threads” (threads with no company/contact).
+- Hiding obviously junk/test threads from default views with an admin override.
+- Guardrails to pin the company/contact-linking rules for new messages.
+- Guardrails to pin which mailboxes feed into Conversations vs background.
+
+Section 6 — Recommended starting subtask
+From your Phase 1.1 list, pick:
+- ONE subtask that is the best first move (highest trust impact, lowest risk),
+- and briefly justify why that one should go first and what should be deferred.
+
+Section 7 — Stop rule
+Explicitly state:
+- That no production code has been modified for this planning task.
+- That after this report you will wait for my approval before implementing any
+  Phase 1.1 subtask.
+- That any future Conversations subtasks will:
+  - be executed one at a time,
+  - include diff summaries, tests run, behavior changes, and rollback notes,
+  - respect the same “no destructive changes without explicit approval” rules
+    we used for Customers, Users, and CQ.
+
+Constraints:
+- Do NOT change production code in this task.
+- Do NOT change schemas, schedulers, or writers.
+- Do NOT alter mail ingestion behavior or mailbox connections yet.
+- Keep all changes (if any) to docs/notes for this program until I explicitly
+  approve a Phase 1.1 implementation subtask.
+
+Expected output:
+- A single response with Sections 1–7 filled out based on the current codebase.
+- Then STOP and wait for my approval before implementing anything.
