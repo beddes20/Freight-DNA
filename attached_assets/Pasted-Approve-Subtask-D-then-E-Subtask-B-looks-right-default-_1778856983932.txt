@@ -1,0 +1,85 @@
+Approve Subtask D, then E.
+
+Subtask B looks right:
+- default GET /api/users now hides the obvious junk-pattern users,
+- includeJunkSuspects=true is the admin recovery path,
+- no-opts storage.getUsers(orgId) remains unchanged for internal callers,
+- auth / CQ / Top Opps / dashboards / uploads were not touched.
+
+Now close this out the same way we did Customers.
+
+Subtask D — tests + Section 1400 guardrails
+Implement exactly as planned:
+
+1) Add tests/users-roster-trust-contract.test.ts with at least these cases:
+- example.com user excluded from default GET /api/users behavior
+- WQTest-style user excluded from default
+- real valuetruck.com user included in default
+- includeJunkSuspects=true returns all of the above for admin path
+- no-opts storage.getUsers(orgId) still returns all of them (legacy invariant)
+- is_fixture=true row remains excluded under every combo (Section 1126 invariant)
+
+2) Extend tests/code-quality-guardrails.test.ts with new Section 1400:
+- storage.ts exposes includeJunkSuspects in UserListFilter
+- storage.ts getUsers branches on includeJunkSuspects
+- storage.ts uses the shared fixture/junk pattern constant rather than duplicating literals
+- routes.ts GET /api/users reads includeJunkSuspects, admin-gates it, forwards it, and emits X-Users-Junk-Hidden-Count
+- admin-users.tsx renders the admin-only Junk suspects tab and hidden-count badge
+- customerQuotes.ts does NOT reference includeJunkSuspects
+- replit.md contains the future “Users Roster Trust” gotcha header
+- docs/users-roster-trust-contract.md exists (this can be green after E lands)
+
+3) Run:
+- new runtime contract test
+- full guardrails
+- typecheck
+
+Then STOP and report:
+- diff summary
+- tests run / results
+- exact behavior changes (should be none beyond what B already shipped)
+- rollback note
+
+After D is green, execute Subtask E.
+
+Subtask E — docs / gotcha close-out
+Implement exactly as planned:
+
+1) Add replit.md gotcha:
+“Users Roster Trust (Subtask B, 2026-05-15)”
+Include:
+- default GET /api/users hides junk-pattern users
+- includeJunkSuspects=true is admin-only recovery path
+- no-opts storage.getUsers(orgId) remains legacy for internal callers
+- X-Users-Junk-Hidden-Count disclosure behavior
+- explicit out-of-scope files/surfaces (CQ, auth core, freight-fact writers, email ingestion, contacts, RBAC)
+
+2) Add docs/users-roster-trust-contract.md
+Mirror the Customers/CQ contract style and pin:
+- UR-1 default roster behavior
+- UR-2 no-opts overload preserved
+- UR-3 admin override silent-drop for non-admins
+- UR-4 CQ / historical attribution surfaces must not use includeJunkSuspects
+- UR-5 junk-pattern list comes from one shared constant
+- non-surfaces / out-of-scope list
+
+3) Re-run:
+- full guardrails
+- typecheck
+
+Then STOP and report:
+- diff summary
+- tests run
+- behavior changes (none expected)
+- rollback note
+
+Constraints remain:
+- no deletes
+- no lifecycle flips
+- no role/RBAC/auth changes
+- no schema or DDL
+- no touching customerQuotes.ts, auth core, freight_daily_upload_fact writers,
+  processUserMailboxEmail, or contacts
+- do not start Subtask F
+
+After E, stop all Users work unless I explicitly open a new program.

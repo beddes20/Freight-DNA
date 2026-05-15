@@ -7291,10 +7291,14 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "non-admins must always see the cleaned default roster — never let the lifecycle tab leak into their URL",
   );
 
-  // useQuery wires usersUrl as the cache key.
+  // useQuery wires usersUrl as the cache key. Subtask B (Users Roster
+  // Trust, 2026-05-15) added a custom `queryFn` to capture the
+  // X-Users-Junk-Hidden-Count response header — the queryKey is still
+  // `[usersUrl]`, which is the spirit of this contract (per-tab cache
+  // slice). Match the queryKey shape but allow extra useQuery options.
   assert(
     "admin-users.tsx — useQuery uses usersUrl as queryKey",
-    /useQuery<SafeUser\[\]>\(\{\s*queryKey:\s*\[usersUrl\]\s*\}\)/.test(src),
+    /useQuery<SafeUser\[\]>\(\{\s*queryKey:\s*\[usersUrl\][,\s}]/.test(src),
     "the user-roster query must key off usersUrl so each tab gets its own cache slice",
   );
 
@@ -8044,5 +8048,130 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "Section 1300 — docs/customers-tab-trust-contract.md exists",
     fs.existsSync(path.join(ROOT, "docs", "customers-tab-trust-contract.md")),
     "docs/customers-tab-trust-contract.md must exist as the canonical CT-1..CT-4 contract doc, mirroring docs/customer-quotes-stability-contract.md",
+  );
+})();
+
+
+// ── Section 1400: Users Roster Trust Cleanup — Subtask B (2026-05-15) ─────
+// Restores the rule "the /admin/users default roster shows real humans" by
+// hiding rows whose `LOWER(username)` ends with a FIXTURE_MAILBOX_LIKE_
+// PATTERNS suffix (`@example.com` family + RFC 6761 reserved TLDs). The
+// audit that produced these buckets lives in
+// docs/users-bucket-audit-2026-05-15.md (107/160 leakage on Value Truck —
+// all `wq.test.*@example.com` / `coe.test.*@example.com` seed-script
+// rows). Contracts:
+//   UR-1  `storage.getUsers(orgId, filter)` accepts `includeJunkSuspects?`
+//         and default-excludes the junk-pattern rows when it is unset.
+//   UR-2  The no-opts `storage.getUsers(orgId)` overload is UNCHANGED —
+//         CQ, leaderboards, financial uploads, dashboards keep the
+//         legacy "every user" view.
+//   UR-3  `GET /api/users` reads `includeJunkSuspects`, admin-gates it
+//         (silent-drop pattern, never 403), forwards it to storage, and
+//         emits `X-Users-Junk-Hidden-Count` when the exclusion is in
+//         effect.
+//   UR-4  `client/src/pages/admin-users.tsx` renders the admin-only
+//         "Junk suspects" tab and the hidden-count badge.
+//   UR-5  The junk-pattern list is sourced from the SHARED
+//         FIXTURE_MAILBOX_LIKE_PATTERNS constant — read-time visibility
+//         and write-time `assertNotFixtureEmail` boundary guard cannot
+//         drift.
+//   UR-6  `server/services/customerQuotes.ts` does NOT reference
+//         `includeJunkSuspects` — CQ stability contract (CQ-2/CQ-5).
+//   UR-7  Documentation surfaces exist (replit.md Gotcha header +
+//         docs/users-roster-trust-contract.md).
+//   UR-8  Runtime contract test exists.
+(function section1400UsersRosterTrustCleanup() {
+  console.log("\n── Section 1400: Users Roster Trust Cleanup (Subtask B) ──");
+  const storageSrc = readFile("server/storage.ts");
+  const routesSrc = readFile("server/routes.ts");
+  const adminUsersSrc = readFile("client/src/pages/admin-users.tsx");
+  const cqSrc = readFile("server/services/customerQuotes.ts");
+
+  // ── UR-1 + UR-5: storage layer ───────────────────────────────────────
+  assert(
+    "Section 1400 — server/storage.ts UserListFilter exposes includeJunkSuspects",
+    /export\s+interface\s+UserListFilter\s*\{[^}]*includeJunkSuspects\?:\s*boolean[^}]*\}/.test(storageSrc),
+    "UserListFilter must declare includeJunkSuspects?: boolean so the route can forward it without an `any` cast",
+  );
+  assert(
+    "Section 1400 — server/storage.ts getUsers branches on includeJunkSuspects",
+    /if\s*\(\s*!\s*filter\.includeJunkSuspects[^)]*\)/.test(storageSrc),
+    "getUsers(orgId, filter) must add the junk-pattern exclusion when filter.includeJunkSuspects is unset",
+  );
+  assert(
+    "Section 1400 — server/storage.ts uses the SHARED FIXTURE_MAILBOX_LIKE_PATTERNS constant (no duplicated literals)",
+    /import\s*\{[^}]*FIXTURE_MAILBOX_LIKE_PATTERNS[^}]*\}\s*from\s*"\.\/lib\/fixtureMailboxes"/.test(storageSrc) &&
+      /FIXTURE_MAILBOX_LIKE_PATTERNS\.map\(/.test(storageSrc),
+    "the read-time predicate must reuse the same constant the createUser boundary guard (assertNotFixtureEmail) uses, so the visible roster and the write-time rejection cannot drift",
+  );
+  assert(
+    "Section 1400 — server/storage.ts does NOT inline raw junk literals in the getUsers predicate",
+    !/getUsers[\s\S]{0,2000}LIKE\s+'%@example\.com'/i.test(storageSrc),
+    "getUsers must drive the LIKE pattern off FIXTURE_MAILBOX_LIKE_PATTERNS — inlining `%@example.com` here would silently fork from the shared list",
+  );
+
+  // ── UR-3: route layer ────────────────────────────────────────────────
+  assert(
+    "Section 1400 — server/routes.ts GET /api/users reads includeJunkSuspects from the query string",
+    /includeJunkSuspects:\s*req\.query\.includeJunkSuspects\s*===\s*"true"/.test(routesSrc),
+    "GET /api/users must read ?includeJunkSuspects=true from the query string",
+  );
+  assert(
+    "Section 1400 — server/routes.ts admin-gates includeJunkSuspects (silent-drop pattern)",
+    /includeJunkSuspects:\s*callerIsAdmin\s*&&\s*requested\.includeJunkSuspects/.test(routesSrc),
+    "non-admin callers must have includeJunkSuspects silently dropped — same admin-gate pattern as the four Section 1126.4 sensitive flags",
+  );
+  assert(
+    "Section 1400 — server/routes.ts forwards includeJunkSuspects into storage.getUsers",
+    /storage\.getUsers\([^)]*includeJunkSuspects[^)]*\)/.test(routesSrc),
+    "GET /api/users must thread the (admin-gated) includeJunkSuspects bit through to storage",
+  );
+  assert(
+    "Section 1400 — server/routes.ts emits X-Users-Junk-Hidden-Count disclosure header",
+    /setHeader\(\s*"X-Users-Junk-Hidden-Count"/.test(routesSrc),
+    "route must surface the hidden-row count via a response header so the admin UI badge can show it without a second round-trip",
+  );
+
+  // ── UR-4: admin UI ───────────────────────────────────────────────────
+  assert(
+    "Section 1400 — client/src/pages/admin-users.tsx exposes the Junk suspects lifecycle tab",
+    /\{\s*key:\s*"junk_suspects"\s*,\s*label:\s*"Junk suspects"\s*\}/.test(adminUsersSrc) &&
+      /data-testid=\{`lifecycle-tab-\$\{key\}`\}/.test(adminUsersSrc),
+    "admin-users.tsx must add { key: 'junk_suspects', label: 'Junk suspects' } to LIFECYCLE_TABS so the segmented strip renders the admin-only opt-in",
+  );
+  assert(
+    "Section 1400 — client/src/pages/admin-users.tsx maps junk_suspects → ?includeJunkSuspects=true",
+    /case\s+"junk_suspects":[\s\S]{0,200}return\s+"\/api\/users\?includeJunkSuspects=true"/.test(adminUsersSrc),
+    "buildUsersUrlForLifecycle must map the junk_suspects tab to the admin opt-in URL",
+  );
+  assert(
+    "Section 1400 — client/src/pages/admin-users.tsx reads X-Users-Junk-Hidden-Count and renders the badge",
+    /X-Users-Junk-Hidden-Count/.test(adminUsersSrc) &&
+      /data-testid="text-junk-suspects-hidden-count"/.test(adminUsersSrc),
+    "admin-users.tsx must capture the disclosure header and render the hidden-count badge so admins know how many rows the cleaned default is hiding",
+  );
+
+  // ── UR-6: out-of-scope guard ─────────────────────────────────────────
+  assert(
+    "Section 1400 — server/services/customerQuotes.ts does NOT reference includeJunkSuspects",
+    !/includeJunkSuspects/.test(cqSrc),
+    "CQ stability contract (CQ-2/CQ-5) — customer-quotes service must keep using the no-opts getUsers; widening it would silently lose historical author attribution for soft-junk-flagged accounts",
+  );
+
+  // ── UR-7 + UR-8: documentation + runtime test ────────────────────────
+  assert(
+    "Section 1400 — replit.md Gotchas pins the Users Roster Trust (Subtask B) contract",
+    /Users Roster Trust \(Subtask B, 2026-05-15\)/.test(readFile("replit.md")),
+    "replit.md must contain the 'Users Roster Trust (Subtask B, 2026-05-15)' Gotcha header so future agents see the read-time exclusion + admin opt-in invariants before touching /api/users or admin-users.tsx",
+  );
+  assert(
+    "Section 1400 — docs/users-roster-trust-contract.md exists",
+    fs.existsSync(path.join(ROOT, "docs", "users-roster-trust-contract.md")),
+    "docs/users-roster-trust-contract.md must exist as the canonical UR-1..UR-5 contract doc, mirroring docs/customers-tab-trust-contract.md and docs/customer-quotes-stability-contract.md",
+  );
+  assert(
+    "Section 1400 — runtime contract test tests/users-roster-trust-contract.test.ts exists",
+    fs.existsSync(path.join(ROOT, "tests", "users-roster-trust-contract.test.ts")),
+    "tests/users-roster-trust-contract.test.ts must exist and pin the six runtime cases (UR-1/2/3 default exclusion + inclusion, UR-4 admin opt-in, UR-5 no-opts overload preserved, UR-6 is_fixture invariant)",
   );
 })();
