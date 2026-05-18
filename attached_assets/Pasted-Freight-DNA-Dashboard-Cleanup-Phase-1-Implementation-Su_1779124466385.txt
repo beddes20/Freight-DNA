@@ -1,0 +1,81 @@
+Freight-DNA — Dashboard Cleanup (Phase 1)
+Implementation Subtask: P1-S5 — Retire legacy Priority Actions
+IMPLEMENT ONLY THIS SUBTASK
+
+Context:
+Phase 1 so far:
+- P1-S1: My Work consolidator card is live.
+- P1-S2: Dashboard role gates tightened.
+- P1-S3: Lower-priority analytical widgets moved into a collapsed Insights accordion.
+- P1-S4: Team Feed / Internal Comms / 1:1 Sessions removed from the dashboard render path.
+
+One legacy clutter source remains:
+- Priority Actions (#10 in the planning report), the old legacy NBA-style block.
+
+The planning report explicitly recommended retiring it because:
+- it is already auto-suppressed when the newer NBA surface is active,
+- it overlaps conceptually with My Work and NBA Today's Priorities,
+- keeping dead/legacy render paths increases confusion and maintenance cost.
+
+Goal:
+Remove the legacy Priority Actions dashboard render path, while leaving any
+underlying endpoint or reusable logic untouched unless it is clearly dead and
+local to the dashboard.
+
+Rules:
+- Frontend-only.
+- No endpoint changes.
+- No schema, jobs, or writer changes.
+- No metric logic changes.
+- Keep blast radius low and reversible.
+- Do NOT widen scope into broader NBA redesign.
+
+Required implementation:
+
+1) Locate the legacy Priority Actions render block in:
+   - client/src/pages/dashboard.tsx
+   - and/or any dashboard subcomponent currently used only for this block.
+
+2) Remove or suppress the dashboard render path for the legacy Priority Actions
+   block.
+   - Prefer actual removal if the render path is clearly obsolete and unused.
+   - If surrounding structure makes true deletion awkward, a minimal
+     behavior-preserving suppression is acceptable, but prefer deletion over
+     long-term dead wrappers where practical.
+
+3) Important constraints:
+   - Do NOT change the underlying /api/next-best-actions endpoint unless you
+     confirm it is used nowhere else and the change is explicitly local.
+   - Do NOT touch the newer NBA cards or My Work behavior.
+   - Do NOT redesign any remaining dashboard widgets.
+
+4) Optional cleanup:
+   - If there is a tiny, obviously local import/helper that becomes unused only
+     because of this removal, clean it up in the same diff.
+   - Do NOT perform broad dead-code cleanup outside the immediate render path.
+
+5) Verification:
+   - Run typecheck.
+   - Run guardrails/tests.
+   - Confirm dashboard still renders correctly and that My Work / NBA surfaces
+     remain intact.
+
+Required output after implementation:
+
+A. Diff summary
+- list every file changed and why
+
+B. Behavior changes
+- exactly what no longer appears on the dashboard
+- confirm that My Work and newer NBA surfaces are unaffected
+
+C. Tests run
+- commands + pass/fail
+
+D. Rollback note
+- how to revert this subtask cleanly
+
+E. Stop rule
+- stop after P1-S5 only
+- do not start a Phase 2 redesign
+- do not touch endpoint/backend logic unless it is trivially local and proven unused

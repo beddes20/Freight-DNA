@@ -51,7 +51,6 @@ import { LmCheckinBanner } from "@/components/lm-checkin-banner";
 import { TouchpointsTodayPortlet } from "@/components/touchpoints-today-portlet";
 import { AccountGrowthPortlet } from "@/components/account-growth-portlet";
 import { IntelSnapshotPortlet } from "@/components/intel-snapshot-portlet";
-import { NextBestActionsPortlet } from "@/components/next-best-actions-portlet";
 import { DashboardActivitySheet, type PortletType } from "@/components/dashboard-activity-sheet";
 import { RelationshipDashboardSection } from "@/components/relationship-freight-portlet";
 import { useDashboardLayout } from "@/hooks/use-dashboard-layout";
@@ -124,7 +123,6 @@ export default function Dashboard() {
       return next;
     });
   };
-  const [nbaBriefingCollapsed, setNbaBriefingCollapsed] = useState(() => localStorage.getItem("dash_nba_briefing_collapsed") !== "false");
   const [accountGrowthCollapsed, setAccountGrowthCollapsed] = useState(() => localStorage.getItem("dash_account_growth_collapsed") !== "false");
   const [personalMetricsCollapsed, setPersonalMetricsCollapsed] = useState(() => localStorage.getItem("dash_personal_metrics_collapsed") !== "false");
   const [accountsDriftingCollapsed, setAccountsDriftingCollapsed] = useState(() => localStorage.getItem("dash_accounts_drifting_collapsed") === "true");
@@ -413,16 +411,6 @@ export default function Dashboard() {
     enabled: isNam || isAm,
     refetchInterval: 120000,
   });
-
-  // Gate for suppressing the legacy NextBestActionsPortlet when Phase 1 NBA cards are
-  // active — same queryKey as NbaDashboardPanel so TanStack reuses the cached result
-  // (zero extra HTTP requests).
-  const { data: nbaCardsForGate = [] } = useQuery<{ id: string }[]>({
-    queryKey: ["/api/nba/cards"],
-    staleTime: 60_000,
-    enabled: isAm || isNam,
-  });
-  const nbaHasCards = nbaCardsForGate.length > 0;
 
   const { data: leaderboard = [], isLoading: leaderboardLoading } = useQuery<{
     metric: string;
@@ -1179,22 +1167,7 @@ export default function Dashboard() {
         </PortletErrorBoundary>
       </div>
 
-      {/* ── "Do This First" — NBA priority actions (top of dashboard) ─────── */}
-      {/* Hidden for AM/NAM when Phase 1 cards are active — NbaDashboardPanel wins.   */}
-      {/* Shown as fallback when no cards exist, and always shown for Directors/others. */}
-      {!isLmRole && ((!isAm && !isNam) || !nbaHasCards) && (
-        <PortletErrorBoundary label="Priority Actions">
-          <NextBestActionsPortlet
-            collapsed={nbaBriefingCollapsed}
-            showSystemRecommendationLabel={!!activeForcedFocus}
-            onToggle={() => {
-              const next = !nbaBriefingCollapsed;
-              setNbaBriefingCollapsed(next);
-              localStorage.setItem("dash_nba_briefing_collapsed", String(next));
-            }}
-          />
-        </PortletErrorBoundary>
-      )}
+      {/* P1-S5: Legacy Priority Actions (#10) retired. Was a NextBestActionsPortlet block gated to render only when Phase 1 NBA cards were absent — overlapped with My Work and NBA Today's Priorities and was already auto-suppressed for AM/NAM with active cards. NbaDashboardPanel + MyWorkCard now own this surface. */}
 
       {/* ── AM NOW zone: Today's Priority Accounts ──────────────────────────── */}
       {isAm && (
