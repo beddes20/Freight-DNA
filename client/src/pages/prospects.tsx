@@ -30,11 +30,19 @@ export default function ProspectsPage() {
   const isSalesDirectorOrAdmin = user?.role === "admin" || user?.role === "sales_director";
   const defaultTab: LaunchpadTab = isSalesDirectorOrAdmin ? "analytics" : "pipeline";
   const rawTab = params.get("tab") as LaunchpadTab | null;
-  const isAdmin = user?.role === "admin";
+  // Launchpad L1.1 (2026-05-18) — routing tab visible to admins + manager
+  // seats (director, NAM, sales_director). Same role set the
+  // PATCH /api/companies/:id/owner endpoint allows + the same set
+  // `getVisibleCompanyIds` widens for when `includeUnroutedEmailDerived=true`.
+  const canRouteAccounts =
+    user?.role === "admin" ||
+    user?.role === "director" ||
+    user?.role === "national_account_manager" ||
+    user?.role === "sales_director";
   const activeTab: LaunchpadTab =
     rawTab === "pipeline" || rawTab === "accounts" || rawTab === "analytics"
       ? rawTab
-      : rawTab === "routing" && isAdmin
+      : rawTab === "routing" && canRouteAccounts
         ? rawTab
         : defaultTab;
 
@@ -114,7 +122,7 @@ export default function ProspectsPage() {
       <div className="flex items-center gap-0 border-b px-4 pt-3 bg-background" data-testid="launchpad-tab-bar">
         <div className="flex items-center gap-1 flex-1">
           <h1 className="text-base font-bold mr-4 text-foreground">Launchpad</h1>
-          {((user?.role === "admin"
+          {((canRouteAccounts
             ? ["pipeline", "accounts", "routing", "analytics"]
             : ["pipeline", "accounts", "analytics"]) as LaunchpadTab[]).map(tab => {
             const icons = { pipeline: Kanban, accounts: Building2, routing: Inbox, analytics: BarChart2 };

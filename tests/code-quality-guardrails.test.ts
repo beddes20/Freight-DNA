@@ -8645,3 +8645,152 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     "replit.md must carry a gotcha entry referencing Task #1179 / FUC-P1-S1 so future agents see the no-widening rule",
   );
 })();
+
+// ── Section 1600: Launchpad Routing Visibility (L1.1, 2026-05-18) ────────
+// Pins the strict opt-in widening of getVisibleCompanyIds / canAccessCompany
+// for manager-like roles on the Needs Routing inbox. Out-of-scope writers
+// (CQ, freight_daily_upload_fact, email ingestion, contacts, user
+// lifecycle, dashboards, NBA, leaderboards, RFP scheduler, Stripe/Webex)
+// MUST keep using the no-arg `getVisibleCompanyIds(user)` form. See
+// docs/launchpad-routing-visibility-contract.md.
+(() => {
+  console.log("\n── Section 1600: Launchpad Routing Visibility (L1.1) ────────────────\n");
+  const ROOT = process.cwd();
+
+  // ── 1. server/auth.ts — type, role set, widened helper. ──
+  const authPath = path.join(ROOT, "server", "auth.ts");
+  const auth = fs.readFileSync(authPath, "utf8");
+  assert(
+    "Section 1600 — server/auth.ts exports CompanyVisibilityOptions",
+    /export\s+(?:type|interface)\s+CompanyVisibilityOptions\b/.test(auth) &&
+      /includeUnroutedEmailDerived\??\s*:\s*boolean/.test(auth),
+    "CompanyVisibilityOptions { includeUnroutedEmailDerived?: boolean } must be exported from server/auth.ts",
+  );
+  assert(
+    "Section 1600 — ROUTING_VISIBILITY_ROLES contains the three manager roles only",
+    /ROUTING_VISIBILITY_ROLES\s*=\s*new\s+Set[\s\S]{0,200}?director[\s\S]{0,80}?national_account_manager[\s\S]{0,80}?sales_director/.test(auth),
+    "the manager-like role set must be {director, national_account_manager, sales_director} — admins already get full visibility; sales/logistics are out of scope",
+  );
+  assert(
+    "Section 1600 — ROUTING_VISIBILITY_ROLES does NOT include sales/account_manager/logistics roles",
+    !/ROUTING_VISIBILITY_ROLES\s*=\s*new\s+Set[\s\S]{0,300}?["'](?:sales|account_manager|logistics_manager|logistics_coordinator)["']/.test(auth),
+    "widening to non-manager roles would silently hand routing power to reps — forbidden",
+  );
+  assert(
+    "Section 1600 — getVisibleCompanyIds accepts the options arg",
+    /function\s+getVisibleCompanyIds\s*\([^)]*options\s*[?:][^)]*CompanyVisibilityOptions/.test(auth),
+    "getVisibleCompanyIds(user, options: CompanyVisibilityOptions = {}) signature is the contract surface",
+  );
+  assert(
+    "Section 1600 — canAccessCompany accepts the options arg + forwards it",
+    /function\s+canAccessCompany\s*\([^)]*options\s*[?:][^)]*CompanyVisibilityOptions[\s\S]{0,400}?getVisibleCompanyIds\([^)]*,\s*options\s*\)/.test(auth),
+    "canAccessCompany(user, id, options) must forward options into getVisibleCompanyIds",
+  );
+  assert(
+    "Section 1600 — getVisibleCompanyIds uses the canonical owner helper for the unowned filter",
+    /getCanonicalCompanyOwnerId\s*\([^)]*\)\s*===\s*null/.test(auth) ||
+      /getCanonicalCompanyOwnerId\s*\([^)]*\)\s*==\s*null/.test(auth),
+    "the unowned predicate must be `getCanonicalCompanyOwnerId(c) === null` so it stays bound to the Section 1450 single-source-of-truth helper",
+  );
+
+  // ── 2. server/routes/companies.ts — strict opt-in parse + silent-drop +
+  //       PATCH /owner + POST /archive pass the flag. ──
+  const companiesRoute = fs.readFileSync(path.join(ROOT, "server", "routes", "companies.ts"), "utf8");
+  assert(
+    "Section 1600 — GET /api/companies parses includeUnroutedEmailDerived strictly",
+    /qStr\(\s*req\.query\.includeUnroutedEmailDerived\s*\)\s*===\s*["']true["']/.test(companiesRoute),
+    "must be `qStr(req.query.includeUnroutedEmailDerived) === 'true'` — anything looser opens a default-widening backdoor",
+  );
+  assert(
+    "Section 1600 — GET /api/companies threads the flag into getVisibleCompanyIds",
+    /getVisibleCompanyIds\(\s*currentUser\s*,\s*\{\s*includeUnroutedEmailDerived\s*\}\s*\)/.test(companiesRoute),
+    "the flag must be passed into getVisibleCompanyIds(currentUser, { includeUnroutedEmailDerived })",
+  );
+  assert(
+    "Section 1600 — non-manager callers get a debug-log silent-drop (never 403)",
+    /\[routing-visibility\][\s\S]{0,200}?non-manager/i.test(companiesRoute),
+    "silent-drop pattern requires a `[routing-visibility] non-manager …` log line so a shared client stays safe to issue the flag",
+  );
+  assert(
+    "Section 1600 — PATCH /api/companies/:id/owner passes the flag to canAccessCompany",
+    /\.patch\(\s*["']\/api\/companies\/:id\/owner["'][\s\S]{0,2000}?canAccessCompany\([\s\S]*?\{\s*includeUnroutedEmailDerived:\s*true\s*\}\s*\)/.test(companiesRoute),
+    "owner-change must pass { includeUnroutedEmailDerived: true } so managers can route an unowned email-derived row",
+  );
+  assert(
+    "Section 1600 — POST /api/companies/:id/archive passes the flag to canAccessCompany",
+    /\.post\(\s*["']\/api\/companies\/:id\/archive["'][\s\S]{0,1500}?canAccessCompany\([\s\S]*?\{\s*includeUnroutedEmailDerived:\s*true\s*\}\s*\)/.test(companiesRoute),
+    "archive must pass the flag so managers can dismiss unowned email-derived rows from the inbox",
+  );
+
+  // ── 3. No other production caller passes includeUnroutedEmailDerived
+  //       into getVisibleCompanyIds / canAccessCompany (no blast radius). ──
+  const serverRoot = path.join(ROOT, "server");
+  const callers: string[] = [];
+  const walk = (dir: string) => {
+    let entries: string[] = [];
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(dir, e);
+      let st: import("fs").Stats;
+      try { st = fs.statSync(full); } catch { continue; }
+      if (st.isDirectory()) { walk(full); continue; }
+      if (!/\.(ts|tsx)$/.test(e)) continue;
+      const rel = path.relative(ROOT, full);
+      if (rel === path.join("server", "auth.ts")) continue;
+      if (rel === path.join("server", "routes", "companies.ts")) continue;
+      let body = "";
+      try { body = fs.readFileSync(full, "utf8"); } catch { continue; }
+      if (/includeUnroutedEmailDerived/.test(body)) callers.push(rel);
+    }
+  };
+  walk(serverRoot);
+  assert(
+    "Section 1600 — only server/auth.ts + server/routes/companies.ts mention includeUnroutedEmailDerived",
+    callers.length === 0,
+    `unexpected production caller(s) of includeUnroutedEmailDerived: ${callers.join(", ")} — adding a new surface requires extending Section 1600 + docs/launchpad-routing-visibility-contract.md first`,
+  );
+
+  // ── 4. Client RoutingSection — role set + fetch URL. ──
+  const routingSecPath = path.join(ROOT, "client", "src", "pages", "prospects", "components", "RoutingSection.tsx");
+  const routingSec = fs.readFileSync(routingSecPath, "utf8");
+  assert(
+    "Section 1600 — RoutingSection role gate covers the four allowed roles",
+    /ROUTING_MANAGER_ROLES[\s\S]{0,200}?admin[\s\S]{0,80}?director[\s\S]{0,80}?national_account_manager[\s\S]{0,80}?sales_director/.test(routingSec),
+    "the client role gate must include {admin, director, national_account_manager, sales_director} — mirrors PATCH /owner allow-list",
+  );
+  assert(
+    "Section 1600 — RoutingSection fetches with includeUnroutedEmailDerived=true",
+    /\/api\/companies\?includeEmailDerived=true&includeUnroutedEmailDerived=true/.test(routingSec),
+    "the routing inbox must explicitly opt in to the widened visibility flag",
+  );
+
+  // ── 5. prospects.tsx tab gate uses the same role set. ──
+  const prospectsPath = path.join(ROOT, "client", "src", "pages", "prospects.tsx");
+  const prospects = fs.readFileSync(prospectsPath, "utf8");
+  assert(
+    "Section 1600 — prospects.tsx canRouteAccounts covers the four allowed roles",
+    /canRouteAccounts[\s\S]{0,400}?admin[\s\S]{0,120}?director[\s\S]{0,120}?national_account_manager[\s\S]{0,120}?sales_director/.test(prospects),
+    "tab visibility must mirror the server-side role set so the UI never offers a tab whose actions would 403",
+  );
+  assert(
+    "Section 1600 — prospects.tsx URL-tampering falls back to default for non-managers",
+    /rawTab\s*===\s*["']routing["']\s*&&\s*canRouteAccounts/.test(prospects),
+    "?tab=routing from a non-manager must silently fall back to the default tab",
+  );
+
+  // ── 6. Contract document exists. ──
+  const contractPath = path.join(ROOT, "docs", "launchpad-routing-visibility-contract.md");
+  assert(
+    "Section 1600 — docs/launchpad-routing-visibility-contract.md exists",
+    fs.existsSync(contractPath),
+    "the L1.1 contract document must exist alongside Section 1600",
+  );
+
+  // ── 7. replit.md Gotcha pins L1.1. ──
+  const replitMd = fs.readFileSync(path.join(ROOT, "replit.md"), "utf8");
+  assert(
+    "Section 1600 — replit.md Gotchas pins Launchpad L1.1 routing visibility",
+    /Launchpad\s+L1\.1|Routing\s+Visibility/i.test(replitMd),
+    "replit.md must carry a gotcha entry referencing Launchpad L1.1 / Routing Visibility",
+  );
+})();

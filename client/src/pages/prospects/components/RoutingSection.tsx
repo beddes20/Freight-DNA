@@ -39,15 +39,14 @@ type EmailDerivedCompany = {
 
 type UserRow = { id: string; name?: string | null; username?: string | null; role?: string | null };
 
-// L1 scope: admins only. The existing GET /api/companies route applies
-// getVisibleCompanyIds(currentUser) (server/auth.ts), which filters out every
-// unowned company for non-admin roles — so the queue would be empty for
-// directors/NAMs/sales_directors today. The admin email-derived console
-// (/api/admin/email-derived-companies) is admin-gated for the same reason.
-// Widening visibility for unowned rows requires a deliberate change to
-// getVisibleCompanyIds (CQ, dashboards, NBA all read it) and is scoped to a
-// later phase. Manager surfacing lands as L1.1 once that change earns its
-// own contract.
+// L1.1 (2026-05-18): visible to admin + manager-like roles (director,
+// national_account_manager, sales_director). Reads
+// `GET /api/companies?includeEmailDerived=true&includeUnroutedEmailDerived=true`
+// — the second flag opts INTO the routing-visibility widening added to
+// `getVisibleCompanyIds` in `server/auth.ts`. Non-manager roles still get
+// the flag silently dropped server-side, so the request stays safe to issue
+// from a shared client. Contract:
+// docs/launchpad-routing-visibility-contract.md
 
 function formatAge(iso: string | null | undefined): string {
   if (!iso) return "—";
@@ -62,23 +61,33 @@ function formatAge(iso: string | null | undefined): string {
   return `${months}mo ago`;
 }
 
+const ROUTING_MANAGER_ROLES = new Set([
+  "admin",
+  "director",
+  "national_account_manager",
+  "sales_director",
+]);
+
 export function RoutingSection() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const isAdmin = user?.role === "admin";
+  const canRoute = !!user?.role && ROUTING_MANAGER_ROLES.has(user.role);
 
   const { data: companies = [], isLoading, isError } = useQuery<EmailDerivedCompany[]>({
-    queryKey: ["/api/companies", { includeEmailDerived: true }],
+    queryKey: ["/api/companies", { includeEmailDerived: true, includeUnroutedEmailDerived: true }],
     queryFn: async () => {
-      const r = await fetch("/api/companies?includeEmailDerived=true", { credentials: "include" });
+      const r = await fetch(
+        "/api/companies?includeEmailDerived=true&includeUnroutedEmailDerived=true",
+        { credentials: "include" },
+      );
       if (!r.ok) throw new Error(`${r.status}`);
       return r.json();
     },
-    enabled: isAdmin,
+    enabled: canRoute,
     refetchInterval: 60_000,
   });
 
-  const { data: allUsers = [] } = useQuery<UserRow[]>({ queryKey: ["/api/users"], enabled: isAdmin });
+  const { data: allUsers = [] } = useQuery<UserRow[]>({ queryKey: ["/api/users"], enabled: canRoute });
 
   // Canonical "no owner" check mirrors getCanonicalCompanyOwnerId() in
   // server/lib/companyOwner.ts: ownerRepId ?? assignedTo ?? salesPersonId.
@@ -174,13 +183,13 @@ export function RoutingSection() {
         )}
       </div>
 
-      {!isAdmin && (
-        <div className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm text-amber-900 dark:text-amber-200 flex items-start gap-2" data-testid="banner-routing-admin-only">
+      {!canRoute && (
+        <div className="rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-4 text-sm text-amber-900 dark:text-amber-200 flex items-start gap-2" data-testid="banner-routing-readonly">
           <ShieldAlert className="h-4 w-4 mt-0.5 shrink-0" />
           <span>
-            The routing queue is admin-only in this release. Unowned accounts auto-created from
-            email are invisible to other roles by the account-visibility rules; expanding access
-            for managers is a planned follow-up.
+            The routing queue is reserved for admins, directors, NAMs, and sales directors —
+            the roles allowed to set account ownership. Ask a manager to claim or assign an
+            unrouted account to you.
           </span>
         </div>
       )}

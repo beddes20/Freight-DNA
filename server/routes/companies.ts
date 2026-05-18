@@ -38,6 +38,23 @@ export function registerCompanyRoutes(app: Express): void {
       // auto-created unless the caller explicitly opts in.
       const includeEmailDerived = qStr(req.query.includeEmailDerived) === "true";
       const includeArchived = qStr(req.query.includeArchived) === "true";
+      // L1.1 Routing Visibility (2026-05-18) — strict opt-in. The flag
+      // widens `getVisibleCompanyIds` to also surface unowned, email-
+      // derived companies for manager-like roles (director, NAM,
+      // sales_director). Silent-drop pattern: non-manager callers passing
+      // the flag get it stripped (and a single debug log), never a 403,
+      // so a shared client can keep passing it. Admins are unaffected
+      // (they already see everything). Contract:
+      // docs/launchpad-routing-visibility-contract.md
+      const requestedUnrouted = qStr(req.query.includeUnroutedEmailDerived) === "true";
+      const callerCanRoute = currentUser.role === "admin"
+        || currentUser.role === "director"
+        || currentUser.role === "national_account_manager"
+        || currentUser.role === "sales_director";
+      const includeUnroutedEmailDerived = callerCanRoute && requestedUnrouted;
+      if (requestedUnrouted && !callerCanRoute) {
+        console.log(`[routing-visibility] non-manager ${currentUser.id} role=${currentUser.role} sent includeUnroutedEmailDerived=true; ignoring`);
+      }
       // Customers Trust Cleanup Subtask B (2026-05-15) — STRICTLY OPT-IN.
       // The Bucket D thin-stub filter only applies when the caller passes
       // `?customersOnly=true` explicitly. We deliberately do NOT default
@@ -53,7 +70,7 @@ export function registerCompanyRoutes(app: Express): void {
         req.session.organizationId!,
         { includeEmailDerived, customersOnly },
       );
-      const visibleIds = await getVisibleCompanyIds(currentUser);
+      const visibleIds = await getVisibleCompanyIds(currentUser, { includeUnroutedEmailDerived });
       if (visibleIds !== null) {
         allCompanies = allCompanies.filter(c => visibleIds.includes(c.id));
       }
@@ -459,7 +476,11 @@ export function registerCompanyRoutes(app: Express): void {
       ) {
         return res.status(403).json({ error: "Only admins, directors and NAMs can change account owner" });
       }
-      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+      // L1.1 — owner-change must allow managers to claim/assign unowned,
+      // email-derived rows surfaced by the Routing inbox. The role-gate
+      // above already restricts WHO can call this; passing the routing
+      // flag here lets `canAccessCompany` see those specific rows.
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id), { includeUnroutedEmailDerived: true }))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const { ownerRepId } = req.body as { ownerRepId?: string | null };
@@ -672,7 +693,11 @@ export function registerCompanyRoutes(app: Express): void {
     try {
       const currentUser = await getCurrentUser(req);
       if (!currentUser) return res.status(401).json({ error: "Not authenticated" });
-      if (!(await canAccessCompany(currentUser, pStr(req.params.id)))) {
+      // L1.1 — managers archiving from the Routing inbox need the same
+      // visibility widening as PATCH /owner. Only managers gain the extra
+      // surface; sales/logistics roles still archive only accounts they
+      // already see by the legacy rules.
+      if (!(await canAccessCompany(currentUser, pStr(req.params.id), { includeUnroutedEmailDerived: true }))) {
         return res.status(403).json({ error: "Access denied" });
       }
       const updated = await storage.archiveCompany(pStr(req.params.id), currentUser.organizationId);

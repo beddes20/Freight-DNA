@@ -492,10 +492,54 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
 
 type UserMinimal = Pick<User, "id" | "role" | "managerId" | "organizationId">;
 
-export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] | null> {
+/**
+ * Optional flags that opt into a NARROWER widening of visibility for a
+ * specific surface. Each flag defaults to `false`, is role-gated, and only
+ * affects the function when explicitly passed by an opted-in route. The
+ * `getVisibleCompanyIds` function still returns the legacy result for every
+ * caller that omits the option (the ~60 existing call sites).
+ *
+ * Launchpad L1.1 — Routing Visibility (2026-05-18):
+ *   `includeUnroutedEmailDerived` lets the Launchpad "Needs Routing" inbox
+ *   show managers (and admins, which already see everything) the unowned,
+ *   `is_email_derived=true` rows that would otherwise be invisible to non-
+ *   admins. The flag is a no-op for `sales` / `logistics_manager` /
+ *   `logistics_coordinator` / `account_manager` roles — they still cannot
+ *   see unowned accounts via this code path. The contract lives at
+ *   `docs/launchpad-routing-visibility-contract.md`.
+ */
+export type CompanyVisibilityOptions = {
+  includeUnroutedEmailDerived?: boolean;
+};
+
+const ROUTING_VISIBILITY_ROLES = new Set([
+  "director",
+  "national_account_manager",
+  "sales_director",
+]);
+
+export async function getVisibleCompanyIds(
+  user: UserMinimal,
+  options: CompanyVisibilityOptions = {},
+): Promise<string[] | null> {
   if (user.role === "admin") return null;
 
   const allCompanies = await storage.getCompanies(user.organizationId);
+
+  // L1.1 — when the routing surface opts in AND the caller holds a manager
+  // seat, build the set of unowned email-derived company IDs in this org.
+  // Unioned into the role-specific result below so it strictly widens
+  // (never narrows) the legacy visible set.
+  const unroutedEmailDerivedIds: Set<string> =
+    options.includeUnroutedEmailDerived && user.role && ROUTING_VISIBILITY_ROLES.has(user.role)
+      ? new Set(
+          allCompanies
+            .filter(c => c.isEmailDerived === true)
+            .filter(c => getCanonicalCompanyOwnerId(c) === null)
+            .filter(c => !c.archivedAt)
+            .map(c => c.id),
+        )
+      : new Set<string>();
 
   // Account-level Collaborators (manual sharing) — these company IDs are
   // unioned into every role's visible set so a collaborator can drill into
@@ -524,7 +568,7 @@ export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] 
     return allCompanies
       .filter(c => {
         const oid = ownerOf(c);
-        return (oid && (teamIds.includes(oid) || oid === user.id)) || isSharedRep(c);
+        return (oid && (teamIds.includes(oid) || oid === user.id)) || isSharedRep(c) || unroutedEmailDerivedIds.has(c.id);
       })
       .map(c => c.id);
   }
@@ -541,7 +585,7 @@ export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] 
     return allCompanies
       .filter(c => {
         const oid = ownerOf(c);
-        return (oid && allIds.has(oid)) || isSharedRep(c);
+        return (oid && allIds.has(oid)) || isSharedRep(c) || unroutedEmailDerivedIds.has(c.id);
       })
       .map(c => c.id);
   }
@@ -550,6 +594,10 @@ export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] 
     if (!user.managerId) return [];
     const manager = await storage.getUser(user.managerId);
     if (!manager) return [];
+    // L1.1 — `includeUnroutedEmailDerived` does NOT cascade through the
+    // logistics_manager → manager resolution. Logistics coordinators are
+    // intentionally out of scope for the Routing inbox; widening here
+    // would expose unowned accounts in their LWQ/dashboards too.
     return getVisibleCompanyIds(manager);
   }
 
@@ -558,9 +606,13 @@ export async function getVisibleCompanyIds(user: UserMinimal): Promise<string[] 
     .map(c => c.id);
 }
 
-export async function canAccessCompany(user: UserMinimal, companyId: string): Promise<boolean> {
+export async function canAccessCompany(
+  user: UserMinimal,
+  companyId: string,
+  options: CompanyVisibilityOptions = {},
+): Promise<boolean> {
   if (user.role === "admin") return true;
-  const visibleIds = await getVisibleCompanyIds(user);
+  const visibleIds = await getVisibleCompanyIds(user, options);
   if (visibleIds === null) return true;
   return visibleIds.includes(companyId);
 }
