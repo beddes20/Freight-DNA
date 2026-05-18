@@ -7,6 +7,7 @@ import { isExcludedRow, parseHistoricalRow, toMonthKey } from "../financialHelpe
 import { cacheGet, cacheSet } from "../cache";
 import { getFreshnessForJobs, deriveFinancialUploadFreshness, formatAsOfUploadLabel, getFreshnessFromNbaCards } from "../lib/portletFreshness";
 import { JOB_NAMES } from "../lib/cronHeartbeat";
+import { isFixtureUser } from "../lib/fixtureUsers";
 import type { PortletFreshness } from "../../shared/schema";
 
 // Phase 1.5 S3: load-fact-backed portlets attach a composite freshness
@@ -785,8 +786,18 @@ export function registerDashboardRoutes(app: Express): void {
         ? users.filter(u => scopedUserIds!.has(u.id))
         : users;
 
+      // Task #1179 (FUC-P1-S1) — hide fixture / demo / quarantined /
+      // soft-deleted / inactive AMs from the Margin Metrics portlet so
+      // synthetic `WQTest*` / `wq.test.*@example.com` rows do not
+      // erode trust in the dashboard. Applied after role + scope
+      // filtering and before margin mapping. The helper composes the
+      // canonical pattern sources in `server/lib/fixtureMailboxes.ts`
+      // and `server/lib/userRosterClassification.ts` with the Task
+      // #1126 Phase 1 lifecycle flags. See
+      // `docs/fixture-user-cleanup-contract.md`.
       const buildMetrics = (roleFilter: string[]) => {
         return filterByScope(allUsers.filter(u => roleFilter.includes(u.role)))
+          .filter(u => !isFixtureUser(u))
           .map(u => {
             // Match by financialRepId or by name normalization
             let margin = 0;

@@ -114,7 +114,7 @@ const JUNK_PATTERNS: RegExp[] = [
   /^xxx@/,
 ];
 
-const JUNK_DOMAIN_SUFFIXES: string[] = [
+export const JUNK_DOMAIN_SUFFIXES: string[] = [
   "@example.com",
   "@example.org",
   "@example.net",
@@ -174,7 +174,7 @@ const SERVICE_PATTERNS: RegExp[] = [
 // Seed-script username patterns (user.name / username conventions used by
 // scripts/seed-*.ts). Conservative — anything ambiguous falls through to
 // "uncertain" rather than a confident demo classification.
-const SEED_NAME_PATTERNS: RegExp[] = [
+export const SEED_NAME_PATTERNS: RegExp[] = [
   /^seed[._-]/i,
   /^demo[._-]/i,
   /^fixture[._-]/i,

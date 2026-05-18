@@ -8448,3 +8448,200 @@ console.log("\n── Section 1200: Contacts soft-delete read-path enforcement (
     `the CQ-8 contract must spell out the canonical literal \`UNKNOWN_CUSTOMER_NAME = "${SENTINEL}"\` so renames are caught at review time`,
   );
 })();
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Section 1500 — Fixture User Cleanup (Task #1179 / FUC-P1-S1, 2026-05-18)
+//
+// Hides fixture / demo / quarantined / soft-deleted / inactive AMs from the
+// Dashboard "My Team — AM Margin Metrics" portlet. Composes the two existing
+// pattern sources (`fixtureMailboxes.ts` + `userRosterClassification.ts`) with
+// the Task #1126 Phase 1 lifecycle flags. Single production callsite, zero
+// writes, no schema changes. See docs/fixture-user-cleanup-contract.md.
+// ─────────────────────────────────────────────────────────────────────────────
+(function section1500_fixtureUserCleanup() {
+  console.log("\n── Section 1500: Fixture User Cleanup (FUC-P1-S1) ─────────────────\n");
+
+  const helperPath = path.join(ROOT, "server", "lib", "fixtureUsers.ts");
+  assert(
+    "Section 1500 — server/lib/fixtureUsers.ts exists",
+    fs.existsSync(helperPath),
+    "the helper file is the single source of truth for the cleanup predicate",
+  );
+  if (!fs.existsSync(helperPath)) return;
+  const helper = fs.readFileSync(helperPath, "utf8");
+
+  // ── 1. Composition — imports from BOTH canonical pattern sources. ──
+  assert(
+    "Section 1500 — fixtureUsers.ts imports from ./fixtureMailboxes",
+    /from\s+"\.\/fixtureMailboxes"/.test(helper),
+    "must reuse FIXTURE_MAILBOX_DOMAINS / isFixtureMailboxAddress — no duplicated literals",
+  );
+  assert(
+    "Section 1500 — fixtureUsers.ts imports from ./userRosterClassification",
+    /from\s+"\.\/userRosterClassification"/.test(helper),
+    "must reuse SEED_NAME_PATTERNS + JUNK_DOMAIN_SUFFIXES — no duplicated literals",
+  );
+  assert(
+    "Section 1500 — fixtureUsers.ts imports isFixtureMailboxAddress",
+    /\bisFixtureMailboxAddress\b/.test(helper),
+    "the canonical mailbox-domain predicate must be used directly",
+  );
+  assert(
+    "Section 1500 — fixtureUsers.ts imports SEED_NAME_PATTERNS",
+    /\bSEED_NAME_PATTERNS\b/.test(helper),
+    "the canonical seed-script username/name patterns must be used directly",
+  );
+  assert(
+    "Section 1500 — fixtureUsers.ts imports JUNK_DOMAIN_SUFFIXES",
+    /\bJUNK_DOMAIN_SUFFIXES\b/.test(helper),
+    "the canonical junk-domain suffix list must be used directly",
+  );
+
+  // ── 2. No duplicated pattern literals inside the helper. ──
+  //
+  // Body-only check: strip line comments + import lines, then assert no
+  // `@example.com`-style suffix appears inline (those literals must live in
+  // fixtureMailboxes.ts / userRosterClassification.ts).
+  const helperBody = helper
+    .split("\n")
+    .filter((l) => !/^\s*(import|\*|\/\/|\/\*)/.test(l))
+    .join("\n");
+  assert(
+    "Section 1500 — fixtureUsers.ts contains NO inline `@example.` / `.test`-family literals (must import patterns instead)",
+    !/@example\.(com|org|net)\b/.test(helperBody) && !/['"]@?(test\.com|invalid|localhost|example)\b/.test(helperBody),
+    "do NOT redefine domain suffix lists — extend the upstream source in fixtureMailboxes.ts or userRosterClassification.ts",
+  );
+
+  // ── 3. The predicate covers every lifecycle flag from Task #1126 P1. ──
+  assert(
+    "Section 1500 — isFixtureUser checks isFixture",
+    /isFixture\s*===\s*true/.test(helper),
+    "lifecycle flag isFixture must be honored",
+  );
+  assert(
+    "Section 1500 — isFixtureUser checks isDemo",
+    /isDemo\s*===\s*true/.test(helper),
+    "lifecycle flag isDemo must be honored",
+  );
+  assert(
+    "Section 1500 — isFixtureUser checks isQuarantined",
+    /isQuarantined\s*===\s*true/.test(helper),
+    "lifecycle flag isQuarantined must be honored",
+  );
+  assert(
+    "Section 1500 — isFixtureUser checks isServiceAccount",
+    /isServiceAccount\s*===\s*true/.test(helper),
+    "lifecycle flag isServiceAccount must be honored",
+  );
+  assert(
+    "Section 1500 — isFixtureUser checks isActive === false",
+    /isActive\s*===\s*false/.test(helper),
+    "deactivated users must be hidden from operational surfaces",
+  );
+  assert(
+    "Section 1500 — isFixtureUser checks deletedAt",
+    /\bdeletedAt\b/.test(helper),
+    "soft-deleted users must be hidden from operational surfaces",
+  );
+
+  // ── 4. The helper exports `isFixtureUser`. ──
+  assert(
+    "Section 1500 — fixtureUsers.ts exports isFixtureUser",
+    /export\s+function\s+isFixtureUser\b/.test(helper),
+    "the helper must export `isFixtureUser` as a named function",
+  );
+
+  // ── 5. Single production callsite — only dashboard.ts imports it today. ──
+  const serverRoot = path.join(ROOT, "server");
+  const callsites: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+        walk(full);
+        continue;
+      }
+      if (!/\.(ts|tsx|js|cjs|mjs)$/.test(entry.name)) continue;
+      if (full === helperPath) continue;
+      let body: string;
+      try { body = fs.readFileSync(full, "utf8"); } catch { continue; }
+      if (/from\s+["'][^"']*\/fixtureUsers["']/.test(body) || /from\s+["']\.\.?\/(?:lib\/)?fixtureUsers["']/.test(body)) {
+        callsites.push(path.relative(ROOT, full));
+      }
+    }
+  };
+  walk(serverRoot);
+  const expectedCallsite = path.join("server", "routes", "dashboard.ts");
+  assert(
+    "Section 1500 — server/routes/dashboard.ts imports isFixtureUser",
+    callsites.includes(expectedCallsite),
+    `dashboard.ts is the one wired callsite (found: ${callsites.join(", ") || "none"})`,
+  );
+  const stray = callsites.filter((c) => c !== expectedCallsite);
+  assert(
+    "Section 1500 — no other production file imports isFixtureUser (no-widening rule)",
+    stray.length === 0,
+    `unexpected callsite(s): ${stray.join(", ")} — adding a new operational surface requires updating Section 1500 + docs/fixture-user-cleanup-contract.md first`,
+  );
+
+  // ── 6. The dashboard callsite is wired in the margin-metrics handler and
+  //       runs BEFORE the margin-mapping `.map(u => …)`. ──
+  const dashboard = fs.readFileSync(path.join(ROOT, "server", "routes", "dashboard.ts"), "utf8");
+  assert(
+    "Section 1500 — dashboard.ts wires the filter via .filter(u => !isFixtureUser(u))",
+    /\.filter\(\s*u\s*=>\s*!\s*isFixtureUser\(u\)\s*\)/.test(dashboard),
+    "the predicate must be applied via a `.filter(u => !isFixtureUser(u))` call",
+  );
+  const buildMetricsMatch = dashboard.match(/const\s+buildMetrics\s*=\s*\([^)]*\)\s*=>\s*{[\s\S]*?\.map\(u\s*=>/);
+  assert(
+    "Section 1500 — buildMetrics filter sits BEFORE the .map(u => …) margin mapping",
+    !!buildMetricsMatch && /\.filter\(\s*u\s*=>\s*!\s*isFixtureUser\(u\)\s*\)/.test(buildMetricsMatch![0]),
+    "the fixture filter must run inside buildMetrics, after role + scope filtering and BEFORE the margin mapping step",
+  );
+
+  // ── 7. The no-arg `storage.getUsers(orgId)` overload is unchanged
+  //       (Users Roster Trust UR-2 + Section 1126.4-API invariant). ──
+  const storageBody = fs.readFileSync(path.join(ROOT, "server", "storage.ts"), "utf8");
+  assert(
+    "Section 1500 — storage.getUsers(orgId) no-arg overload is still declared",
+    /getUsers\s*\(\s*(?:orgId|organizationId):\s*string\s*(?:,\s*filter\?\s*:\s*UserListFilter\s*)?\)\s*:/.test(storageBody),
+    "the legacy `getUsers(orgId)` overload must continue to exist — fixture cleanup must not alter the storage chokepoint signature",
+  );
+
+  // ── 8. Zero writes from the helper. ──
+  assert(
+    "Section 1500 — fixtureUsers.ts performs zero DB writes",
+    !/db\.(insert|update|delete)\s*\(/.test(helper),
+    "the helper must be pure — no db.insert / db.update / db.delete anywhere",
+  );
+
+  // ── 9. Contract document exists and pins the canonical predicate name. ──
+  const contractPath = path.join(ROOT, "docs", "fixture-user-cleanup-contract.md");
+  assert(
+    "Section 1500 — docs/fixture-user-cleanup-contract.md exists",
+    fs.existsSync(contractPath),
+    "the contract document must exist alongside the helper",
+  );
+  if (fs.existsSync(contractPath)) {
+    const contract = fs.readFileSync(contractPath, "utf8");
+    assert(
+      "Section 1500 — contract names the canonical predicate `isFixtureUser`",
+      /isFixtureUser/.test(contract),
+      "docs/fixture-user-cleanup-contract.md must reference the canonical helper name",
+    );
+    assert(
+      "Section 1500 — contract names the only production callsite",
+      /server\/routes\/dashboard\.ts/.test(contract) && /margin-metrics/i.test(contract),
+      "the contract must call out dashboard.ts + the margin-metrics surface so future callers know to update both files together",
+    );
+  }
+
+  // ── 10. replit.md gotcha entry pins Task #1179. ──
+  const replitMd = fs.readFileSync(path.join(ROOT, "replit.md"), "utf8");
+  assert(
+    "Section 1500 — replit.md Gotchas pins Task #1179 (Fixture User Cleanup)",
+    /Fixture User Cleanup.*1179/i.test(replitMd) || /Task\s*#?1179/.test(replitMd),
+    "replit.md must carry a gotcha entry referencing Task #1179 / FUC-P1-S1 so future agents see the no-widening rule",
+  );
+})();
