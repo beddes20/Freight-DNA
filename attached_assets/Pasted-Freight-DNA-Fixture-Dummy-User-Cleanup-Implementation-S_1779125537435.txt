@@ -1,0 +1,109 @@
+Freight-DNA — Fixture / Dummy User Cleanup
+Implementation Subtask: FUC-P1-S1 — Hide fixture/junk AMs from AM Margin Metrics
+IMPLEMENT ONLY THIS SUBTASK
+
+Context:
+Planning analysis is complete and approved.
+
+Confirmed root cause:
+- The AM Margin Metrics portlet is fed by GET /api/dashboard/margin-metrics.
+- That route enumerates all account_manager users in the org and does NOT consult
+  the existing fixture/junk-user rules.
+- As a result, fixture/junk AM-role users like WQTest* are rendered even when they
+  only map to $0 margin.
+- financial upload facts are loosely coupled by rep-name string and are NOT the
+  primary leak source for this issue.
+
+Approved implementation direction:
+- Add a tiny shared backend helper that composes the EXISTING sources of truth for
+  fixture/junk users.
+- Apply it ONLY to the AM list in GET /api/dashboard/margin-metrics.
+- Do NOT widen to other routes yet.
+
+Goals:
+1) Remove fixture/junk/dummy users from the AM Margin Metrics portlet.
+2) Keep blast radius minimal and reversible.
+3) Preserve all existing contracts outside this one route.
+
+Scope allowed:
+- server/lib/fixtureUsers.ts (new helper)
+- server/routes/dashboard.ts
+- targeted tests / code-quality guardrails
+- replit.md gotcha update if required by repo discipline
+
+Do NOT:
+- modify schema
+- write or mutate data
+- add migrations
+- soft-delete or hard-delete users
+- touch Customer Quotes contracts
+- widen changes to /api/users, /api/users/sales, /api/users/search, goals,
+  leaderboards, AM comparison, Top Opps, NBA, server/auth.ts, or other surfaces
+- invent new fixture detection patterns if existing canonical ones already exist
+
+Implementation requirements:
+
+1) Create a small shared helper in server/lib/fixtureUsers.ts
+- Export a clear exclusion helper, preferably:
+  - isFixtureUser(user)
+  OR
+  - shouldExcludeFromOperationalUserSurfaces(user)
+- The helper must COMPOSE existing logic only:
+  - fixture mailbox-like patterns from server/lib/fixtureMailboxes.ts
+  - seed-name patterns / audit classifier from server/lib/userRosterClassification.ts
+  - lifecycle flags already on users (is_fixture, is_demo, is_quarantined,
+    is_service_account, is_active / deleted_at as appropriate)
+- Re-use / re-export existing pattern sources where sensible.
+- Do NOT duplicate pattern literals into the new file if they already exist elsewhere.
+
+2) Wire the helper into GET /api/dashboard/margin-metrics only
+- Filter the AM-role user list after role selection and before margin mapping.
+- Preserve existing margin mapping logic except for excluding fixture/junk AMs.
+- Do NOT change frontend code unless absolutely required (prefer no frontend diff).
+
+3) Guardrails / tests
+Add focused coverage that proves:
+- the new helper exists and composes existing sources of truth
+- GET /api/dashboard/margin-metrics uses the helper
+- no accidental widening occurred to the legacy no-arg storage.getUsers(orgId) path
+- representative positives are excluded:
+  - WQTest 73cb0c
+  - wq.test.*@example.com
+  - coe.test.*@example.com
+  - lifecycle-flagged fixture/demo/quarantined/service-account users
+- representative real users are NOT excluded
+
+4) Validation
+- Run typecheck
+- Run guardrails/tests
+- Start app if required
+- Confirm the AM Margin Metrics portlet no longer returns/render fixture/junk AMs
+- Confirm real AMs and their margin numbers remain intact
+
+Required output:
+
+A. Root-cause confirmation
+- one short paragraph confirming the route/path you changed and why
+
+B. Files changed
+- every file changed and why
+
+C. Behavior change
+- exactly what is filtered now
+- confirm scope is limited to AM Margin Metrics only
+
+D. Validation
+- commands/workflows run and PASS/FAIL
+
+E. Rollback note
+- how to revert cleanly
+
+F. Contract declaration
+- end with:
+  Fixture user cleanup contracts touched: [list]
+  Customer Quotes contracts touched: NONE
+
+Stop rule:
+- Stop after FUC-P1-S1 only.
+- Do not implement follow-on cleanup for leaderboard, AM comparison, /api/users/sales,
+  or lifecycle flagging.

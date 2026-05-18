@@ -1,0 +1,110 @@
+Freight-DNA — Fixture / Dummy User Trust Hardening
+IMPLEMENT ONLY PHASE 1 (AM Margin Metrics leak fix) + identify canonical next step
+
+Context:
+I am still seeing weird / dummy users in the Dashboard AM Margin Metrics portlet.
+Examples visible in production/UI include names like:
+- WQTest 73cb0c
+- WQTest 5d04ff
+- WQTest ea44b
+- WQTest d57429
+and similar variants.
+
+This is a trust issue. Reps should not see fixture/test/demo/quarantined/deactivated users
+in rep-facing dashboard metrics.
+
+Important context from prior platform work:
+- The codebase/logs already reference user lifecycle / hygiene fields on public.users such as:
+  isactive, isserviceaccount, isdemo, isfixture, isquarantined,
+  deletedat, deactivatedat, usersource, etc.
+- Prior audit logs also mentioned fixture contamination findings across email-bearing tables.
+This suggests we should prefer a canonical read-path filter, not ad hoc UI-only hiding.
+
+Goal for THIS task:
+1) Find the exact read path feeding the AM Margin Metrics portlet.
+2) Fix the leak so fixture/test/demo/quarantined/deactivated users no longer appear there.
+3) Keep blast radius low and reversible.
+4) Recommend the best next cleanup task for platform-wide trust hardening.
+Do NOT do a platform-wide deletion pass in this task.
+
+Scope:
+- Dashboard AM Margin Metrics only for implementation.
+- You MAY touch shared backend/user filtering helper logic IF that is the smallest correct fix.
+- Prefer backend/read-path filtering over frontend-only hiding if the source is clearly there.
+- If there is already a canonical “real active users only” helper, reuse it instead of inventing a new rule.
+
+Do NOT:
+- hard delete users
+- run data migrations
+- modify uploads/fact history
+- change schema
+- widen into every dashboard widget
+- redesign the portlet UI
+- touch unrelated contracts
+
+Required implementation steps:
+
+1) Root-cause trace
+- Identify the exact endpoint, service, and query that powers AM Margin Metrics.
+- Determine whether the weird rows come from:
+  a) users table rows,
+  b) joined fact/upload rows,
+  c) both,
+  d) or fallback display-name logic.
+- State the answer explicitly in your output.
+
+2) Implement the smallest correct trust fix
+- Ensure fixture/test/demo/quarantined/deactivated/service-account style users are excluded
+  from AM Margin Metrics.
+- Reuse an existing canonical filter/helper if present.
+- If none exists in the relevant path, add the smallest shared helper that expresses the rule clearly.
+- Prefer explicit business logic over fragile string matching, but if legacy fixture rows require
+  a defensive pattern filter (e.g. WQTest*), keep it narrowly scoped and well-commented.
+
+3) Safety requirements
+- No destructive deletes.
+- No schema changes.
+- No writer/job changes.
+- No changes to Customer Quotes contracts.
+- No changes to unrelated roster/admin flows unless required by the shared helper.
+
+4) Verification
+- Run typecheck.
+- Run guardrails/tests.
+- Start app if needed.
+- Verify AM Margin Metrics no longer shows fixture/test users.
+- Verify normal real AM users still appear.
+- Confirm no unintended impact to NAM Margin Metrics or unrelated dashboard widgets unless
+  the shared helper intentionally affects them too.
+
+Required output format:
+
+A. Root cause
+- exact endpoint/service/query path
+- why the WQTest-style users were appearing
+
+B. Files changed
+- every file changed and why
+
+C. Behavior change
+- exactly what is now filtered
+- whether the change is AM-only or shared-helper based
+
+D. Validation
+- commands/workflows run and PASS/FAIL
+
+E. Follow-on recommendation
+- name ONE next task only:
+  either
+  1) platform-wide fixture-user read-path audit, or
+  2) safe archival/deactivation plan, or
+  3) fact-data contamination cleanup
+- explain why that is the best next step
+
+F. Rollback note
+- how to revert cleanly
+
+Stop rule:
+- Stop after this AM Margin Metrics trust fix.
+- Do not start broader cleanup without approval.
+- End with: “Fixture user cleanup contracts touched: …”

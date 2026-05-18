@@ -1,0 +1,150 @@
+Freight-DNA — Fixture / Dummy User Cleanup Program (Phase 1)
+PLANNING-FIRST — READ-ONLY ANALYSIS ONLY
+
+Context:
+I am still seeing weird/dummy users in the AM Margin Metrics portlet on the
+Dashboard (examples like WQTest 73cb0c, WQTest 5d04ff, etc.).
+
+This is a trust problem:
+- Reps should not see fake users in operational or performance surfaces.
+- I want to clean this up the right way, once and for all.
+- But I do NOT want a risky hard-delete pass that breaks historical data,
+  ownership references, tasks, goals, conversations, margin facts, or uploads.
+
+This task is planning-only and read-only.
+Do NOT modify production code, schema, writers, or data in this task.
+
+Goal:
+Map where fixture/test/dummy users still exist in Freight-DNA, how they leak
+into rep-facing surfaces (starting with AM Margin Metrics), and propose the
+safest first implementation step to hide them consistently without damaging
+historical records.
+
+Scope:
+- Dashboard, especially AM Margin Metrics.
+- Any canonical user listing / filtering helpers already created under the
+  Users Roster Trust work.
+- Relevant read paths involving:
+  - users
+  - dashboard margin metrics
+  - goals / leaderboard / AM comparison
+  - tasks / ownership lists
+  - conversations / monitored mailboxes if tied to fake users
+- Existing fixture/test-user patterns already documented in the codebase
+  (e.g. WQTest*, coe.test.*, example.com, etc.).
+
+Out of scope for this task:
+- No deletions.
+- No updates to user rows.
+- No schema changes.
+- No scheduler/job changes.
+- No backend behavior changes yet.
+
+Required output sections:
+
+Section 1 — Confirm the dashboard leak
+- Identify exactly which endpoint and query path feeds the AM Margin Metrics
+  portlet.
+- Show how those weird users are currently entering the result:
+  - direct users table join?
+  - margin facts joined to users?
+  - goals assignment table?
+  - uploaded fact rows with fake rep names?
+- Explain whether the leak is:
+  - from fixture users still present in users,
+  - from uploaded metrics rows keyed by fake rep name,
+  - from both,
+  - or from another source.
+
+Section 2 — Existing fixture/test-user rules
+- Find any existing canonical fixture/junk-user filtering logic in the codebase.
+- Summarize:
+  - where it exists,
+  - what patterns it uses,
+  - which surfaces already honor it,
+  - which surfaces do not.
+- Specifically compare:
+  - Users Roster Trust filters
+  - any audit scripts
+  - any dashboard or reporting filters
+
+Section 3 — Leak map across the platform
+Produce a read-only map of where fixture/dummy users can still appear:
+- Dashboard AM Margin Metrics
+- Dashboard leaderboard / team metrics / AM comparison
+- User Management
+- Goals
+- Tasks / assignee pickers
+- Conversations / monitored mailboxes
+- Any other rep-facing surfaces where user lists are rendered
+
+For each surface:
+- state whether fixture users are already filtered,
+- likely filtered but unpinned,
+- leaking today,
+- or unknown / needs more investigation.
+
+Section 4 — Data model / deletion risk
+Explain why a one-shot hard delete is risky or not risky.
+Specifically inspect whether users can be referenced by:
+- tasks
+- goals
+- goal assignments / ownership
+- companies.ownerRepId / assignedTo / salesPersonId
+- conversations ownerUserId
+- monitored_mailboxes.userId
+- one-on-one sessions
+- margin metrics / uploads / fact tables
+- any audit/history/event tables
+
+Classify each dependency as:
+- read-only historical dependency,
+- active operational dependency,
+- safe to null/repoint later,
+- unknown.
+
+Section 5 — Recommended cleanup strategy
+Propose the safest phased cleanup plan, ideally in this order:
+1) read-only audit and leak inventory,
+2) canonical read-path exclude helper for fixture/test users,
+3) rep-facing surface cleanup starting with Dashboard AM Margin Metrics,
+4) optional later archival/soft-deactivation plan,
+5) only then consider whether any hard deletes are safe.
+
+Be explicit about whether the best first implementation step should be:
+- a dashboard-only hotfix for AM Margin Metrics,
+- or a shared canonical helper used by multiple surfaces.
+
+Section 6 — Best first implementation task
+Recommend ONE best first implementation step that is:
+- low-blast-radius,
+- reversible,
+- highest trust gain,
+- and likely to remove the weird users from AM Margin Metrics quickly.
+
+For that recommendation, name:
+- exact files likely touched,
+- whether it is frontend-only, backend read-path, or shared helper work,
+- what tests/guardrails should be added.
+
+Section 7 — Stop rule
+Explicitly state:
+- no production code or data changed in this planning task,
+- you will wait for approval before implementing the first cleanup step,
+- and that future subtasks will be one-at-a-time with:
+  - diff summary,
+  - tests run,
+  - behavior changes,
+  - rollback note,
+  - and “Fixture user cleanup contracts touched: …” declaration.
+
+Constraints:
+- Planning-only.
+- Read-only analysis.
+- No deletes, no data writes, no schema changes.
+- Keep it concrete: use actual file names, route names, helper names, and
+  table names from the codebase.
+
+Expected output:
+- A single response with Sections 1–7 filled out.
+- Then STOP and wait for my approval before implementing anything.
