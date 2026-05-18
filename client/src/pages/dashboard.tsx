@@ -132,6 +132,10 @@ export default function Dashboard() {
   const [growthCallsCollapsed, setGrowthCallsCollapsed] = useState(() => localStorage.getItem("dash_growth_calls_collapsed") === "true");
   // P1-S3: Insights accordion wrapper — collapsed by default for ALL roles (lighter above-the-fold for ICs; manager/admin can opt-in).
   const [insightsCollapsed, setInsightsCollapsed] = useState(() => localStorage.getItem("dash_insights_collapsed") !== "false");
+  // P1-S4: Suppress non-decision widgets from the default dashboard render path. Underlying components, props, data sources, and destination pages (/one-on-one, internal comms surface, team feed surface via sidebar) are unchanged — only the dashboard mount is hidden. Flip any flag to true for a one-line revert.
+  const P1_S4_SHOW_ONE_ON_ONE = false; // 1:1 Sessions (#28)
+  const P1_S4_SHOW_INTERNAL_COMMS = false; // Leadership Callouts / Internal Comms (#29)
+  const P1_S4_SHOW_TEAM_FEED = false; // Team Feed (#30)
   const [weeklyCommitmentsCollapsed, setWeeklyCommitmentsCollapsed] = useState(() => localStorage.getItem("dash_weekly_commitments_collapsed") === "true");
   const [teamCommitmentsCollapsed, setTeamCommitmentsCollapsed] = useState(() => localStorage.getItem("dash_team_commitments_collapsed") === "true");
   const [commitPayload, setCommitPayload] = useState<CommitPayload | null>(null);
@@ -2089,6 +2093,8 @@ export default function Dashboard() {
         </Card>
       )}
 
+      {/* P1-S4: 1:1 Sessions (#28) suppressed from default dashboard render path. Destination tab `/one-on-one` is reachable via the sidebar "1:1's" link; underlying OneOnOnePortlet and its data sources are untouched. Flip P1_S4_SHOW_ONE_ON_ONE=true to restore. */}
+      {P1_S4_SHOW_ONE_ON_ONE && (
       <div style={{ order: getOrder("one-on-one") }} className={!isVisible("one-on-one") ? "hidden" : ""}>
       <PortletErrorBoundary label="1:1 Sessions">
       <div className="relative">
@@ -2102,11 +2108,15 @@ export default function Dashboard() {
         <OneOnOnePortlet />
       </div>
       </PortletErrorBoundary>
-      </div>{/* end one-on-one */}
+      </div>
+      )}{/* end one-on-one */}
 
+      {/* P1-S4: Leadership Callouts / Internal Comms (#29) suppressed from default dashboard render path. InternalCommsPortlet and its destination surface are untouched; manager/admin gating lives inside the portlet itself. Flip P1_S4_SHOW_INTERNAL_COMMS=true to restore. */}
+      {P1_S4_SHOW_INTERNAL_COMMS && (
       <div style={{ order: getOrder("feed") }} className={!isVisible("feed") ? "hidden" : ""}>
       <InternalCommsPortlet />
-      </div>{/* end feed (comms) */}
+      </div>
+      )}{/* end feed (comms) */}
 
       {/* P1-S2: gate tightened from canSeeTeam to isDashboardManagerLike — hides Monthly Goals Alert (#32) from IC `sales` role. */}
       {isDashboardManagerLike && missingMonthlyGoals.length > 0 && (
@@ -2146,6 +2156,8 @@ export default function Dashboard() {
         </Card>
       )}
 
+      {/* P1-S4: Team Feed (#30) suppressed from default dashboard render path. Card content (post composer, mentions, search, filters, replies, attachments) and the underlying feedPosts data are untouched. Flip P1_S4_SHOW_TEAM_FEED=true to restore. */}
+      {P1_S4_SHOW_TEAM_FEED && (
       <div style={{ order: getOrder("feed") }} className={!isVisible("feed") ? "hidden" : ""}>
       <Card data-testid="card-feed">
         <CardHeader className="pb-3">
@@ -2515,7 +2527,8 @@ export default function Dashboard() {
         </CardContent>
         )}
       </Card>
-      </div>{/* end feed */}
+      </div>
+      )}{/* end feed */}
 
       <TeamDirectorySection
         isVisible={isVisible}

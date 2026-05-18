@@ -1,0 +1,92 @@
+Freight-DNA — Dashboard Cleanup (Phase 1)
+Implementation Subtask: P1-S4 — Move non-decision widgets off the dashboard
+IMPLEMENT ONLY THIS SUBTASK
+
+Context:
+Phase 1 so far:
+- P1-S1: My Work consolidator card is live.
+- P1-S2: Manager/admin role gates tightened.
+- P1-S3: Lower-priority analytical widgets moved into a collapsed Insights accordion.
+
+The dashboard is much cleaner now, but a few remaining homepage blocks still do not
+belong in a first-login decision surface. The planning report identified these as:
+- Team Feed (#30)
+- Leadership Callouts / Internal Comms (#29)
+- 1:1 Sessions (#28)
+
+Goal:
+Remove these non-decision widgets from the default dashboard experience and replace
+them with lightweight navigation affordances where appropriate, without changing
+their underlying data, routes, or product functionality.
+
+Rules:
+- Frontend-only.
+- No endpoint changes.
+- No schema, jobs, or writer changes.
+- No metric logic changes.
+- No broad navigation redesign.
+- Keep blast radius low and reversible.
+
+Approved scope:
+1) Team Feed
+2) Leadership Callouts / Internal Comms
+3) 1:1 Sessions
+
+Required implementation:
+
+1) Team Feed
+- Remove the Team Feed card/block from the dashboard render path.
+- Replace it with either:
+  - nothing, if there is already a clear nav path to the feed elsewhere, or
+  - a small text/link affordance such as “View team feed →” if needed.
+- Do NOT redesign the Team Feed product surface itself in this task.
+
+2) Leadership Callouts / Internal Comms
+- Remove this card/block from the dashboard render path.
+- Preserve existing manager/admin gating wherever the destination surface lives.
+- Replace with either:
+  - nothing, if the existing destination is obvious, or
+  - a compact manager-only link affordance (e.g. “View leadership comms →”).
+
+3) 1:1 Sessions
+- Remove the full 1:1 Sessions card from the dashboard render path.
+- If easy and low-risk, replace it with a minimal line-level reminder only,
+  such as:
+  - “Next 1:1: Thu 2:00 PM →”
+  linked to the existing /one-on-one surface.
+- If even that small reminder adds complexity or ambiguity, remove the dashboard
+  block entirely and leave 1:1 as a destination tab only.
+
+4) Constraints
+- Do NOT move or redesign other widgets.
+- Do NOT touch My Work, Insights, KPI strip, Today’s Five, or role gates.
+- Do NOT create new backend endpoints.
+- Do NOT change any existing destination page behavior.
+
+5) Verification
+- Run typecheck.
+- Run guardrails/tests.
+- Verify the dashboard still renders cleanly for:
+  - an IC-like role,
+  - a manager-like role.
+- Confirm the removed widgets are no longer part of the main scroll path.
+
+Required output after implementation:
+
+A. Diff summary
+- List every file changed and why.
+
+B. Behavior changes
+- Exactly what users no longer see on the dashboard.
+- Any replacement links or lightweight reminders added.
+
+C. Tests run
+- Commands + pass/fail.
+
+D. Rollback note
+- How to cleanly revert this subtask.
+
+E. Stop rule
+- Stop after P1-S4 only.
+- Do NOT start P1-S5 (retiring legacy Priority Actions).
+- Do NOT redesign destination tabs in this task.
