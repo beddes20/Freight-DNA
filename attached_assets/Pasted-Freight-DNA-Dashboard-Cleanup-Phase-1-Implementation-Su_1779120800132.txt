@@ -1,0 +1,82 @@
+Freight-DNA — Dashboard Cleanup (Phase 1)
+Implementation Subtask: P1-S2 — Tighten dashboard role gates
+IMPLEMENT ONLY THIS SUBTASK
+
+Context:
+P1-S1 is complete:
+- My Work card is live above the fold.
+- The four overlapping “what should I do now?” widgets were consolidated.
+- Typecheck + guardrails passed.
+
+Now do the second approved cleanup slice:
+- tighten dashboard role gates so IC users stop seeing manager/admin-oriented
+  clutter that does not belong on their default homepage.
+
+Goal:
+Reduce dashboard clutter by hiding manager/admin-only widgets from IC roles,
+without changing endpoints, business logic, or data computations.
+
+Approved targets from the planning pass:
+- Leaderboard (#27) should be manager/admin only.
+- Monthly Goals Alert (#32) should be manager/admin only.
+- Review any adjacent dashboard conditionals in dashboard.tsx and only tighten
+  the specific ones already identified in the plan. Do NOT widen scope.
+
+Rules:
+- Frontend-only.
+- No endpoint changes.
+- No schema, jobs, or writer changes.
+- No metric logic changes.
+- No visual redesign work in this task.
+- Keep blast radius low and reversible.
+
+Required implementation:
+1) In client/src/pages/dashboard.tsx, define or reuse a tighter manager-like
+   predicate for dashboard-only visibility:
+   - admin
+   - director
+   - sales_director
+   - national_account_manager
+   Exclude broad sales / IC roles that currently inherit visibility via
+   canSeeTeam.
+
+2) Update the conditional rendering so:
+   - Leaderboard is hidden from IC users and only shown to manager-like roles.
+   - Monthly Goals Alert is hidden from IC users and only shown to
+     manager-like roles.
+
+3) Keep all other widgets unchanged unless they are already using the exact same
+   incorrect predicate and are explicitly called out in the approved plan.
+   If anything looks ambiguous, stop and report rather than widening scope.
+
+4) Add/update minimal tests if needed:
+   - only enough to pin the tightened visibility behavior.
+   - prefer existing dashboard test patterns if they exist.
+   - do not create broad new dashboard test infrastructure in this subtask.
+
+5) Verification:
+   - run typecheck
+   - run relevant guardrails/tests
+   - verify the dashboard still renders for at least:
+     - an IC-like role
+     - a manager-like role
+   If role simulation is hard, use the most practical existing local method and
+   report exactly what was verified.
+
+Required output after implementation:
+A. Diff summary
+- list every file changed and why
+
+B. Behavior changes
+- exactly which roles will no longer see which widgets
+
+C. Tests run
+- commands + pass/fail
+
+D. Rollback note
+- how to revert this subtask cleanly
+
+E. Stop rule
+- stop after P1-S2 only
+- do not start P1-S3, P1-S4, or P1-S5
+- do not redesign or move any other widgets in this task

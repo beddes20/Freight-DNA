@@ -184,6 +184,9 @@ export default function Dashboard() {
   });
 
   const canSeeTeam = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "national_account_manager" || currentUser?.role === "sales" || currentUser?.role === "sales_director";
+  // P1-S2: Tighter manager-like predicate for dashboard-only visibility (Leaderboard #27, Monthly Goals Alert #32).
+  // Excludes broad `sales` (IC) role that inherits via canSeeTeam. Do NOT widen this predicate without an approved plan slice.
+  const isDashboardManagerLike = currentUser?.role === "admin" || currentUser?.role === "director" || currentUser?.role === "sales_director" || currentUser?.role === "national_account_manager";
 
   // Replaced by /api/dashboard/summary below — aliased for backward-compat
 
@@ -2072,7 +2075,8 @@ export default function Dashboard() {
       <InternalCommsPortlet />
       </div>{/* end feed (comms) */}
 
-      {canSeeTeam && missingMonthlyGoals.length > 0 && (
+      {/* P1-S2: gate tightened from canSeeTeam to isDashboardManagerLike — hides Monthly Goals Alert (#32) from IC `sales` role. */}
+      {isDashboardManagerLike && missingMonthlyGoals.length > 0 && (
         <Card className="border-l-4 border-l-amber-500 dark:border-l-amber-500 bg-amber-50/30 dark:bg-amber-950/20" data-testid="card-goal-alert">
           <CardHeader className={goalsAlertCollapsed ? "pb-2" : "pb-3"}>
             <button onClick={() => togglePortlet("dash_goals_alert_collapsed", !goalsAlertCollapsed, setGoalsAlertCollapsed)} className="flex items-center gap-2 w-full text-left hover:opacity-80 transition-opacity" data-testid="button-toggle-goals-alert">
@@ -2501,7 +2505,8 @@ export default function Dashboard() {
       </div>{/* end relationship */}
 
       <div style={{ order: getOrder("goals-leaderboard") }} className={!isVisible("goals-leaderboard") ? "hidden" : ""}>
-      {canSeeTeam && (leaderboardLoading || leaderboard.length > 0) && (
+      {/* P1-S2: gate tightened from canSeeTeam to isDashboardManagerLike — hides Goal Progress Leaderboard (#27) from IC `sales` role. */}
+      {isDashboardManagerLike && (leaderboardLoading || leaderboard.length > 0) && (
         <Card data-testid="card-leaderboard">
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
