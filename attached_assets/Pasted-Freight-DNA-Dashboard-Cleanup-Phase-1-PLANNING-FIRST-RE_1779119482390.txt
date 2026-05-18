@@ -1,0 +1,159 @@
+Freight-DNA — Dashboard Cleanup (Phase 1)
+PLANNING-FIRST — READ-ONLY ANALYSIS ONLY
+
+Context:
+Freight-DNA’s dashboard has accumulated too many widgets and feels cluttered.
+We’ve already done a lot of trust work (sync alerts, freshness labels on key
+portlets, CQ/Customers/Conversations trust programs). Now I want the dashboard
+to become:
+- a command center, not a report center,
+- with only essential information above the fold,
+- and everything else pushed behind drilldowns or role-based sections.
+
+This is a planning task:
+- No production code changes yet.
+- No schema, schedulers, or writers changes.
+- The output should be a plan + classification of what stays, what moves, and
+  what becomes collapsible or role-gated.
+
+High-level goal:
+Design a simpler, higher-signal dashboard layout that:
+- answers 3 questions at a glance:
+  1) Is anything broken or stale?
+  2) What needs my attention now?
+  3) Where should I click next?
+- keeps 5–7 core elements above the fold,
+- hides everything else behind “View details” or collapsible sections.
+
+Scope:
+- The Dashboard tab only (home page).
+- All current dashboard modules/portlets:
+  - sync / data health indicators
+  - Award Health + Coverage Gaps
+  - Trending / Margin
+  - NBA / Relationship / Pipeline health
+  - Any “my work” queues shown on the dashboard (tasks, quotes, etc.)
+  - Any team/manager summary cards
+- Roles:
+  - IC reps
+  - managers
+  - admins
+
+Out of scope:
+- Changing how data is computed (no changes to jobs or facts).
+- Adding new metrics.
+- Changing side tabs or navigation (just the dashboard tab contents/layout).
+
+Deliverable:
+A written plan that classifies every existing dashboard widget into:
+- KEEP ABOVE FOLD (always visible on load)
+- KEEP BUT COLLAPSE (visible only when user opens a section)
+- MOVE TO OWN TAB (remove from Dashboard; use “View details” links instead)
+- ROLE-GATE (show only for managers/admins)
+
+Required sections in your output (no code changes yet):
+
+Section 1 — Inventory of existing dashboard widgets
+- Name each current dashboard portlet/module.
+- For each:
+  - describe what it shows (metric, chart, table, queue, etc.),
+  - identify which backend endpoint(s) power it,
+  - note which roles currently see it.
+
+Section 2 — Importance and actionability scoring
+For each widget from Section 1, assign:
+- Importance: HIGH / MEDIUM / LOW
+  - HIGH = affects daily decisions for most reps or indicates data health.
+  - MEDIUM = useful for managers / weekly coaching but not daily IC work.
+  - LOW = nice-to-have trend or visual, no direct decision impact.
+- Actionability: DIRECT / INDIRECT / NONE
+  - DIRECT = suggests a specific click / queue (“go work these X items”).
+  - INDIRECT = informs judgment but no obvious next click.
+  - NONE = informational only.
+
+Summarize:
+- which widgets are BOTH HIGH importance and DIRECT action,
+- which ones are LOW importance or NONE action.
+
+Section 3 — Role-based needs
+Describe for each role:
+- IC (front-line rep): what they truly need to see on the dashboard on every
+  login (likely: health, “my work”, maybe 2–3 KPIs).
+- Manager: what extra they need (team snapshot, team alerts).
+- Admin: what extras they need (system health, data quality flags).
+
+Explicitly call out any widgets that:
+- only matter to managers,
+- only matter to admins,
+- are currently shown to everyone but shouldn’t be.
+
+Section 4 — Proposed target layout (wireframe-level)
+Define a target layout with at most 5–7 elements above the fold for an IC rep:
+
+Example structure (adapt to what we actually have):
+1) Health strip (top):
+   - sync / data-freshness alert
+   - 1–2 key freshness lines for critical portlets
+2) My priorities (left/center):
+   - my urgent tasks / follow-ups / waiting-on-me items
+3) My pipeline snapshot (right/center):
+   - 2–3 KPIs with context (e.g., this month’s opportunities / wins)
+4) Secondary insights (below fold or collapsible):
+   - Award Health + Coverage Gaps summary
+   - NBA / Relationship advancement status
+   - Trending / Margin charts
+
+For each existing widget, say:
+- KEEP ABOVE FOLD
+- KEEP BUT COLLAPSE
+- MOVE TO OWN TAB (with a “View details” link from dashboard)
+- ROLE-GATE (and specify which roles)
+
+Section 5 — Concrete recommendations per widget
+For each current widget/portlet:
+- Current status:
+  - what it does and who sees it today.
+- Recommendation:
+  - keep above fold, keep but collapse, move off dashboard, or role-gate.
+- Justification in one sentence:
+  - why it helps or hurts clarity / day-to-day decision-making.
+
+Also identify:
+- any “duplicate” widgets (e.g., same metric in multiple places),
+- any that can be merged into a single “My Work” section.
+
+Section 6 — Suggested Phase 1 implementation steps
+Propose a short list (3–5) of small, low-risk implementation steps that a
+follow-up task should take. Each step should be:
+- scoped, reversible, and independent, for example:
+  1) Implement a “My work” section that consolidates N existing queues and
+     remove those standalone cards from the dashboard.
+  2) Move [specific analytics widget] off dashboard into its owning tab and
+     replace with a “View details in [Tab]” link.
+  3) Add simple role-gating so [manager/admin-specific cards] no longer show
+     for ICs.
+  4) Introduce collapsible “Insights” section for lower-priority charts.
+
+Do NOT:
+- Change endpoints or data models in this planning task.
+- Change which metrics are computed.
+- Change any styles or components yet.
+
+Section 7 — Stop rule
+Explicitly state:
+- that you have not changed any production code, schema, schedulers, writers,
+  or tests in this planning task,
+- that you will wait for explicit approval before implementing any of the
+  Phase 1 cleanup steps,
+- which 1–2 steps you recommend doing first (highest impact, lowest risk).
+
+Constraints:
+- Planning-only, read-only.
+- No code edits, no migrations, no job changes.
+- Keep recommendations specific: name the actual dashboard components/
+  modules you are referring to, and the files/endpoints involved.
+
+Expected output:
+- A single response with Sections 1–7 filled out, based on the current
+  Dashboard implementation.
+- No code changes, just a clear, prioritized cleanup plan.
