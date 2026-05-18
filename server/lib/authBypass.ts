@@ -128,7 +128,7 @@ export function getDevBypassUser(): User {
     emailSignature: null,
     clerkUserId: null,
     valueiqLandingDisabled: false,
-    defaultToTodayQueue: true,
+    defaultToTodayQueue: false,
     isActive: true,
     isServiceAccount: false,
     isDemo: false,

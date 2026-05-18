@@ -143,9 +143,10 @@ export function registerTodayQueueRoutes(app: Express): void {
       // resolve to true via the column default but we double-default here so
       // the client gets a deterministic value during the brief migration window.
       // User row is typed via shared/schema; defaultToTodayQueue is non-null
-      // (column has NOT NULL DEFAULT TRUE), but legacy callers may still hit
-      // an unmigrated user, so we fall back to true to match the column default.
-      const defaultToTodayQueue = user.defaultToTodayQueue ?? true;
+      // (column has NOT NULL DEFAULT FALSE — classic dashboard is the home),
+      // but legacy callers may still hit an unmigrated user, so we fall back
+      // to false to match the column default.
+      const defaultToTodayQueue = user.defaultToTodayQueue ?? false;
       return res.json({ defaultToTodayQueue });
     } catch (err) {
       console.error("[GET landing-preference] error:", err);

@@ -327,7 +327,7 @@ export const users = pgTable("users", {
   // Task #639 — Today queue is the new default landing page. Reps can opt
   // back to the classic dashboard via a per-user toggle; this flag drives
   // the "/" → "/today" redirect at the top of <Router/>.
-  defaultToTodayQueue: boolean("default_to_today_queue").notNull().default(true),
+  defaultToTodayQueue: boolean("default_to_today_queue").notNull().default(false),
   // ── Task #1126 Phase 1 — durable user lifecycle state ──
   // No production code reads or writes these columns yet. Helpers that
   // encode their semantics live at server/lib/userLifecycle.ts. Soft-

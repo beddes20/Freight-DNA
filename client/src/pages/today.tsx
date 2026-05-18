@@ -444,7 +444,7 @@ function LandingPreferenceToggle(): JSX.Element {
     },
   });
 
-  const isCurrent = data?.defaultToTodayQueue ?? true;
+  const isCurrent = data?.defaultToTodayQueue ?? false;
   return (
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
       <Settings2 className="h-3.5 w-3.5" />
