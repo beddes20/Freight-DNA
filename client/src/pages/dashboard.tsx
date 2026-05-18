@@ -37,6 +37,7 @@ import { ForcedFocusBanner } from "@/components/forced-focus-banner";
 import { ForcedFocusDialog } from "@/components/forced-focus-dialog";
 import OneOnOnePortlet from "@/components/one-on-one-portlet";
 import { PipelineHealthStrip } from "@/components/dashboard/PipelineHealthStrip";
+import { MyWorkCard } from "@/pages/dashboard/MyWorkCard";
 import InternalCommsPortlet from "@/components/internal-comms-portlet";
 import { ContactDetailSheet } from "@/components/contact-detail-sheet";
 import type { Company, Contact, Task, User, FeedPost, FeedPostReaction, Touchpoint, Notification, LaneCarrier } from "@shared/schema";
@@ -1031,7 +1032,9 @@ export default function Dashboard() {
         });
       })()}
 
-      {/* ── AM NOW zone: RFPs due in ≤7 days (compact strip) ────────────────── */}
+      {/* ── P1-S1 SUPPRESSED: RFPs Due This Week strip — replaced by <MyWorkCard /> "This Week" tab.
+              Original render kept commented for trivial rollback. Logic preserved in MyWorkCard via the same
+              `urgentRfps` slice from /api/dashboard/summary.
       {isAm && rfp7Days.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-red-200 dark:border-red-800 bg-red-50/60 dark:bg-red-950/20 px-4 py-2.5" data-testid="strip-rfp-deadlines-now">
           <span className="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5 shrink-0">
@@ -1051,8 +1054,11 @@ export default function Dashboard() {
           })}
         </div>
       )}
+      */}
 
-      {/* ── AM NOW zone: Tasks due today / overdue (compact strip) ───────────── */}
+      {/* ── P1-S1 SUPPRESSED: Tasks Due Today strip — replaced by <MyWorkCard /> "Today" tab.
+              Original render kept commented for trivial rollback. MyWorkCard scopes tasks to currentUserId
+              (matches Today's Briefing semantics) where this strip used the org-wide openTasks slice.
       {isAm && tasksDueToday.length > 0 && (
         <div className="rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/20 px-4 py-2.5" data-testid="strip-tasks-due-today">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -1071,6 +1077,7 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      */}
 
       {/* ── Intel Snapshot (admin only) ───────────────────────────────────────── */}
       {isAdmin && (
@@ -1099,12 +1106,31 @@ export default function Dashboard() {
         </PortletErrorBoundary>
       )}
 
-      {/* ── NBA Phase 1 Persistent Cards — Today's Priorities ───────────────── */}
+      {/* ── P1-S1: My Work consolidator — replaces RFPs/Tasks strips, NBA Today's Priorities, Today's Briefing ── */}
+      {!isLmRole && (
+        <PortletErrorBoundary label="My Work">
+          <MyWorkCard
+            currentUserId={currentUser?.id}
+            userRole={currentUser?.role ?? ""}
+            isAdmin={isAdmin}
+            isAm={isAm}
+            isNam={isNam}
+            allTasks={allTasks}
+            tasksLoading={tasksLoading}
+            urgentRfps={urgentRfps as any}
+            notifications={safeNotifications}
+          />
+        </PortletErrorBoundary>
+      )}
+
+      {/* ── P1-S1 SUPPRESSED: NBA Today's Priorities standalone — now rendered inside <MyWorkCard /> "NBA" tab.
+              Original render kept commented for trivial rollback.
       {(isAm || isNam) && (
         <PortletErrorBoundary label="NBA Today's Priorities">
           <NbaDashboardPanel userRole={currentUser?.role ?? ""} isAdmin={isAdmin} />
         </PortletErrorBoundary>
       )}
+      */}
 
       <HeroBanner
         currentUser={currentUser as SafeUser}
@@ -1115,7 +1141,9 @@ export default function Dashboard() {
         onAssignForcedFocus={() => { setForcedFocusEditId(undefined); setForcedFocusPrefill(undefined); setForcedFocusDialogOpen(true); }}
       />
 
-      {/* ── Today's Briefing portlet ─────────────────────────────────────── */}
+      {/* ── P1-S1 SUPPRESSED: Today's Briefing portlet — rolled into <MyWorkCard /> "Today" tab.
+              Original render kept commented for trivial rollback. The useDashboardLayout key
+              "todays-briefing" intentionally remains registered so user-saved orderings are not lost.
       <div style={{ order: getOrder("todays-briefing") }} className={(!isVisible("todays-briefing") || isLmRole) ? "hidden" : ""}>
         <PortletErrorBoundary label="Today's Briefing">
           <TodaysBriefingPortlet
@@ -1132,6 +1160,7 @@ export default function Dashboard() {
           />
         </PortletErrorBoundary>
       </div>
+      */}
 
       {/* ── Recently Visited portlet ─────────────────────────────────────── */}
       <div style={{ order: getOrder("recently-visited") }} className={(!isVisible("recently-visited") || isLmRole) ? "hidden" : ""}>

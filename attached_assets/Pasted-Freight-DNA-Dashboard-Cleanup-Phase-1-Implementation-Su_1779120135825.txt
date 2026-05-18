@@ -1,0 +1,93 @@
+Freight-DNA — Dashboard Cleanup (Phase 1)
+Implementation Subtask: P1-S1 — “My Work” consolidator card
+PLANNING ALREADY COMPLETE — IMPLEMENT ONLY THIS SUBTASK
+
+Context:
+We completed the read-only Dashboard Cleanup plan.
+Approved first move:
+- P1-S1 — replace the overlapping “what should I do now?” widgets with one
+  consolidated My Work card.
+
+The widgets being consolidated are:
+- RFPs Due This Week
+- Tasks Due Today
+- NBA Today’s Priorities
+- Today’s Briefing
+- Legacy Priority Actions should remain untouched in this subtask unless it is
+  already naturally hidden by the existing logic.
+
+Goal:
+Build one above-the-fold “My Work” card that consolidates the existing action
+surfaces without changing any backend endpoints or business logic.
+
+Rules:
+- Frontend-only.
+- No endpoint changes.
+- No schema, jobs, or writer changes.
+- No metric logic changes.
+- Keep blast radius low and reversible.
+- If you hit ambiguity in data shape, reuse the existing widget logic rather
+  than inventing a new interpretation.
+
+Required behavior:
+1) Add a new dashboard card component, e.g.:
+   - client/src/pages/dashboard/MyWorkCard.tsx
+
+2) The card should combine the existing action-oriented content into a single
+   compact card with tabs or segmented controls:
+   - Today
+   - This Week
+   - NBA
+
+3) Data sourcing:
+   - Reuse the same data/endpoints already used by the current dashboard widgets.
+   - Do NOT add new endpoints.
+   - Do NOT refactor backend payloads in this task.
+
+4) UX requirements:
+   - Must clearly answer “what needs my attention now?”
+   - Each item should have:
+     - a short label,
+     - a due/urgency hint when available,
+     - a direct click path to the owning workflow/tab.
+   - Keep visual density tighter than the current four-widget stack.
+   - Prefer one card with internal switching over multiple stacked cards.
+
+5) Dashboard integration:
+   - Render My Work above the fold in the Dashboard tab.
+   - Remove or suppress the standalone render blocks for:
+     - RFPs Due This Week
+     - Tasks Due Today
+     - NBA Today’s Priorities
+     - Today’s Briefing
+   - Only suppress the dashboard render path; do not delete backend logic.
+
+6) Constraints:
+   - Do NOT touch role-gating in this subtask.
+   - Do NOT move Team Feed / 1:1 / Leadership Callouts yet.
+   - Do NOT redesign unrelated widgets.
+   - Do NOT remove legacy Priority Actions yet unless it is already dead and
+     removal is trivial and behavior-preserving; otherwise leave it for P1-S5.
+
+7) Tests / verification:
+   - Run typecheck.
+   - Run any dashboard-related tests that already exist.
+   - Add/update tests only if needed to cover the new component render logic.
+   - Keep tests minimal and targeted.
+
+Required output after implementation:
+A. Diff summary
+- list every file changed and why
+
+B. Behavior changes
+- exactly what the user will now see differently on the dashboard
+
+C. Tests run
+- commands + pass/fail
+
+D. Rollback note
+- how to revert this subtask cleanly
+
+E. Stop rule
+- stop after P1-S1 only
+- do not start P1-S2, P1-S3, or any other cleanup step
