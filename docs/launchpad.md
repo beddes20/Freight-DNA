@@ -99,11 +99,15 @@ ingestion      (owner_rep_id) (soft-delete)   Quotes         My Work
 
 ### 3.2 Phased roadmap (proposed — each phase is independently shippable)
 
-**Phase L1 — Triage inbound stubs into Launchpad** *(closes the loop on `is_email_derived`)*
-- A "Needs Routing" inbox inside Launchpad that lists every `companies` row where `is_email_derived=true` and `owner_rep_id IS NULL`.
-- One-click actions: **Claim as my prospect**, **Assign to rep**, **Mark as noise**.
-- Same chokepoint the admin `/admin/email-derived-companies` console uses today, just rep-facing.
-- No new endpoints — reuses the Task #1095 flag and the existing claim path.
+**Phase L1 — Triage inbound stubs into Launchpad** *(closes the loop on `is_email_derived`)* — **SHIPPED 2026-05-18 (admin-only)**
+- New "Needs Routing" tab inside `/prospects` (`client/src/pages/prospects/components/RoutingSection.tsx`), visible only to `admin` role.
+- Lists every `companies` row where `is_email_derived=true`, the canonical owner (`ownerRepId ?? assignedTo ?? salesPersonId`) is null, and `archived_at IS NULL`, sorted newest-first by `email_derived_at`.
+- Three actions per row:
+  - **Claim** → `PATCH /api/companies/:id/owner` with `{ownerRepId: <self>}`
+  - **Assign** → same endpoint with a rep picker
+  - **Mark as noise** → `POST /api/companies/:id/archive`
+- **Why admin-only:** the existing `GET /api/companies` route applies `getVisibleCompanyIds(currentUser)` in `server/auth.ts`, which filters out every unowned company for non-admin roles. The same reason the existing admin console `/api/admin/email-derived-companies` is admin-gated today. Widening visibility for unowned rows requires editing `getVisibleCompanyIds` — a function read by Customer Quotes, dashboards, NBA, leaderboards, and many more surfaces — and was scoped out of L1 to keep this phase contract-free. Manager + read-only rep visibility lands as **L1.1** once that change earns its own stability contract.
+- **No new endpoints, no schema changes, no widened contracts.** Reuses `GET /api/companies?includeEmailDerived=true` (Task #1095), the existing owner-change route, and the existing archive route. Customers Tab Trust (§1300) untouched: the routing query opts INTO email-derived rows; the customers list still opts out by default.
 
 **Phase L2 — Unified activity timeline**
 - Merge `prospect_activities`, `touchpoints`, `email_messages`, and `webex_call_analytics` into one timeline per prospect / account.

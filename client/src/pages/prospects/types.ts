@@ -46,4 +46,4 @@ export const ACCOUNT_STATUS_DOT: Record<string, string> = {
 
 export type EnrichedProspect = Prospect & { ownerName?: string | null; assignedNamName?: string | null };
 export type ActivityWithName = { id: number; type: string; notes: string; createdByName: string; createdAt: string };
-export type LaunchpadTab = "pipeline" | "accounts" | "analytics";
+export type LaunchpadTab = "pipeline" | "accounts" | "analytics" | "routing";

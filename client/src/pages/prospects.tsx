@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/use-auth";
-import { Kanban, Building2, BarChart2, Settings, AlertCircle } from "lucide-react";
+import { Kanban, Building2, BarChart2, Settings, AlertCircle, Inbox } from "lucide-react";
 import type { ProspectStage } from "@shared/schema";
 import {
   PROSPECT_STAGE_LABELS, PROSPECT_LEAD_SOURCES, PROSPECT_LEAD_SOURCE_LABELS,
@@ -12,6 +12,7 @@ import { ExecAnalyticsDashboard, RepPersonalAnalytics } from "@/components/exec-
 import { ACTIVE_STAGES, type EnrichedProspect, type LaunchpadTab } from "./prospects/types";
 import { PipelineSection } from "./prospects/components/PipelineSection";
 import { AccountsSection } from "./prospects/components/AccountsSection";
+import { RoutingSection } from "./prospects/components/RoutingSection";
 import { ProspectFormDialog } from "./prospects/components/ProspectFormDialog";
 import { ImportDialog } from "./prospects/components/ImportDialog";
 import { OwnershipRequestsAdminPanel } from "./prospects/components/OwnershipRequestsAdminPanel";
@@ -29,7 +30,13 @@ export default function ProspectsPage() {
   const isSalesDirectorOrAdmin = user?.role === "admin" || user?.role === "sales_director";
   const defaultTab: LaunchpadTab = isSalesDirectorOrAdmin ? "analytics" : "pipeline";
   const rawTab = params.get("tab") as LaunchpadTab | null;
-  const activeTab: LaunchpadTab = (rawTab === "pipeline" || rawTab === "accounts" || rawTab === "analytics") ? rawTab : defaultTab;
+  const isAdmin = user?.role === "admin";
+  const activeTab: LaunchpadTab =
+    rawTab === "pipeline" || rawTab === "accounts" || rawTab === "analytics"
+      ? rawTab
+      : rawTab === "routing" && isAdmin
+        ? rawTab
+        : defaultTab;
 
   const setTab = (tab: LaunchpadTab) => navigate(`/prospects?tab=${tab}`);
 
@@ -107,9 +114,11 @@ export default function ProspectsPage() {
       <div className="flex items-center gap-0 border-b px-4 pt-3 bg-background" data-testid="launchpad-tab-bar">
         <div className="flex items-center gap-1 flex-1">
           <h1 className="text-base font-bold mr-4 text-foreground">Launchpad</h1>
-          {(["pipeline", "accounts", "analytics"] as LaunchpadTab[]).map(tab => {
-            const icons = { pipeline: Kanban, accounts: Building2, analytics: BarChart2 };
-            const labels = { pipeline: "Pipeline", accounts: "Accounts", analytics: "Analytics" };
+          {((user?.role === "admin"
+            ? ["pipeline", "accounts", "routing", "analytics"]
+            : ["pipeline", "accounts", "analytics"]) as LaunchpadTab[]).map(tab => {
+            const icons = { pipeline: Kanban, accounts: Building2, routing: Inbox, analytics: BarChart2 };
+            const labels = { pipeline: "Pipeline", accounts: "Accounts", routing: "Needs Routing", analytics: "Analytics" };
             const Icon = icons[tab];
             return (
               <button
@@ -150,6 +159,9 @@ export default function ProspectsPage() {
       {activeTab === "accounts" && (
         <AccountsSection prospects={prospects} isLoading={isLoading} onSelectProspect={setSelected} />
       )}
+
+      {/* ── Needs Routing Tab (Launchpad L1) ── */}
+      {activeTab === "routing" && <RoutingSection />}
 
       {/* ── Pipeline Tab ── */}
       {activeTab === "pipeline" && (
