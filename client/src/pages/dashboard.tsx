@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Accordion, AccordionItem, AccordionTrigger, AccordionContent } from "@/components/ui/accordion";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { InfoTooltip } from "@/components/info-tooltip";
@@ -129,6 +130,8 @@ export default function Dashboard() {
   const [accountsDriftingCollapsed, setAccountsDriftingCollapsed] = useState(() => localStorage.getItem("dash_accounts_drifting_collapsed") === "true");
   const [relationshipAdvancementCollapsed, setRelationshipAdvancementCollapsed] = useState(() => localStorage.getItem("dash_rel_advancement_collapsed") === "true");
   const [growthCallsCollapsed, setGrowthCallsCollapsed] = useState(() => localStorage.getItem("dash_growth_calls_collapsed") === "true");
+  // P1-S3: Insights accordion wrapper — collapsed by default for ALL roles (lighter above-the-fold for ICs; manager/admin can opt-in).
+  const [insightsCollapsed, setInsightsCollapsed] = useState(() => localStorage.getItem("dash_insights_collapsed") !== "false");
   const [weeklyCommitmentsCollapsed, setWeeklyCommitmentsCollapsed] = useState(() => localStorage.getItem("dash_weekly_commitments_collapsed") === "true");
   const [teamCommitmentsCollapsed, setTeamCommitmentsCollapsed] = useState(() => localStorage.getItem("dash_team_commitments_collapsed") === "true");
   const [commitPayload, setCommitPayload] = useState<CommitPayload | null>(null);
@@ -1256,33 +1259,115 @@ export default function Dashboard() {
         />
       </PortletErrorBoundary>
 
-      {/* ── Account Growth Score ─────────────────────────────────────────────── */}
-      {!isLmRole && companies && companies.length > 0 && (
-        <PortletErrorBoundary label="Account Growth">
-          <AccountGrowthPortlet
-            companies={companies.map(c => ({ id: c.id, name: c.name }))}
-            collapsed={accountGrowthCollapsed}
-            onToggle={() => {
-              const next = !accountGrowthCollapsed;
-              setAccountGrowthCollapsed(next);
-              localStorage.setItem("dash_account_growth_collapsed", String(next));
+      {/* ── P1-S3: Insights accordion — wraps Account Growth (#14), RFP Coverage Gaps (#15), Award Lane Health (#16), Accounts Drifting (#23), Relationship Advancement (#24), Growth Calls (#25). Trending Accounts (#18) intentionally NOT moved — it only renders inside DirectorPortlets/NamPortlets composite subcomponents and moving it would require restructuring those composites (explicitly out-of-scope per "Do NOT change widget internal layout"). Each child keeps its own existing role/data gates. */}
+      {((!isLmRole && companies && companies.length > 0) || isAm) && (
+        <div data-testid="card-insights-accordion">
+          <Accordion
+            type="single"
+            collapsible
+            value={insightsCollapsed ? "" : "insights"}
+            onValueChange={(v) => {
+              const next = v !== "insights";
+              setInsightsCollapsed(next);
+              localStorage.setItem("dash_insights_collapsed", String(next));
             }}
-          />
-        </PortletErrorBoundary>
-      )}
+            className="rounded-lg border bg-card"
+          >
+            <AccordionItem value="insights" className="border-b-0">
+              <AccordionTrigger className="px-4 py-3 hover:no-underline" data-testid="button-toggle-insights">
+                <div className="flex items-center gap-2 text-base font-medium">
+                  <TrendingUp className="h-4 w-4 text-muted-foreground" />
+                  <span>Insights</span>
+                  <span className="text-xs font-normal text-muted-foreground">Account growth, coverage, drift &amp; advancement</span>
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="px-4 pb-4 pt-0 space-y-4" data-testid="content-insights">
+                {/* ── Account Growth Score ─────────────────────────────────────────────── */}
+                {!isLmRole && companies && companies.length > 0 && (
+                  <PortletErrorBoundary label="Account Growth">
+                    <AccountGrowthPortlet
+                      companies={companies.map(c => ({ id: c.id, name: c.name }))}
+                      collapsed={accountGrowthCollapsed}
+                      onToggle={() => {
+                        const next = !accountGrowthCollapsed;
+                        setAccountGrowthCollapsed(next);
+                        localStorage.setItem("dash_account_growth_collapsed", String(next));
+                      }}
+                    />
+                  </PortletErrorBoundary>
+                )}
 
-      {/* ── RFP Coverage Gaps (AM only) ──────────────────────────────────────── */}
-      {isAm && (
-        <PortletErrorBoundary label="Coverage Gaps">
-          <CoverageGapsPortlet />
-        </PortletErrorBoundary>
-      )}
+                {/* ── RFP Coverage Gaps (AM only) ──────────────────────────────────────── */}
+                {isAm && (
+                  <PortletErrorBoundary label="Coverage Gaps">
+                    <CoverageGapsPortlet />
+                  </PortletErrorBoundary>
+                )}
 
-      {/* ── Award Lane Health (AM only) ───────────────────────────────────────── */}
-      {isAm && (
-        <PortletErrorBoundary label="Award Health">
-          <AwardHealthPortlet />
-        </PortletErrorBoundary>
+                {/* ── Award Lane Health (AM only) ───────────────────────────────────────── */}
+                {isAm && (
+                  <PortletErrorBoundary label="Award Health">
+                    <AwardHealthPortlet />
+                  </PortletErrorBoundary>
+                )}
+
+                {/* ── AM Phase 2: Unified "Accounts Drifting" (relocated from below) ── */}
+                {isAm && (
+                  <PortletErrorBoundary label="Accounts Drifting">
+                    <AccountsDriftingPortlet
+                      staleAccounts={staleAccounts}
+                      coldContacts={coldContacts}
+                      meaningfulOverdue={meaningfulOverdue}
+                      degradedSources={driftingDegradedSources}
+                      collapsed={accountsDriftingCollapsed}
+                      onToggle={() => {
+                        const next = !accountsDriftingCollapsed;
+                        setAccountsDriftingCollapsed(next);
+                        localStorage.setItem("dash_accounts_drifting_collapsed", String(next));
+                      }}
+                      onCommit={setCommitPayload}
+                    />
+                  </PortletErrorBoundary>
+                )}
+
+                {/* ── AM Phase 2: Relationship Advancement Candidates (relocated from below) ── */}
+                {isAm && contacts !== undefined && companies !== undefined && (
+                  <PortletErrorBoundary label="Relationship Advancement">
+                    <RelationshipAdvancementPortlet
+                      contacts={contacts}
+                      companies={companies}
+                      coldContacts={coldContacts}
+                      meaningfulOverdue={meaningfulOverdue}
+                      collapsed={relationshipAdvancementCollapsed}
+                      onToggle={() => {
+                        const next = !relationshipAdvancementCollapsed;
+                        setRelationshipAdvancementCollapsed(next);
+                        localStorage.setItem("dash_rel_advancement_collapsed", String(next));
+                      }}
+                      onCommit={setCommitPayload}
+                    />
+                  </PortletErrorBoundary>
+                )}
+
+                {/* ── AM Phase 2: Top Growth Calls This Week (relocated from below) ── */}
+                {isAm && (
+                  <PortletErrorBoundary label="Growth Calls">
+                    <GrowthCallsPortlet
+                      opportunityLeaderboard={opportunityLeaderboard}
+                      collapsed={growthCallsCollapsed}
+                      onToggle={() => {
+                        const next = !growthCallsCollapsed;
+                        setGrowthCallsCollapsed(next);
+                        localStorage.setItem("dash_growth_calls_collapsed", String(next));
+                      }}
+                      onCommit={setCommitPayload}
+                    />
+                  </PortletErrorBoundary>
+                )}
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+        </div>
       )}
 
       {/* ── Dashboard Layout Editor ──────────────────────────────────────────── */}
@@ -1390,59 +1475,7 @@ export default function Dashboard() {
         </PortletErrorBoundary>
       )}
 
-      {/* ── AM Phase 2: Unified "Accounts Drifting" (replaces Phase 1 stale card) ── */}
-      {isAm && (
-        <PortletErrorBoundary label="Accounts Drifting">
-          <AccountsDriftingPortlet
-            staleAccounts={staleAccounts}
-            coldContacts={coldContacts}
-            meaningfulOverdue={meaningfulOverdue}
-            degradedSources={driftingDegradedSources}
-            collapsed={accountsDriftingCollapsed}
-            onToggle={() => {
-              const next = !accountsDriftingCollapsed;
-              setAccountsDriftingCollapsed(next);
-              localStorage.setItem("dash_accounts_drifting_collapsed", String(next));
-            }}
-            onCommit={setCommitPayload}
-          />
-        </PortletErrorBoundary>
-      )}
-
-      {/* ── AM Phase 2: Relationship Advancement Candidates ─────────────────── */}
-      {isAm && contacts !== undefined && companies !== undefined && (
-        <PortletErrorBoundary label="Relationship Advancement">
-          <RelationshipAdvancementPortlet
-            contacts={contacts}
-            companies={companies}
-            coldContacts={coldContacts}
-            meaningfulOverdue={meaningfulOverdue}
-            collapsed={relationshipAdvancementCollapsed}
-            onToggle={() => {
-              const next = !relationshipAdvancementCollapsed;
-              setRelationshipAdvancementCollapsed(next);
-              localStorage.setItem("dash_rel_advancement_collapsed", String(next));
-            }}
-            onCommit={setCommitPayload}
-          />
-        </PortletErrorBoundary>
-      )}
-
-      {/* ── AM Phase 2: Top Growth Calls This Week ──────────────────────────── */}
-      {isAm && (
-        <PortletErrorBoundary label="Growth Calls">
-          <GrowthCallsPortlet
-            opportunityLeaderboard={opportunityLeaderboard}
-            collapsed={growthCallsCollapsed}
-            onToggle={() => {
-              const next = !growthCallsCollapsed;
-              setGrowthCallsCollapsed(next);
-              localStorage.setItem("dash_growth_calls_collapsed", String(next));
-            }}
-            onCommit={setCommitPayload}
-          />
-        </PortletErrorBoundary>
-      )}
+      {/* P1-S3: Accounts Drifting (#23), Relationship Advancement (#24), Growth Calls (#25) relocated above into the Insights accordion. Standalone render blocks removed to avoid duplicate-key DOM warnings — each widget still preserves its full state, props, gates, and localStorage keys inside the accordion. */}
 
       {/* ── Manager Phase 3: Team Commitment Follow-Through ─────────────────── */}
       {canSeeTeam && !isAm && (

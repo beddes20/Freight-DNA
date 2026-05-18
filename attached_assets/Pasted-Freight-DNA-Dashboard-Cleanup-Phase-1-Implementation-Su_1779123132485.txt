@@ -1,0 +1,113 @@
+Freight-DNA — Dashboard Cleanup (Phase 1)
+Implementation Subtask: P1-S3 — “Insights” collapsible accordion
+IMPLEMENT ONLY THIS SUBTASK
+
+Context:
+Phase 1 so far:
+- P1-S1: My Work consolidator card is live; four overlapping “what should I do
+  now?” widgets were collapsed into one.
+- P1-S2: Dashboard role gates tightened; manager/admin-only widgets like
+  Leaderboard and Monthly Goals are now hidden from IC roles.
+
+The dashboard is still vertically long because several analytical/weekly
+widgets render as full-width cards. We want to reduce visual clutter by
+grouping these into a single collapsible “Insights” area, without changing
+what they show.
+
+Goal:
+Wrap a set of lower-frequency, more-analytical portlets in a single
+collapsible “Insights” accordion on the Dashboard:
+- Keep them available.
+- Make the default view for ICs lighter.
+- Do not change endpoints, metric logic, or role gating in this subtask.
+
+Scope (widgets to include in Insights):
+From the planning report, the target widgets are:
+- Account Growth (#14)
+- RFP Coverage Gaps (#15)
+- Award Lane Health (#16)
+- Trending Accounts (#18)
+- Accounts Drifting (#23)
+- Relationship Advancement (#24)
+- Growth Calls (#25)
+
+Rules:
+- Frontend-only.
+- No endpoint changes.
+- No schema, jobs, or writer changes.
+- No metric or scoring changes.
+- No role-gating changes in this subtask.
+- Keep blast radius low and reversible.
+
+Required implementation:
+
+1) Add an “Insights” wrapper component:
+   - Either create a small component file such as:
+     client/src/pages/dashboard/InsightsAccordion.tsx
+     or implement inline in client/src/pages/dashboard.tsx if simpler.
+   - Use whatever existing accordion/disclosure pattern the app already uses
+     (shadcn Accordion or similar). If none exists, implement a minimal,
+     accessible collapsible section without introducing a heavy new dependency.
+
+2) Move the target widgets under “Insights”:
+   - Find the render blocks for the widgets listed above in
+     client/src/pages/dashboard.tsx (or the relevant sub-components).
+   - Nest them inside the Insights accordion content.
+   - Preserve their existing order relative to one another as much as
+     reasonable (e.g., Accounts Drifting near the top, etc.).
+   - Preserve all existing props, role checks, and error boundaries.
+
+3) Defaults:
+   - For IC-like roles (account managers / front-line reps), “Insights” should
+     default to collapsed on first load, to lighten above-the-fold clutter.
+   - It is acceptable (and ideal) to persist the open/closed state per user
+     using the same pattern as useDashboardLayout or existing local storage
+     keys if that’s straightforward.
+   - For manager/admin roles, default can be the same collapsed behavior for
+     now; do NOT special-case them in this subtask unless there is already
+     a clear pattern.
+
+4) Do NOT:
+   - Remove or change any underlying widgets’ data sources.
+   - Change their titles, metrics, or internal layout.
+   - Add or change any role gates.
+   - Move any non-Insights widgets into or out of this wrapper.
+
+5) Tests / verification:
+   - Run typecheck (npm run check).
+   - Run existing dashboard-related tests / guardrails.
+   - If tests already inspect dashboard layout, update them minimally to
+     reflect the new wrapper.
+   - Manually verify that:
+     - For an IC-like user, the dashboard loads with:
+       - Health strip,
+       - My Work,
+       - Today’s Five,
+       - KPI strip,
+       - Pinned/Recent,
+       - and a collapsed Insights section.
+     - Expanding Insights reveals all the portlets listed above and they still
+       behave as before.
+
+Required output after implementation:
+
+A. Diff summary
+   - List every file changed, with a short description (e.g., “wrap
+     AccountGrowthCard in InsightsAccordion”).
+
+B. Behavior changes
+   - Describe what ICs and managers will actually see differently on the
+     dashboard (e.g., “Insights block now collapsed by default; content
+     unchanged when expanded”).
+
+C. Tests run
+   - Commands + pass/fail.
+
+D. Rollback note
+   - How to revert this subtask cleanly (e.g., remove the wrapper and restore
+     the widgets to top-level rendering).
+
+E. Stop rule
+   - Confirm you did only P1-S3.
+   - Do NOT start P1-S4 (moving Team Feed / Leadership Callouts / 1:1) or
+     P1-S5 (retiring legacy Priority Actions) in this subtask.
