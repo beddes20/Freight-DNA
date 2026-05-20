@@ -90,9 +90,11 @@ function consumeWebexNonce(nonce: string): boolean {
 function webexStateSecret(): string {
   const envSecret = process.env.SESSION_SECRET?.trim();
   if (envSecret && envSecret.length >= 16) return envSecret;
-  if (process.env.NODE_ENV === "production") {
+  const appEnv = (process.env.APP_ENV ?? "").trim().toLowerCase();
+  const isDeployedEnv = appEnv === "production" || appEnv === "staging";
+  if (process.env.NODE_ENV === "production" || isDeployedEnv) {
     throw new Error(
-      "SESSION_SECRET (>=16 chars) is required in production to sign per-user Webex OAuth state",
+      `SESSION_SECRET (>=16 chars) is required when APP_ENV=${appEnv || "(unset)"} / NODE_ENV=${process.env.NODE_ENV || "(unset)"} to sign per-user Webex OAuth state`,
     );
   }
   // Non-production fallback: a per-process random secret. This keeps dev

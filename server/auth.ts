@@ -134,13 +134,40 @@ export function setupAuth(app: any) {
   // ── Development / Testing: session-based auth (NOT used in production) ──
   // This keeps the automated test suite working while Clerk handles production auth.
   if (!IS_PROD) {
+    // Resolve SESSION_SECRET fail-closed for any real deployed env. The
+    // outer `if (!IS_PROD)` already skips this block when NODE_ENV=production,
+    // but APP_ENV=production|staging on a non-prod NODE_ENV (or anyone running
+    // `node dist/index.cjs` directly, bypassing the preflight check in
+    // scripts/preflight-env.cjs) would otherwise silently fall back to the
+    // dev-only literal below. Refuse to boot in that case.
+    const appEnv = (process.env.APP_ENV ?? "").trim().toLowerCase();
+    const isDeployedEnv = appEnv === "production" || appEnv === "staging";
+    const rawSessionSecret = process.env.SESSION_SECRET?.trim() ?? "";
+    let sessionSecret: string;
+    if (rawSessionSecret.length >= 16) {
+      sessionSecret = rawSessionSecret;
+    } else if (isDeployedEnv) {
+      throw new Error(
+        `[auth] SESSION_SECRET must be set (>=16 chars) when APP_ENV=${appEnv}. ` +
+          `Refusing to start with the dev-only fallback. ` +
+          `Generate one with: openssl rand -hex 32`,
+      );
+    } else {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[auth] SESSION_SECRET unset or <16 chars — using DEV-ONLY fallback secret. " +
+          "This is unsafe for any deployed environment. Set SESSION_SECRET to silence this warning.",
+      );
+      sessionSecret = "dev-only-secret";
+    }
+
     app.use(
       session({
         store: new PgStore({
           conString: process.env.DATABASE_URL,
           createTableIfMissing: true,
         }),
-        secret: process.env.SESSION_SECRET || "dev-only-secret",
+        secret: sessionSecret,
         resave: false,
         saveUninitialized: false,
         rolling: true,
