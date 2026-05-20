@@ -1,0 +1,65 @@
+Freight-DNA account switch / rep-view investigation — READ ONLY FIRST
+
+We need to make it possible for me to view rep accounts safely, but right now the switch-account action from Admin > User Management is failing.
+
+Observed behavior:
+- Clicking the switch/view-account icon on a user row throws a red toast:
+  "Could not switch account"
+  "500: {"message":"Clerk: The clerkMiddleware should be registered before using auth()..."}"
+- This is happening in staging / current Render environment.
+
+Goal:
+Determine the exact root cause and the safest path to let me view rep-facing screens for other users.
+
+Scope:
+- ONLY inspect the account-switch / impersonation flow
+- Admin Users page
+- Any server routes/services/helpers it calls
+- Any Clerk / bypass-mode branching involved
+- Do not change unrelated auth, email, CQ, customers, or lifecycle code
+
+Tasks:
+1. Find the exact client click handler for the switch-account icon in admin-users.tsx (or related component).
+2. Trace the exact API endpoint(s) it calls.
+3. Trace the exact server route / helper / service path for that endpoint.
+4. Identify exactly where Clerk auth helpers (`auth()`, `getAuth()`, Clerk middleware assumptions, impersonation helpers, etc.) are being invoked.
+5. Determine whether the intended product behavior is:
+   A. real Clerk impersonation only, or
+   B. a staging-safe bypass "view as rep" mode.
+6. Show whether the current implementation is incompatible with DEVAUTHBYPASS / authBypassEnabled=true.
+7. Recommend the safest smallest next fix, but DO NOT implement yet.
+
+Required output format:
+Section 1 — Current flow
+- click target
+- client handler
+- endpoint called
+- server files/functions involved
+
+Section 2 — Root cause
+- exact line(s) that trigger Clerk in this path
+- why the route fails in bypass mode
+- whether this is the same failure class as the prior api/auth/me issue or different
+
+Section 3 — Intended behavior decision
+- should rep-viewing work in staging bypass mode?
+- if yes, what is the smallest safe implementation?
+- if no, what is the safest UI/route behavior instead?
+
+Section 4 — Minimal fix proposal
+- exact files likely to touch
+- smallest safe change
+- rollout risk
+- what should happen after fix
+
+Section 5 — Verification plan
+- what I should click
+- what endpoint should return
+- what log error should disappear
+- what the UI should do when successful
+
+Important:
+- planning / investigation only
+- no code changes yet
+- no broad auth refactor
+- no speculative redesign
