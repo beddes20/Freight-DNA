@@ -1,0 +1,129 @@
+I do NOT want new feature work right now.
+
+I need a full production-readiness triage for Freight-DNA so we can prioritize what to work on first this week and know what must be fixed before we can feel confident the app will work as intended in production without crashing, silently failing, or behaving unpredictably.
+
+Your goal is to produce a prioritized, evidence-based action plan.
+
+Scope:
+Evaluate the current state of the platform across:
+1. Replit -> GitHub -> Render deploy path
+2. build artifact correctness
+3. staging vs production environment config
+4. auth/bootstrap stability
+5. Clerk vs auth bypass behavior
+6. login flow
+7. app shell / dashboard boot
+8. outbound email safety
+9. scheduler/background job safety
+10. key API health
+11. database/schema drift risk
+12. logging/observability
+13. rollback readiness
+14. smoke-test coverage
+15. any known fragile areas introduced during the last week of incident fixes
+
+I want you to answer one main question:
+“What do we need to do first, second, and third to make this production-safe this week?”
+
+Required work:
+- Inspect the current codebase and recent changes related to deploys, auth/bootstrap, Render config assumptions, email gating, and staging bypass behavior.
+- Trace the real startup path from deploy -> server boot -> frontend boot -> login -> authenticated app render.
+- Identify every place where staging-only behavior exists and clearly mark what is NOT safe to rely on for production.
+- Verify whether the deployed artifact path can still drift from source edits.
+- Verify whether environment variables are a possible single point of failure.
+- Identify places where the app could appear “up” while still being broken for users.
+- Identify places where production and staging could diverge in dangerous ways.
+- Identify any areas where a bad deploy would not be caught quickly.
+- Run typecheck.
+- Run build.
+- Run any existing relevant tests if present.
+- Do NOT make broad changes during this step.
+
+Deliverables:
+
+Section 1: Executive verdict
+- Is the app currently production-ready, close, or not close?
+- 3-5 sentence summary only.
+
+Section 2: Top risks ranked
+Rank the top risks by severity and likelihood.
+For each risk include:
+- risk name
+- why it matters
+- likely user impact
+- how confident you are
+- exact files/systems involved
+
+Section 3: Priority plan
+Create a table with:
+- Priority
+- Work item
+- Why it comes first
+- Estimated effort (S/M/L)
+- Blocker or dependency
+- What “done” looks like
+
+I want a strict top-priority ordering:
+- P0 = must do before production this week
+- P1 = should do this week if possible
+- P2 = can wait until after launch
+
+Section 4: Production readiness checklist
+Create a concrete checklist for:
+A. deploy correctness
+B. env correctness
+C. auth correctness
+D. email safety
+E. app boot stability
+F. smoke tests
+G. observability
+H. rollback readiness
+
+Section 5: PASS/FAIL validation flows
+Define exact PASS/FAIL checks for:
+1. landing page load
+2. login flow
+3. api/config/public
+4. api/auth/me
+5. dashboard render
+6. one critical authenticated workflow
+7. email-safe behavior in staging
+8. email-enabled behavior in production
+9. logout/session behavior
+10. post-deploy health verification on Render
+
+For each, include:
+- exact path/endpoint
+- expected result
+- what failure would mean
+- whether it can be automated
+
+Section 6: Staging vs production differences
+List every known behavior difference between staging and production.
+For each one say:
+- intentional or accidental
+- safe or unsafe
+- must be removed before launch or not
+
+Section 7: Unknowns / blind spots
+Tell me what we still do NOT know that prevents full confidence.
+Be explicit.
+If something cannot be verified from code alone, say exactly what must be manually tested.
+
+Section 8: Recommended next action
+Give me the single best next move to do immediately today.
+Then give me the next 3 actions after that.
+
+Constraints:
+- No new feature work.
+- No broad refactors.
+- No speculative improvements unless tied to a concrete production risk.
+- If you find an active health issue, stop and clearly label it as a likely P0.
+- If any fix is absolutely necessary during this audit, keep it tightly scoped and show exact files touched.
+- Separate confirmed facts from hypotheses.
+
+Output format:
+- concise but complete
+- use tables where useful
+- prioritize for action, not theory
+- do not bury the recommendation
