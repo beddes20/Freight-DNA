@@ -1,0 +1,60 @@
+Freight-DNA replit.md cleanup — docs refactor only (no behavior changes)
+
+READ FIRST. This is a documentation-only task.
+
+Goal:
+Reduce replit.md from ~9000 tokens to something more manageable by:
+- Moving long, already-stable explanations into dedicated docs files
+- Leaving short, one-line pointers in replit.md
+- NOT changing any runtime behavior or contracts
+
+Hard constraints:
+- NO changes to server/, client/, shared/, tests/, scripts/, schema, or env.
+- NO changes to behavior, logic, or config.
+- ONLY edit:
+  - replit.md
+  - docs/*.md (new or existing)
+
+What to do:
+
+1) Identify long sections in replit.md that are clearly about a specific surface or contract and already have (or should have) a doc home, e.g.:
+- Critical tabs audit / contracts (Dashboard, Available Freight, User Roster, Customer Quotes, Conversations, Lane Work Queue)
+- Customers tab trust / pollution cleanup
+- Customer Quotes stability contract references
+- Email gate / staging safety notes
+- Any other big, repeated “gotcha” blocks
+
+2) For each such block:
+- If there is already a matching doc (e.g. docs/customer-quotes-stability-contract.md, docs/customers-tab-trust-*.md, etc.), move the detailed text there and trim the copy in replit.md down to:
+  - a short heading
+  - a 1–2 line summary
+  - a “See: docs/<file>.md” pointer
+- If there is NOT yet a matching doc:
+  - create a new docs/<meaningful-name>.md (e.g. docs/customers-tab-trust-contract.md, docs/critical-tabs-contract.md)
+  - move the long content into that doc
+  - leave the same small heading + 1–2 line summary + “See: …” pointer in replit.md
+
+3) Reorganize replit.md into clearly labeled sections by topic, for example:
+- Critical surfaces & contracts (with pointers to docs/*)
+- Email & environment gotchas (with pointers)
+- Tab-specific notes (with pointers)
+- Misc operational notes
+
+Do NOT:
+- Rewrite the meaning of any contract or gotcha.
+- Introduce new policies or rules.
+- Delete any content without moving it somewhere under docs/.
+
+Before finishing:
+1. Show me:
+   - the new top-level outline of replit.md (just the headings)
+   - the list of new/updated docs/*.md files you created or touched
+2. Confirm that:
+   - every long section you moved is still accessible via a pointer from replit.md
+   - you did not touch code, tests, scripts, or package.json
+
+Output format:
+Section 1 — New replit.md outline
+Section 2 — Docs files created/updated
+Section 3 — Examples (one moved section before → after)
+Section 4 — Verification
