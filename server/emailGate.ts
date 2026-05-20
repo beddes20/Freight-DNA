@@ -40,13 +40,16 @@ function ts() {
  * Returns whether the runtime environment is permitted to send live email.
  * Both APP_ENV=production AND EMAIL_LIVE_MODE=true (env) must hold.
  *
- * APP_ENV defaults to 'production' when unset to preserve back-compat with
- * existing prod deploys that never set APP_ENV explicitly. The
- * EMAIL_LIVE_MODE check has no such default — unset is treated as false,
- * so a fresh prod deploy still has to opt in to live sending.
+ * FAIL-CLOSED: APP_ENV unset / empty / malformed is treated as NOT production,
+ * so live mail is forced OFF. Production deploys MUST set APP_ENV=production
+ * explicitly — there is no implicit default. EMAIL_LIVE_MODE has the same
+ * shape (unset → false), so a fresh prod deploy still has to opt in to live
+ * sending. This protects staging services that share a Neon branch of the
+ * prod DB (where the DB flag may be ON) from accidentally sending real mail
+ * if APP_ENV is cleared during a service migration or restore.
  */
 function envAllowsLiveMode(): { allowed: boolean; reason: string } {
-  const appEnv = (process.env.APP_ENV ?? "production").trim().toLowerCase();
+  const appEnv = (process.env.APP_ENV ?? "").trim().toLowerCase();
   const envFlag = String(process.env.EMAIL_LIVE_MODE ?? "").trim().toLowerCase();
   if (appEnv !== "production") {
     return { allowed: false, reason: `APP_ENV=${appEnv || "(unset)"} (not production)` };

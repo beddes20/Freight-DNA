@@ -52,7 +52,8 @@ import { assertNoSchemaDrift } from "./checkSchemaDrift";
 import { Pool as SchemaCheckPool } from "pg";
 import { storage } from "./storage";
 import { WebhookHandlers } from "./webhookHandlers";
-import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG } from "./emailGate";
+import { setEmailLiveMode, EMAIL_LIVE_MODE_FLAG, isEmailLiveModeOn } from "./emailGate";
+import { getGitSha } from "./lib/buildInfo";
 import { describeContactJobsFlag } from "./lib/featureFlags";
 import { applyClerkEnv, resolveAppEnv } from "./lib/clerkConfig";
 import { describeAuthMode, isAuthBypassEnabled } from "./lib/authBypass";
@@ -266,20 +267,54 @@ app.use(express.urlencoded({ extended: false }));
 // so the platform health check passes even mid-boot.
 let isReady = false;
 
-// Always-200 endpoints so any platform health check (Replit Autoscale's
+// Liveness probes — always-200 so any platform health check (Replit Autoscale's
 // promote stage, an external uptime monitor, a load balancer, etc.) passes
 // during the boot window even before migrations + route registration finish.
 // Multiple paths are covered because different platforms hit different
-// conventions (/, /healthz, /health, /_health).
-const HEALTH_PATHS = new Set(["/", "/healthz", "/health", "/_health", "/readyz"]);
+// conventions (/, /healthz, /health, /_health). These signal ONLY "the process
+// is alive" — they do NOT prove the app is ready to serve traffic. Point
+// Render's HTTP health check at /readyz (below) for that.
+const LIVENESS_PATHS = new Set(["/", "/healthz", "/health", "/_health"]);
 app.get("/healthz", (_req, res) => {
-  res.status(200).type("text/plain").send(isReady ? "ok" : "starting");
+  res.status(200).type("text/plain").send("ok");
 });
+
+// Readiness probe — 503 until critical boot phases finish, 200 after.
+// If a critical phase throws, isReady never flips and /readyz returns 503
+// forever, which is the signal Render should use to roll back / not promote.
+app.get("/readyz", (_req, res) => {
+  if (isReady) return res.status(200).type("text/plain").send("ready");
+  return res.status(503).type("text/plain").send("starting");
+});
+
+// Deep health — non-secret runtime facts useful for post-deploy validation.
+// Registered before registerRoutes() so it's reachable even if a critical
+// boot phase failed and the main router never mounted. All inputs are pure
+// env reads + module-local booleans — cheap, safe to poll, no DB queries.
+app.get("/api/health/deep", (_req, res) => {
+  res.status(200).json({
+    appEnv: resolveAppEnv(),
+    authMode: describeAuthMode(),
+    emailLiveMode: isEmailLiveModeOn(),
+    schedulersEnabled:
+      (process.env.SCHEDULERS_ENABLED ?? "").trim().toLowerCase() !== "false",
+    bootReady: isReady,
+    gitSha: getGitSha(),
+    nodeEnv: process.env.NODE_ENV ?? null,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.use((req, res, next) => {
   if (isReady) return next();
-  // Health probes (any method): respond 2xx so promote sees a live app.
-  if (HEALTH_PATHS.has(req.path)) {
+  // Liveness probes during boot: respond 2xx so promote sees a live process.
+  if (LIVENESS_PATHS.has(req.path)) {
     return res.status(200).type("text/plain").send("starting");
+  }
+  // /readyz and /api/health/deep fall through to their dedicated handlers
+  // above so they can report boot-in-progress state truthfully.
+  if (req.path === "/readyz" || req.path === "/api/health/deep") {
+    return next();
   }
   // Everything else: 503 until boot completes so we don't half-serve traffic.
   res.status(503).type("text/plain").send("Server starting…");
