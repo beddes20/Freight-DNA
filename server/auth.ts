@@ -72,7 +72,14 @@ export interface ImpersonationContext {
 export function getImpersonationContext(req: Request): ImpersonationContext {
   // Clerk-mode impersonation: the admin's Clerk user id is the key in
   // `impersonationMap` and the value is the target DB user id.
-  const { userId: clerkUserId } = getAuth(req);
+  //
+  // DEV_AUTH_BYPASS — clerkMiddleware() is NOT registered in bypass mode
+  // (see setupAuth below), so calling getAuth(req) would throw
+  // "clerkMiddleware should be registered before using getAuth". Skip the
+  // Clerk read entirely; bypass mode always uses the session-mode branch
+  // below (see `/api/admin/impersonate/:userId`).
+  const bypassed = isAuthBypassEnabled();
+  const clerkUserId = bypassed ? null : getAuth(req).userId;
   if (clerkUserId) {
     const target = impersonationMap.get(clerkUserId);
     if (target) {
@@ -240,17 +247,25 @@ export function setupAuth(app: any) {
       // exactly what the cockpit route reads via `getImpersonationContext`,
       // so the client `currentUser.isImpersonating` flag and the server-
       // side base owner scope can never disagree about who is being viewed.
-      // In DEV_AUTH_BYPASS mode there is no Clerk session and impersonation
-      // is unreachable; skip the helper because it calls getAuth(req).
-      const { isImpersonating } = bypassed
-        ? { isImpersonating: false }
-        : getImpersonationContext(req);
+      // `getImpersonationContext` is now bypass-safe (guards getAuth itself),
+      // so we can call it unconditionally — bypass mode uses the session-
+      // mode branch inside the helper and surfaces real impersonation state.
+      const { isImpersonating } = getImpersonationContext(req);
 
       let impersonatingAdminName: string | null = null;
       if (isImpersonating) {
         const adminId = clerkUserId || req.session?.impersonatingAdminId;
         if (adminId) {
-          const admin = clerkUserId ? await storage.getUserByClerkId(clerkUserId) : await storage.getUser(adminId!);
+          // In bypass mode the synthetic admin is not in the DB — resolve
+          // its display name from the in-memory helper instead.
+          let admin: User | null = null;
+          if (bypassed && adminId === DEV_BYPASS_USER_ID) {
+            admin = getDevBypassUser();
+          } else if (clerkUserId) {
+            admin = (await storage.getUserByClerkId(clerkUserId)) ?? null;
+          } else {
+            admin = (await storage.getUser(adminId!)) ?? null;
+          }
           if (admin) impersonatingAdminName = admin.name;
         }
       }
@@ -286,14 +301,30 @@ export function setupAuth(app: any) {
 
   // Impersonation — admin switches their view to another user (Clerk mode)
   app.post("/api/admin/impersonate/:userId", async (req: Request, res: Response) => {
-    const { userId: clerkUserId } = getAuth(req);
-    const sessionUserId = req.session?.userId;
-    const actingId = clerkUserId || sessionUserId;
-    if (!actingId) return res.status(401).json({ error: "Not authenticated" });
+    // DEV_AUTH_BYPASS — clerkMiddleware() is NOT registered in bypass mode
+    // (see setupAuth above), so calling getAuth(req) would throw
+    // "clerkMiddleware should be registered before using getAuth". Mirror
+    // the `/api/auth/me` guard pattern.
+    const bypassed = isAuthBypassEnabled();
+    const clerkUserId = bypassed ? null : getAuth(req).userId;
 
-    const admin = clerkUserId
-      ? await storage.getUserByClerkId(clerkUserId)
-      : await storage.getUser(actingId);
+    // Resolve the acting admin. In bypass mode the synthetic user (see
+    // server/lib/authBypass.ts — "The fake user") is hardcoded role=admin
+    // and is NOT inserted into the users table, so storage.getUser would
+    // return null. Read it from the in-memory helper instead and avoid
+    // every Clerk SDK / DB call on the admin side.
+    let admin: User | undefined;
+    if (bypassed) {
+      admin = getDevBypassUser();
+    } else {
+      const sessionUserId = req.session?.userId;
+      const actingId = clerkUserId || sessionUserId;
+      if (!actingId) return res.status(401).json({ error: "Not authenticated" });
+      const looked = clerkUserId
+        ? await storage.getUserByClerkId(clerkUserId)
+        : await storage.getUser(actingId);
+      admin = looked ?? undefined;
+    }
     if (!admin || admin.role !== "admin") return res.status(403).json({ error: "Admin only" });
 
     const target = await storage.getUser(pStr(req.params.userId));
@@ -304,6 +335,7 @@ export function setupAuth(app: any) {
     if (clerkUserId) {
       impersonationMap.set(clerkUserId, target.id);
     } else if (req.session) {
+      // Session-mint path — used by dev-session mode AND DEV_AUTH_BYPASS.
       req.session.impersonatingAdminId = admin.id;
       req.session.userId = target.id;
       req.session.organizationId = target.organizationId;
@@ -315,7 +347,9 @@ export function setupAuth(app: any) {
 
   // Stop impersonation
   app.post("/api/admin/stop-impersonating", async (req: Request, res: Response) => {
-    const { userId: clerkUserId } = getAuth(req);
+    // DEV_AUTH_BYPASS — same guard as the start route above.
+    const bypassed = isAuthBypassEnabled();
+    const clerkUserId = bypassed ? null : getAuth(req).userId;
 
     if (clerkUserId) {
       if (!impersonationMap.has(clerkUserId)) return res.status(400).json({ error: "Not impersonating" });
@@ -326,12 +360,17 @@ export function setupAuth(app: any) {
       return res.json({ ...safeAdmin, isImpersonating: false, impersonatingAdminName: null });
     }
 
-    // Session-based impersonation (dev only)
+    // Session-based impersonation (dev + bypass)
     if (!req.session?.impersonatingAdminId) return res.status(400).json({ error: "Not impersonating" });
     const adminId = req.session.impersonatingAdminId;
     req.session.userId = adminId;
     delete req.session.impersonatingAdminId;
-    const admin = await storage.getUser(adminId);
+    // In bypass mode the synthetic admin is not in the DB — restore from
+    // the in-memory helper. Outside bypass, fall through to the DB.
+    const admin =
+      bypassed && adminId === DEV_BYPASS_USER_ID
+        ? getDevBypassUser()
+        : await storage.getUser(adminId);
     if (!admin) return res.status(404).json({ error: "Admin not found" });
     req.session.organizationId = admin.organizationId;
     const { password: _, ...safeAdmin } = admin as any;
@@ -482,8 +521,21 @@ export async function getCurrentUser(req: Request): Promise<User | null> {
 
   // DEV_AUTH_BYPASS — handlers that call getCurrentUser() without first
   // going through requireAuth() (a small minority of routes) still get
-  // the bypass user.
+  // the bypass user. BUT: when the admin has started a session-mode
+  // impersonation (`/api/admin/impersonate/:userId` writes
+  // `req.session.impersonatingAdminId` + swaps `req.session.userId` to
+  // the target), honor that session and return the target rep so every
+  // downstream read reflects "view as rep". Without this branch the
+  // session is minted but never read, and the UI snaps back to the
+  // synthetic admin on the next request.
   if (isAuthBypassEnabled()) {
+    if (req.session?.impersonatingAdminId && req.session?.userId) {
+      const target = await storage.getUser(req.session.userId);
+      if (target) {
+        (req as any)[RESOLVED_USER] = target;
+        return target;
+      }
+    }
     const user = getDevBypassUser();
     (req as any)[RESOLVED_USER] = user;
     return user;
