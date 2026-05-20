@@ -1,0 +1,94 @@
+Freight-DNA P0 Production Hardening — tightly scoped follow-on
+
+READ FIRST. Keep this work tightly scoped. Do not do feature work. Do not refactor unrelated code.
+
+Goal:
+Implement the three highest-leverage P0 production-readiness fixes identified in the production triage:
+
+1. Make email live-mode FAIL CLOSED when APP_ENV is unset or not production
+2. Split liveness vs readiness so broken boots are not reported healthy
+3. Add a minimal deep health endpoint that proves the running deploy is the expected runtime shape
+
+Scope:
+- server/emailGate.ts
+- server/index.ts
+- any minimal routing/helper file needed for the health endpoint
+- optional tiny smoke script only if it is very small and directly tied to verification
+
+Required tasks:
+
+Task A — Email gate fail-closed
+- Find the current live email gating logic.
+- Remove any fallback that treats missing APP_ENV as "production".
+- Effective rule must be:
+  - live email can only be ON if:
+    - APP_ENV === "production"
+    - EMAIL_LIVE_MODE === "true"
+    - DB flag requests ON
+- If APP_ENV is unset, empty, malformed, or anything other than "production", live email must be OFF.
+- Keep the central chokepoint model intact if one already exists.
+- Preserve the existing logging style, but make the OFF reason explicit.
+
+Deliverable for Task A:
+- exact before/after logic
+- exact files changed
+- exact expected log lines for:
+  1. staging with DB flag true
+  2. prod with env correct
+  3. APP_ENV unset
+
+Task B — Split /healthz and /readyz
+- Inspect the current health endpoint behavior.
+- Keep /healthz as process liveness if needed.
+- Add /readyz that returns non-200 until boot is actually complete.
+- /readyz should only return 200 once the app is truly ready to serve requests.
+- If there is already an isReady flag, use it.
+- Do not break existing boot logic.
+- Keep changes as small as possible.
+
+Deliverable for Task B:
+- exact endpoint behavior before and after
+- exact status/body for:
+  - boot in progress
+  - boot complete
+  - failed critical boot
+
+Task C — Minimal deep health endpoint
+- Add a minimal endpoint such as /api/health/deep
+- It should return only non-secret runtime facts useful for post-deploy validation, for example:
+  - appEnv
+  - authMode
+  - emailLiveMode effective value
+  - dbConnected true/false if cheaply knowable
+  - schedulersEnabled true/false if already known
+  - gitSha if already available, otherwise clearly note unavailable
+  - bootReady true/false
+- Do not add secrets.
+- Do not add heavy queries.
+- Keep it cheap and safe to call after deploy.
+
+Deliverable for Task C:
+- exact response shape
+- exact files touched
+- one curl command I can run after deploy
+- how to interpret PASS vs FAIL
+
+Constraints:
+- No broad cleanup
+- No changes to unrelated tabs/features
+- No speculative architecture improvements
+- If you see a better but larger approach, do NOT do it yet; mention it separately
+- Keep this as 1 small commit if possible
+
+Before editing:
+1. Identify the exact file:line areas you plan to touch
+2. Explain the smallest safe implementation plan
+3. Call out any production behavior change or deploy dependency
+4. Wait for me to review the plan before making edits
+
+Output format:
+Section 1 — Planned files and why
+Section 2 — Smallest safe implementation plan
+Section 3 — Risks / deployment dependencies
+Section 4 — Proposed exact code changes summary
+DO NOT edit yet until I approve.
