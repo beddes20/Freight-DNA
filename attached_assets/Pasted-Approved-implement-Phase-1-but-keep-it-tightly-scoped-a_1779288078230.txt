@@ -1,0 +1,94 @@
+Approved — implement Phase 1, but keep it tightly scoped and split the risky auth hard-throw out for now.
+
+Goal:
+Lock down Freight-DNA Render configuration with the smallest safe code change that prevents silent env drift.
+
+Implement now:
+1. docs/render-env-manifest.md
+2. scripts/preflight-env.ts
+3. update scripts/post-deploy-smoke.sh to assert the deep endpoint returns an allowed appEnv for Render targets
+
+Do NOT implement yet:
+- Do NOT change server/auth.ts in this commit
+- Do NOT add render.yaml yet
+- Do NOT refactor unrelated config code
+- Do NOT add new dependencies
+
+Detailed requirements:
+
+1) docs/render-env-manifest.md
+Create a concise operator-facing doc with:
+- required env vars for prod
+- required env vars for staging
+- forbidden env vars for prod/staging
+- recommended values for:
+  - APP_ENV
+  - EMAIL_LIVE_MODE
+  - SCHEDULERS_ENABLED
+  - NODE_ENV
+- a short “before next prod deploy” checklist
+- a short “post-deploy verification” checklist using:
+  - /healthz
+  - /readyz
+  - /api/health/deep
+  - scripts/post-deploy-smoke.sh
+
+2) scripts/preflight-env.ts
+Create a small startup validator that:
+- reads process.env
+- exits non-zero if critical env is missing or obviously unsafe for a Render deploy
+- supports at least APP_ENV=production and APP_ENV=staging
+- validates at minimum:
+  - APP_ENV present and one of production/staging/development
+  - DATABASE_URL present for production/staging
+  - SESSION_SECRET present and not trivial for production/staging
+  - CLERK publishable + secret keys present for production/staging
+  - EMAIL_LIVE_MODE explicitly set for production/staging
+  - in production: EMAIL_LIVE_MODE must not be blank
+  - in staging: APP_ENV must equal staging
+- prints concise PASS/FAIL messages, no secrets
+
+Important:
+- Keep the validator conservative and explicit.
+- Fail only on truly critical issues.
+- No network calls.
+- No imports that boot the app.
+
+3) package.json wiring
+Wire preflight into the production start path in the smallest safe way.
+Preferred:
+- make start run preflight first, then node dist/index.cjs
+- do not change build behavior
+
+4) scripts/post-deploy-smoke.sh
+Extend the existing script so that for a Render target it also checks:
+- /api/health/deep returns appEnv of production or staging
+- bootReady is true
+- authMode is not an obviously unsafe dev mode on prod
+Keep it minimal and shell-only if possible.
+
+Before finishing:
+1. run typecheck
+2. run build
+3. show exact files changed
+4. show exact diff
+5. show the final contents of:
+   - docs/render-env-manifest.md
+   - scripts/preflight-env.ts
+   - any package.json change
+   - smoke script change
+6. show examples of expected preflight output for:
+   - valid prod env
+   - missing SESSION_SECRET
+   - missing APP_ENV
+   - staging with EMAIL_LIVE_MODE unset
+
+Output format:
+Section 1 — Files changed
+Section 2 — Exact diff
+Section 3 — Validation results
+Section 4 — Example preflight outputs
+Section 5 — Operator follow-up required
+
+One more constraint:
+If you discover the current package.json start path or deployment assumptions make the preflight unsafe to insert before boot, stop and explain why before making an alternate wiring choice.

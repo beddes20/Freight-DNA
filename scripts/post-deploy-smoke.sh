@@ -81,6 +81,33 @@ else
       && check "deep.appEnv matches expected" PASS "$app_env" \
       || check "deep.appEnv matches expected" FAIL "expected '$EXPECT_APP_ENV', got '$app_env'"
   fi
+
+  # Render-target hardening: if the caller declared this is prod or staging,
+  # assert the runtime shape matches a real Render deploy (not a dev env
+  # accidentally pointed at a Render URL, and not a partially-booted process).
+  if [ "$EXPECT_APP_ENV" = "production" ] || [ "$EXPECT_APP_ENV" = "staging" ]; then
+    case "$app_env" in
+      production|staging)
+        check "deep.appEnv is a Render env" PASS "$app_env"
+        ;;
+      *)
+        check "deep.appEnv is a Render env" FAIL "expected production|staging, got '$app_env'"
+        ;;
+    esac
+
+    [ "$boot_ready" = "true" ] \
+      && check "deep.bootReady (Render)" PASS "true" \
+      || check "deep.bootReady (Render)" FAIL "expected true on a Render deploy, got '$boot_ready'"
+
+    case "$auth_mode" in
+      ""|dev-bypass|bypass|dev|disabled|none)
+        check "deep.authMode safe for Render" FAIL "unsafe value '$auth_mode' on a Render deploy (expected clerk)"
+        ;;
+      *)
+        check "deep.authMode safe for Render" PASS "$auth_mode"
+        ;;
+    esac
+  fi
 fi
 
 echo
