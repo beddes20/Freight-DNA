@@ -1,0 +1,71 @@
+Freight-DNA P0/P1 Hardening Verification — audit only, no edits
+
+READ FIRST. Do not change code. Do not commit anything. Verification only.
+
+Goal:
+Confirm the recently shipped hardening work is complete and coherent as a production-readiness layer:
+- email gate fail-closed
+- /healthz vs /readyz split
+- /api/health/deep
+- Render env manifest + preflight
+- SESSION_SECRET in-code fail-closed
+
+Tasks:
+1. Audit the current code paths and list the exact files/functions now responsible for each control
+2. Verify there are no obvious remaining bypasses or contradictory defaults in those same areas
+3. Produce a concise release-readiness checklist for ops before the next prod deploy
+
+Audit scope only:
+- server/emailGate.ts
+- server/index.ts
+- server/lib/buildInfo.ts
+- scripts/preflight-env.cjs
+- scripts/post-deploy-smoke.sh
+- docs/render-env-manifest.md
+- server/auth.ts
+- server/routes/webex.ts
+- any tiny helper directly used by those files if needed
+
+Specifically verify:
+A. Email safety
+- Is there any remaining path where staging can send live email if APP_ENV=staging?
+- Are all outbound senders still gated through the same source of truth?
+
+B. Health semantics
+- Does /healthz behave as liveness only?
+- Does /readyz correctly stay 503 until boot complete?
+- Is /api/health/deep reachable before registerRoutes and suitable for post-deploy ops checks?
+
+C. Env enforcement
+- Does preflight enforce the minimum critical env correctly?
+- Do auth.ts and webex.ts cover the remaining SESSION_SECRET bypass risk?
+- Is there any remaining silent fallback in production/staging for truly critical env?
+
+D. Ops readiness
+- What exact Render settings must be verified before next prod deploy?
+- What exact smoke-test commands should ops run after deploy?
+
+Deliverable format:
+Section 1 — Control map
+- control
+- file
+- function(s)
+- what it guarantees
+
+Section 2 — Remaining gaps
+- severity: P0 / P1 / P2
+- gap
+- why it matters
+- recommended next step
+
+Section 3 — Prod deploy checklist
+A numbered checklist for ops, concise and executable.
+
+Section 4 — Post-deploy verification
+Exact commands and exact expected outcomes.
+
+Constraints:
+- No code edits
+- No speculative broad architecture advice
+- Keep it tied to the current shipped code only
+- If you find a real remaining bypass, quote the exact file/function and explain it precisely
